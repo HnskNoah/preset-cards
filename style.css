@@ -1544,6 +1544,26 @@
     margin-bottom: 12px;
     padding-bottom: 12px;
     border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pc-search-bar .pc-search-input {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* 手机端：暂存按钮移入搜索栏左侧；桌面端隐藏该实例 */
+#pc-btn-view-staged-mobile {
+    display: none;
+}
+
+/* 返回按钮：仅手机端暂存视图显示，默认隐藏 */
+.pc-btn-back {
+    display: none;
 }
 
 /* 头部三段式：第一行 preset 名（居右退出按钮）/ 第二行面包屑+改名 / 第三行暂存提交重置 */
@@ -1900,10 +1920,33 @@
         flex: 0 0 auto;
     }
 
-    /* diff 视图：保留 header（commit/reset/close 退出入口），隐藏列表区 */
-    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-search-bar,
+    /* 手机端：header 只保留 reset/commit，暂存按钮移入搜索栏左侧 */
+    #pc-btn-view-staged-desktop {
+        display: none;
+    }
+
+    #pc-btn-view-staged-mobile {
+        display: flex;
+        flex-shrink: 0;
+    }
+
+    /* diff 视图：保留 header（commit/reset/close 退出入口），隐藏列表区与搜索输入，
+       搜索栏行保留一个右侧返回按钮退回列表视图 */
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-search-input,
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane #pc-btn-view-staged-mobile,
     .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-prompt-list {
         display: none;
+    }
+
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-search-bar {
+        justify-content: flex-end;
+        border-bottom: none;
+        padding-bottom: 0;
+        margin-bottom: 8px;
+    }
+
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-btn-back {
+        display: flex;
     }
 
     /* 编辑表单态：编辑表单自带 Save/Cancel，隐藏整个左栏（含 header）让右栏全高 */

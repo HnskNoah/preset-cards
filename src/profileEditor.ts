@@ -349,6 +349,7 @@ export async function openProfileEditorPopup(
                 reset: L('Reset to parent'),
                 commit: L('Commit'),
                 close: L('Close'),
+                back: L('Back'),
                 searchPrompts: L('Search prompts...'),
                 dragHandle: L('Drag to reorder'),
                 clearValueChange: L('Clear value changes'),
@@ -676,7 +677,7 @@ export async function openProfileEditorPopup(
 
     function refreshCounts(ctx?: EditorCtx): void {
         const n = stagedItems(ctx).length;
-        dialog.find('#pc-btn-view-staged span').text(`(${n})`);
+        dialog.find('.pc-btn-view-staged .pc-staged-count').text(`(${n})`);
         const commitBtn = dialog.find('#pc-btn-commit');
         commitBtn.prop('disabled', n === 0);
         commitBtn.toggleClass('disabled', n === 0);
@@ -770,9 +771,16 @@ export async function openProfileEditorPopup(
         refreshCounts(ctx);
     });
 
-    dialog.on('click', '#pc-btn-view-staged', function () {
+    dialog.on('click', '.pc-btn-view-staged', function () {
         editTargetId = null;
         mobileShowRight = true;
+        renderRightPane();
+    });
+
+    // 手机端暂存视图：隐藏搜索栏，返回按钮退回列表视图
+    dialog.on('click', '#pc-btn-back', function () {
+        editTargetId = null;
+        mobileShowRight = false;
         renderRightPane();
     });
 
@@ -949,7 +957,13 @@ export async function openProfileEditorPopup(
         await deps.onGridRefresh();
     });
 
-    dialog.on('click', '#pc-btn-close', function () {
+    dialog.on('click', '#pc-btn-close', async function () {
+        if (stagedItems().length > 0) {
+            const discard = await callGenericPopup(L('You have uncommitted changes. Discard them?'), POPUP_TYPE.CONFIRM);
+            if (!discard) return;
+            toastr.info(L('Uncommitted changes discarded'));
+            clearBuffers();
+        }
         popup.completeCancelled();
     });
 
@@ -974,8 +988,8 @@ export async function openProfileEditorPopup(
     await popup.show();
 
     // R2/F6：关闭弹窗即结束本次编辑会话。缓冲仅存内存，任何重开（点击 profile = 重新加载）都会
-    // 覆盖 preset 并清空缓冲，「缓冲保留可重开继续」不成立。无续编路径，确认与取消都清理——
-    // 保留只会让孤儿缓冲在后续 add-base 等路径被静默吸收。
+    // 覆盖 preset 并清空缓冲，「缓冲保留可重开继续」不成立。无续编路径，统一清理——
+    // 按钮退出已先确认并清缓冲；此处兜底 Escape/其他关闭路径仍有未提交改动时提示丢弃，避免孤儿缓冲被静默吸收。
     if (stagedItems().length > 0) {
         const discard = await callGenericPopup(L('You have uncommitted changes. Discard them?'), POPUP_TYPE.CONFIRM);
         if (discard) {
