@@ -84,14 +84,18 @@ export function applyEntryState(preset: Preset, identifier: string, enabled: boo
 }
 
 /**
- * 读取 prompt 的运行时真值：优先 prompt_order 中 global 条目（character_id === 100001）的 enabled，
- * 缺失时回退 prompts[].enabled，再缺失默认 true。
+ * 读取 prompt_order 中指定 character 条目的运行时真值；缺失时回退 prompts[].enabled，再缺失默认 true。
+ * 未指定 characterId 时使用 global 条目（100001），保持 reset 默认基线的既有语义。
  * R5：修复默认预设常缺 prompts[].enabled 键、快照把全部 prompt 记成禁用的问题。
  * 只读，不改写入侧。
  */
-export function runtimeEnabledFor(prompt: { identifier: string; enabled?: boolean }, preset: Preset): boolean {
+export function runtimeEnabledFor(
+    prompt: { identifier: string; enabled?: boolean },
+    preset: Preset,
+    characterId: number | string = 100001,
+): boolean {
     const list = Array.isArray(preset.prompt_order)
-        ? preset.prompt_order.find((x: any) => x && String(x.character_id) === '100001')
+        ? preset.prompt_order.find((x: any) => x && String(x.character_id) === String(characterId))
         : undefined;
     if (Array.isArray(list?.order)) {
         const order = list.order.find((o: any) => o && o.identifier === prompt.identifier);
@@ -301,7 +305,7 @@ export function resolvePromptOrderTarget(): number {
 
 /**
  * 同步 preset.prompt_order 中目标策略条目（global → 100001 / character → 活动角色 id）的开关。
- * 对应条目的 order 数组按 identifier 设置 enabled，不存在则 push；全程用 ?. 守卫防缺失。
+ * 对应条目的 order 数组仅按 identifier 更新已存在条目的 enabled；缺失条目保持 unused，不自动挂载。
  * Array.isArray 守卫兼容旧对象格式 {character_id: {order}}（否则 .find 会抛 TypeError）。
  */
 export function syncPromptOrder(
@@ -309,21 +313,30 @@ export function syncPromptOrder(
     entries: { identifier: string; enabled: boolean }[],
 ): void {
     const list = findOrderList(preset, resolvePromptOrderTarget());
-    if (!list?.order) return;
+    if (!Array.isArray(list?.order)) return;
 
     for (const entry of entries) {
         const existing = list.order.find((o: any) => o?.identifier === entry.identifier);
         if (existing) {
             existing.enabled = entry.enabled;
-        } else {
-            list.order.push({ identifier: entry.identifier, enabled: entry.enabled });
         }
     }
 }
 
+/** 当前目标 prompt_order.order 中存在的 prompt identifier。 */
+function promptOrderIdentifiers(preset: Preset): Set<string> {
+    const list = findOrderList(preset, resolvePromptOrderTarget());
+    if (!Array.isArray(list?.order)) return new Set();
+    return new Set(
+        list.order
+            .filter((entry: any) => entry && typeof entry.identifier === 'string' && entry.identifier)
+            .map((entry: any) => entry.identifier),
+    );
+}
+
 /**
- * 采集预设全部 prompts 的开关 + 可选值字段快照。
- * 过滤逻辑与开关快照共用；enabled 用 runtimeEnabledFor。
+ * 采集当前目标 prompt_order.order 中 prompts 的开关 + 可选值字段快照。
+ * 过滤逻辑与开关快照共用；enabled 用当前目标 order 的 runtimeEnabledFor。
  * includeFields 含某 identifier 时附带 fields: capturePromptFields(prompt)。
  */
 export function buildPromptSnapshot(
@@ -331,12 +344,13 @@ export function buildPromptSnapshot(
     opts?: { includeFields?: Set<string> },
 ): { identifier: string; enabled: boolean; fields?: PromptFields }[] {
     if (!Array.isArray(preset.prompts)) return [];
+    const orderIdentifiers = promptOrderIdentifiers(preset);
     return preset.prompts
-        .filter((p: any) => p && typeof p.identifier === 'string' && p.identifier)
+        .filter((p: any) => p && typeof p.identifier === 'string' && orderIdentifiers.has(p.identifier))
         .map((p: any) => {
             const entry: { identifier: string; enabled: boolean; fields?: PromptFields } = {
                 identifier: p.identifier,
-                enabled: runtimeEnabledFor(p, preset),
+                enabled: runtimeEnabledFor(p, preset, resolvePromptOrderTarget()),
             };
             if (opts?.includeFields?.has(p.identifier)) {
                 entry.fields = capturePromptFields(p);
@@ -347,7 +361,7 @@ export function buildPromptSnapshot(
 
 /**
  * 基于锁定基线的 base 快照（add base 用）：
- * enabled 全量采集（base 语义 = 完整开关快照）；fields 只存「与基线 originalFields 有差异的白名单字段」。
+ * enabled 只采集当前目标 prompt_order.order 中的 prompt；fields 只存「与基线 originalFields 有差异的白名单字段」。
  * - 基线缺失的条目（新增 prompt 等）fields 全量写入；
  * - 与基线一致的条目不写 fields（加载时保持基线/当前值）。
  * 相比仅开关的快照，此快照让 add base 保留 content 差异，又避免全量 content 几百 KB。
@@ -358,6 +372,7 @@ export function buildBaseSnapshotDiff(
     baseline: PromptDefaultSnapshotEntry[] | null | undefined,
 ): { identifier: string; enabled: boolean; fields?: PromptFields }[] {
     if (!Array.isArray(preset.prompts)) return [];
+    const orderIdentifiers = promptOrderIdentifiers(preset);
     const baselineFields = new Map<string, PromptFields>();
     if (Array.isArray(baseline)) {
         for (const entry of baseline) {
@@ -365,11 +380,11 @@ export function buildBaseSnapshotDiff(
         }
     }
     return preset.prompts
-        .filter((p: any) => p && typeof p.identifier === 'string' && p.identifier)
+        .filter((p: any) => p && typeof p.identifier === 'string' && orderIdentifiers.has(p.identifier))
         .map((p: any) => {
             const entry: { identifier: string; enabled: boolean; fields?: PromptFields } = {
                 identifier: p.identifier,
-                enabled: runtimeEnabledFor(p, preset),
+                enabled: runtimeEnabledFor(p, preset, resolvePromptOrderTarget()),
             };
             const current = capturePromptFields(p);
             const base = baselineFields.get(p.identifier);

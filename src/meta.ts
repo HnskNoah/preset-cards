@@ -25,7 +25,7 @@ export interface PromptFields {
     injection_order?: number;
 }
 
-/** 主 profile：记录当前预设全部 prompts 的开关，可附带值字段（fields），不存扩展。 */
+/** 主 profile：记录当前目标 prompt_order.order 中 prompts 的开关，可附带值字段（fields），不存扩展。 */
 export interface PromptBaseProfile {
     formatVersion: 2;
     kind: 'prompt_base';

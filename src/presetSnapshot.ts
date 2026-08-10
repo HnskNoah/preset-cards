@@ -20,7 +20,7 @@ export async function lockDefaultSnapshot(preset: Preset, name: string, idx: num
 }
 
 // 把当前开关/值快照合并进主 profile（「保存→更新」与「覆盖」共用）：
-// enabled 全量回写；fields 仅对本次会话编辑过且有净变化的条目写回，其余条目保留既有 fields，
+// enabled 回写当前目标 order 中的条目；fields 仅对本次会话编辑过且有净变化的条目写回，其余条目保留既有 fields，
 // 避免重建快照时丢失此前已保存的值编辑。
 export function mergeBaseSnapshot(profile: PromptBaseProfile, snapshot: { identifier: string; enabled: boolean; fields?: PromptFields }[], name: string, sessionEdits: Map<string, PromptEditBuffer>): void {
     const previousPrompts = profile.prompts;
