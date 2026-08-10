@@ -16,14 +16,16 @@
                 </div>
                 <div class="pc-header-actions-row">
                     <div class="pc-header-actions-center">
-                        <button id="pc-btn-view-staged" class="pc-top-action-btn" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i> {{i18n.viewStaged}} <span>({{stagedCount}})</span></button>
-                        <button id="pc-btn-reset" class="pc-top-action-btn pc-btn-reset" title="{{i18n.reset}}"><i class="fa-solid fa-rotate-left"></i> {{i18n.reset}}</button>
-                        <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{i18n.commit}}</button>
+                        <button id="pc-btn-view-staged-desktop" class="pc-top-action-btn pc-btn-view-staged" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i><span class="pc-btn-label">{{i18n.viewStaged}}</span><span class="pc-staged-count">({{stagedCount}})</span></button>
+                        <button id="pc-btn-reset" class="pc-top-action-btn pc-btn-reset" title="{{i18n.reset}}"><i class="fa-solid fa-rotate-left"></i> <span class="pc-btn-label">{{i18n.reset}}</span></button>
+                        <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> <span class="pc-btn-label">{{i18n.commit}}</span></button>
                     </div>
                 </div>
             </div>
             <div class="pc-search-bar">
-                <input type="text" id="pc-search-input" class="pc-form-control" placeholder="{{i18n.searchPrompts}}" style="width: 100%; box-sizing: border-box;" />
+                <button id="pc-btn-view-staged-mobile" class="pc-top-action-btn pc-btn-view-staged" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i><span class="pc-btn-label">{{i18n.viewStaged}}</span><span class="pc-staged-count">({{stagedCount}})</span></button>
+                <input type="text" id="pc-search-input" class="pc-form-control pc-search-input" placeholder="{{i18n.searchPrompts}}" />
+                <button id="pc-btn-back" class="pc-top-action-btn pc-btn-back" title="{{i18n.back}}"><i class="fa-solid fa-arrow-left"></i><span class="pc-btn-label">{{i18n.back}}</span></button>
             </div>
             <div class="pc-prompt-list" id="pc-prompt-list">
                 {{#each entries}}
