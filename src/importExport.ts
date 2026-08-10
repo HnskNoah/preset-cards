@@ -89,8 +89,7 @@ export function buildProfileExportData(profile: PresetProfile, meta: PresetMeta)
         // 导出自包含：附上解析后的完整状态快照（delta 自身父链+差异，含值字段 fields），导入时可完整还原；
         // changes 额外提供「相对文件基线」的版本，导入侧挂桥 base（bridgeBase）时原样可用（newId 语义见 mergeImportedProfiles）。
         const resolvedState = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
-        const fileBaselineStates: { identifier: string; enabled: boolean; fields?: PromptFields }[] =
-            (base ?? []).map((e) => ({ identifier: e.identifier, enabled: e.enabled, fields: e.originalFields }));
+        const fileBaselineStates = defaultSnapshotStates(base);
         const changesVsFileBaseline = fileBaselineStates.length ? changesRelativeToBaseline(resolvedState, fileBaselineStates) : profile.changes;
         return JSON.stringify({
             kind: profile.kind,
@@ -163,8 +162,9 @@ export function warnV1ExcludedFromTreeExport(meta: PresetMeta): void {
 }
 
 /**
- * 构建桥 base（bridgeBase，prompt_base）：本地基线 + 桥 = 文件基线。
- * - 文件基线（fileBaseline）= 导出方出厂基线，含 enabled + originalFields。
+ * 构建桥 base（bridgeBase，prompt_base）：为 enabled 已知的条目把本地基线变换到文件基线。
+ * enabled 未知的条目不能进入 active-only base，由 changesRelativeToBaseline 在实际使用时展开。
+ * - 文件基线（fileBaseline）= 导出方出厂基线；mounted 条目含 enabled，全部条目可含 originalFields。
  * - 本地基线（localBaseline）= 导入方 defaultSnapshot；不存在或条目缺失则视为空（该条目全量写文件基线值）。
  * - fields = 白名单字段中本地基线（localBaseline）与文件基线（fileBaseline）有差异的字段（值取文件基线）；
  *   本地基线无记录/无字段 → 全量写文件基线值，保证 本地基线+桥=文件基线。
@@ -179,7 +179,8 @@ function buildBridgeBase(
     if (localBaseline) {
         for (const e of localBaseline) xById.set(e.identifier, e);
     }
-    const prompts: PromptBaseProfile['prompts'] = fileBaseline.map((e) => {
+    const prompts: PromptBaseProfile['prompts'] = fileBaseline.flatMap((e) => {
+        if (typeof e.enabled !== 'boolean') return [];
         const entry: PromptBaseProfile['prompts'][number] = { identifier: e.identifier, enabled: e.enabled };
         const bFields = e.originalFields ?? {};
         const x = xById.get(e.identifier);
@@ -203,22 +204,37 @@ function buildBridgeBase(
             }
         }
         if (hasDiff) entry.fields = diff;
-        return entry;
+        return [entry];
     });
     return { formatVersion: 2, kind: 'prompt_base', id, name, prompts };
 }
 
+function defaultSnapshotStates(
+    snapshot: PromptDefaultSnapshotEntry[] | undefined,
+): { identifier: string; enabled?: boolean; fields?: PromptFields }[] {
+    return (snapshot ?? []).map((entry) => ({
+        identifier: entry.identifier,
+        enabled: entry.enabled,
+        fields: entry.originalFields,
+    }));
+}
+
 function changesRelativeToBaseline(
     entries: { identifier: string; enabled: boolean; fields?: PromptFields }[],
-    fileBaselineStates: { identifier: string; enabled: boolean; fields?: PromptFields }[],
+    fileBaselineStates: { identifier: string; enabled?: boolean; fields?: PromptFields }[],
 ): PromptDeltaChange[] {
-    const changes = snapshotToChanges(entries, fileBaselineStates, []);
-    const inBaseline = new Set(fileBaselineStates.map((e) => e.identifier));
+    const knownEnabledBaseline = fileBaselineStates.filter(
+        (entry): entry is { identifier: string; enabled: boolean; fields?: PromptFields } => typeof entry.enabled === 'boolean',
+    );
+    const changes = snapshotToChanges(entries, knownEnabledBaseline, []);
+    const baselineById = new Map(fileBaselineStates.map((entry) => [entry.identifier, entry]));
     for (const entry of entries) {
-        if (inBaseline.has(entry.identifier)) continue;
+        const baseline = baselineById.get(entry.identifier);
+        if (typeof baseline?.enabled === 'boolean') continue;
         const change: PromptDeltaChange = { identifier: entry.identifier, enabled: entry.enabled };
-        if (entry.fields && Object.keys(entry.fields).length > 0) {
-            change.fields = { ...entry.fields };
+        const fullFields = { ...(baseline?.fields ?? {}), ...(entry.fields ?? {}) };
+        if (Object.keys(fullFields).length > 0) {
+            change.fields = fullFields;
         }
         const existing = changes.find((c) => c.identifier === entry.identifier);
         if (existing) {
@@ -260,13 +276,13 @@ export function mergeImportedProfiles(
 
     // 文件基线（导出方出厂基线）；形状合法才接受，缺失则无桥 base（bridgeBase），回退旧行为
     const fileBaseline = (Array.isArray(parsed?.defaultSnapshot) && parsed.defaultSnapshot.every((d: any) =>
-        d && typeof d === 'object' && typeof d.identifier === 'string' && typeof d.enabled === 'boolean'
+        d && typeof d === 'object' && typeof d.identifier === 'string'
+        && (d.enabled === undefined || typeof d.enabled === 'boolean')
         && (d.originalFields === undefined || d.originalFields === null || typeof d.originalFields === 'object')))
         ? parsed.defaultSnapshot as PromptDefaultSnapshotEntry[]
         : undefined;
-    // 文件基线的完整状态（含 originalFields 作 fields），作为 snapshotToChanges 的 diff 基准
-    const fileBaselineStates: { identifier: string; enabled: boolean; fields?: PromptFields }[] =
-        (fileBaseline ?? []).map((e) => ({ identifier: e.identifier, enabled: e.enabled, fields: e.originalFields }));
+    // 文件基线状态（含 originalFields 作 fields）；enabled 未知的 unused 条目由 changesRelativeToBaseline 显式展开。
+    const fileBaselineStates = defaultSnapshotStates(fileBaseline);
 
     // 桥 base（bridgeBase）：本地基线 + 桥 = 文件基线。桥是导入 profile 的唯一父（base），本地基线不存在则视为空。
     // 仅当文件基线非空才建桥；空（或缺失）不建，回退旧行为。

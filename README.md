@@ -48,9 +48,9 @@ npm run build      # 生产构建，输出 dist/index.js（sourcemap 已禁用�
 - **Base（`formatVersion: 2`, `kind: 'prompt_base'`）**：`prompts[]` 为 `{ identifier, enabled, fields? }`，只保存当前 `prompt_order.order` 中已挂载 prompt 的开关快照，`fields` 只含「与出厂基线有差异」的值字段。
 - **Delta（`formatVersion: 2`, `kind: 'prompt_delta'`）**：`{ baseId, changes[] }`，`changes` 为 `{ identifier, enabled?, fields? }`，仅记录相对上级的差异，可嵌套。
 - **值字段白名单**：`content / name / role / injection_position / injection_depth`（`PROMPT_FIELD_WHITELIST`）；`injection_order` 仍为内部字段，UI 不编辑、不随 profile 捕获，避免加载 profile 时用旧快照覆盖用户后续调整的注入值。
-- **隐藏默认基准（`defaultSnapshot`）**：首次为该预设新建 Base 时幂等全量锁定（`{ identifier, enabled, originalFields }`），不显示、不参与派生；作为 reset 的出厂基线，编辑条目的原始值字段惰性记录于此（reset 还原用）。
+- **隐藏默认基准（`defaultSnapshot`）**：首次为该预设新建 Base 时幂等全量锁定（`{ identifier, enabled?, originalFields }`）。全部 prompt 保存字段基线，只有当时 mounted 的 prompt 保存开关；unused 不推断默认开关，reset 时保持不变。
 - 另有旧版 v1 全量快照（`settings` 深拷贝）用于向后兼容，不可派生。
-- 读取 profile 快照开关时使用当前目标 `prompt_order` 条目（global 为 character_id=100001，character 为活动角色）；reset 的隐藏默认基线仍默认读取 global 条目，缺失时回退 `prompts[].enabled`，再缺失默认启用。
+- 读取 profile 快照开关时使用当前目标 `prompt_order` 条目（global 为 character_id=100001，character 为活动角色）；reset 的隐藏默认基线读取 global 条目，缺失表示 unused/未知，不回退 `prompts[].enabled`，也不修改该 prompt 的开关。
 
 ## 与 ST 集成的已知注意点
 

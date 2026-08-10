@@ -51,10 +51,10 @@ export interface PromptDeltaProfile {
     changes: PromptDeltaChange[];
 }
 
-/** defaultSnapshot 条目：开关 + 惰性记录首次编辑前的原始值字段（reset 还原用，可选）。 */
+/** defaultSnapshot 条目：仅 mounted prompt 保存开关；全部 prompt 可保存 reset 用原始字段。 */
 export interface PromptDefaultSnapshotEntry {
     identifier: string;
-    enabled: boolean;
+    enabled?: boolean;
     originalFields?: PromptFields;
 }
 
