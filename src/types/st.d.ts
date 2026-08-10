@@ -92,6 +92,7 @@ declare module '@sillytavern/scripts/openai' {
     export const settingsToUpdate: Record<string, [string, string, boolean, boolean]>;
     export function getChatCompletionPreset(settings?: Record<string, unknown>): Record<string, unknown>;
     export const chat_completion_sources: Record<string, string>;
+    export const custom_prompt_post_processing_types: Record<string, string>;
     export let openai_setting_names: Record<string, number>;
     export let openai_settings: Record<string, unknown>[];
     export const oai_settings: {
@@ -112,4 +113,10 @@ declare module '@sillytavern/scripts/openai' {
         };
         activeCharacter?: { id: number } | null;
     } | null;
+}
+
+declare module '@sillytavern/scripts/tool-calling' {
+    export class ToolManager {
+        static RECURSE_LIMIT: number;
+    }
 }
