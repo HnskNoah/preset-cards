@@ -37,7 +37,7 @@ import { buildPresetList, getCardsTemplateContext } from './presetList.js';
 import { applyCachedBackgrounds, clearImageCache } from './cache.js';
 import { openEditModal } from './editModal.js';
 import { applyBufferedEdits, clearBufferedForName, type PromptEditBuffer } from './presetBuffers.js';
-import { applyDefaultOriginalFields, lockDefaultSnapshot } from './presetSnapshot.js';
+import { applyDefaultOriginalFields, defaultEnabledEntries, lockDefaultSnapshot } from './presetSnapshot.js';
 import { buildDerivedProfile, collectDescendantProfileIds } from './profileActions.js';
 import { openProfileEditorPopup } from './profileEditor.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
@@ -682,12 +682,13 @@ export async function openPresetCards(): Promise<void> {
                     return;
                 }
                 applyDefaultOriginalFields(preset, meta);
+                const defaultPrompts = defaultEnabledEntries(preset, meta);
                 const tmp: PromptBaseProfile = {
                     formatVersion: 2,
                     kind: 'prompt_base',
                     id: profile.baseId || 'default',
                     name: 'Default',
-                    prompts: meta.defaultSnapshot,
+                    prompts: defaultPrompts,
                 };
                 applyBaseProfile(preset, tmp);
                 profile.changes = [];
@@ -704,13 +705,14 @@ export async function openPresetCards(): Promise<void> {
             }
             applyDefaultOriginalFields(preset, meta);
             // 只回写开关；originalFields 是 reset 专用元数据，不随 profile 持久化
-            profile.prompts = structuredClone(meta.defaultSnapshot).map(({ identifier, enabled }) => ({ identifier, enabled }));
+            const defaultPrompts = defaultEnabledEntries(preset, meta);
+            profile.prompts = structuredClone(defaultPrompts);
             const tmp: PromptBaseProfile = {
                 formatVersion: 2,
                 kind: 'prompt_base',
                 id: profile.id,
                 name: profile.name,
-                prompts: meta.defaultSnapshot,
+                prompts: defaultPrompts,
             };
             applyBaseProfile(preset, tmp);
             await saveMeta(name, idx, meta);

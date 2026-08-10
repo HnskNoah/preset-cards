@@ -94,31 +94,46 @@ export function runtimeEnabledFor(
     preset: Preset,
     characterId: number | string = 100001,
 ): boolean {
+    const orderEnabled = promptOrderEnabledFor(preset, prompt.identifier, characterId);
+    if (orderEnabled !== undefined) return orderEnabled;
+    return prompt.enabled ?? true;
+}
+
+/** 只读取 prompt_order 中明确保存的开关；缺失表示 unused/未知，不做定义层回退。 */
+export function promptOrderEnabledFor(
+    preset: Preset,
+    identifier: string,
+    characterId: number | string = 100001,
+): boolean | undefined {
     const list = Array.isArray(preset.prompt_order)
         ? preset.prompt_order.find((x: any) => x && String(x.character_id) === String(characterId))
         : undefined;
     if (Array.isArray(list?.order)) {
-        const order = list.order.find((o: any) => o && o.identifier === prompt.identifier);
+        const order = list.order.find((o: any) => o && o.identifier === identifier);
         if (order && typeof order.enabled === 'boolean') {
             return order.enabled;
         }
     }
-    return prompt.enabled ?? true;
+    return undefined;
 }
 
 /**
- * 全量锁定快照：采集预设全部 prompts 的开关 + 白名单值字段（originalFields）。
+ * 全量锁定快照：全部 prompts 采集白名单值字段；仅 global order 中 mounted 的 prompt 保存 enabled。
+ * unused 的 enabled 保持未知，reset 时不修改其开关。
  * 作为 reset 的出厂基线（lockDefaultSnapshot 用），区别于仅开关的开关快照。
  */
 export function buildDefaultSnapshotLock(preset: Preset): PromptDefaultSnapshotEntry[] {
     if (!Array.isArray(preset.prompts)) return [];
     return preset.prompts
         .filter((p: any) => p && typeof p.identifier === 'string' && p.identifier)
-        .map((p: any) => ({
-            identifier: p.identifier,
-            enabled: runtimeEnabledFor(p, preset),
-            originalFields: capturePromptFields(p),
-        }));
+        .map((p: any) => {
+            const enabled = promptOrderEnabledFor(preset, p.identifier);
+            return {
+                identifier: p.identifier,
+                ...(enabled !== undefined ? { enabled } : {}),
+                originalFields: capturePromptFields(p),
+            };
+        });
 }
 
 /**

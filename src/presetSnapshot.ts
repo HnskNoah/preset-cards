@@ -5,9 +5,9 @@ import type { Preset, PresetMeta, PromptBaseProfile, PromptFields } from './meta
 import { readMeta, saveMeta } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
-import { buildDefaultSnapshotLock, findPromptInPreset, filterFields, promptFieldsEqual } from './promptToggle.js';
+import { buildDefaultSnapshotLock, findOrderList, findPromptInPreset, filterFields, promptFieldsEqual, resolvePromptOrderTarget } from './promptToggle.js';
 
-// 首次对该预设 add base 时全量锁定默认基线：采集全部 prompts 的 {identifier, enabled, originalFields}（白名单5键全量）
+// 首次对该预设 add base 时全量锁定默认基线：全部 prompt 采集 originalFields，仅 mounted prompt 采集 enabled。
 // 写入 meta.defaultSnapshot 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
 // 取代旧 ensureDefaultSnapshots 的「仅开关快照 + 打开面板批量回填」——现在只在用户对该预设首次 add base 时锁定，
 // 提供 reset 的可靠出厂基线，也让 add base 能按「与基线的差异」存储（见 buildBaseSnapshotDiff）。
@@ -62,4 +62,18 @@ export function applyDefaultOriginalFields(preset: Preset, meta: PresetMeta): vo
         const prompt = findPromptInPreset(preset, d.identifier);
         if (prompt) Object.assign(prompt, filterFields(d.originalFields));
     }
+}
+
+/** defaultSnapshot 中有明确开关、且当前仍 mounted 的条目；兼容旧快照为 unused 保存了布尔值的情况。 */
+export function defaultEnabledEntries(preset: Preset, meta: PresetMeta): PromptBaseProfile['prompts'] {
+    if (!Array.isArray(meta.defaultSnapshot)) return [];
+    const orderList = findOrderList(preset, resolvePromptOrderTarget());
+    const mounted = new Set<string>(Array.isArray(orderList?.order)
+        ? orderList.order
+            .filter((entry: any) => entry && typeof entry.identifier === 'string')
+            .map((entry: any) => entry.identifier)
+        : []);
+    return meta.defaultSnapshot.flatMap((entry) => typeof entry.enabled === 'boolean' && mounted.has(entry.identifier)
+        ? [{ identifier: entry.identifier, enabled: entry.enabled }]
+        : []);
 }
