@@ -190,6 +190,8 @@ export async function openProfileEditorPopup(
 
     let dialog: JQuery<HTMLElement> = $('<div id="preset_profile_editor" class="pc-manager-container"></div>');
     let searchQuery = '';
+    /** 搜索索引缓存：identifier → 名称/content 小写，渲染时构建、改名时增量更新，避免每次按键全量转小写并读 DOM。 */
+    let searchIndex = new Map<string, { name: string; content: string }>();
     let editTargetId: string | null = null;
     let mobileShowRight = false;
     /** 本会话拖拽重排过的条目（打脏标记，立即保存不进 diff；序号保持不更新）。 */
@@ -211,6 +213,15 @@ export async function openProfileEditorPopup(
         const orderCtx = buildProfileOrderCtx(preset, isActive);
         return { preset, meta, profile, entries: buildProfileEntries(profile, meta, preset, orderCtx), orderCtx };
     };
+
+    // 搜索索引：一次构建（entries 来自内存解析，content 可能较长），applySearch 只读缓存。
+    function rebuildSearchIndex(): void {
+        const ctx = currentCtx();
+        searchIndex = new Map((ctx?.entries ?? []).map((e) => [
+            e.identifier,
+            { name: (e.name ?? '').toLowerCase(), content: (e.content ?? '').toLowerCase() },
+        ]));
+    }
 
     type EditorCtx = NonNullable<ReturnType<typeof currentCtx>>;
 
@@ -313,6 +324,7 @@ export async function openProfileEditorPopup(
         const children = newDialog.children().toArray();
         dialog.empty().append(children);
 
+        rebuildSearchIndex();
         applyBufferOverlay();
         applySearch();
         // R4：commit 后 renderDialog 重建模板，输入框无 value——按闭包 searchQuery 回填，与过滤结果一致
@@ -341,6 +353,8 @@ export async function openProfileEditorPopup(
             }
             if (session?.edited.name !== undefined) {
                 entry.find('.pc-card-name').text(session.edited.name).attr('title', identifier);
+                const idx = searchIndex.get(identifier);
+                if (idx) idx.name = session.edited.name.toLowerCase();
             }
             if (sessionEdits.has(key) || pendingToggles.has(key) || pendingClears.has(key) || reorderedIds.has(identifier)) {
                 entry.addClass('dirty');
@@ -349,14 +363,12 @@ export async function openProfileEditorPopup(
     }
 
     function applySearch(): void {
-        const ctx = currentCtx();
         const q = searchQuery.toLowerCase().trim();
-        const contentById = new Map((ctx?.entries ?? []).map((e) => [e.identifier, (e.content ?? '').toLowerCase()]));
         let visible = 0;
         dialog.find('.pc-prompt-card').each(function () {
             const identifier = String($(this).data('identifier'));
-            const name = $(this).find('.pc-card-name').text().toLowerCase();
-            const match = !q || name.includes(q) || (contentById.get(identifier) ?? '').includes(q) || identifier.toLowerCase().includes(q);
+            const idx = searchIndex.get(identifier);
+            const match = !q || !!(idx && (idx.name.includes(q) || idx.content.includes(q) || identifier.toLowerCase().includes(q)));
             $(this).toggle(match);
             if (match) visible++;
         });
@@ -507,6 +519,8 @@ export async function openProfileEditorPopup(
         const displayName = session?.edited.name ?? view?.name ?? identifier;
 
         row.find('.pc-card-name').text(displayName).attr('title', identifier);
+        const idx = searchIndex.get(identifier);
+        if (idx) idx.name = displayName.toLowerCase();
 
         const toggle = row.find('.pc-btn-toggle');
         if (toggle.length) {
@@ -564,18 +578,22 @@ export async function openProfileEditorPopup(
     function setupSortable(): void {
         const listEl = dialog.find('.pc-prompt-list');
         if (!listEl.length) return;
-        if (listEl.data('ui-sortable')) listEl.sortable('destroy');
         const isActive = oai_settings.preset_settings_openai === name;
-        if (!isActive || searchQuery) return;
-        listEl.sortable({
-            axis: 'y',
-            handle: '.pc-drag-handle',
-            items: '.pc-prompt-card',
-            placeholder: 'pc-sortable-placeholder',
-            start: () => listEl.addClass('sorting'),
-            stop: () => listEl.removeClass('sorting'),
-            update: () => { void onReorder(listEl); },
-        });
+        const shouldSortable = isActive && !searchQuery;
+        const isSortable = !!listEl.data('ui-sortable');
+        // 幂等切换：避免每次按键 destroy/重建（搜索中本就禁用拖拽）
+        if (isSortable && !shouldSortable) listEl.sortable('destroy');
+        if (shouldSortable && !isSortable) {
+            listEl.sortable({
+                axis: 'y',
+                handle: '.pc-drag-handle',
+                items: '.pc-prompt-card',
+                placeholder: 'pc-sortable-placeholder',
+                start: () => listEl.addClass('sorting'),
+                stop: () => listEl.removeClass('sorting'),
+                update: () => { void onReorder(listEl); },
+            });
+        }
     }
 
     async function onReorder(listEl: JQuery<HTMLElement>): Promise<void> {
