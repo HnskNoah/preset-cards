@@ -143,12 +143,7 @@ export function applyPromptDelta(
             entries.push(entry);
             byId.set(entry.identifier, entry);
         }
-        const activatesWithoutHistory = change.mounted === true
-            && !entry.mounted
-            && entry.lastActiveIndex === undefined
-            && change.lastActiveIndex === undefined;
         if (change.mounted !== undefined) entry.mounted = change.mounted;
-        if (activatesWithoutHistory && change.enabled === undefined) entry.enabled = false;
         if (change.enabled !== undefined) entry.enabled = change.enabled;
         if (change.lastActiveIndex !== undefined) entry.lastActiveIndex = change.lastActiveIndex;
         if (change.fields) entry.fields = { ...entry.fields, ...change.fields };

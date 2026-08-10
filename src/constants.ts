@@ -107,6 +107,8 @@ export const LOCAL_DICT: Record<string, string> = {
     'User': '用户',
     'AI Assistant': 'AI 助手',
     'This is a marker prompt. Its content is managed by SillyTavern and cannot be edited here.': '这是标记 prompt，其内容由 SillyTavern 管理，此处不可编辑。',
+    'Changing whether a system or marker prompt is used can affect prompt structure. Continue?': '调整 system 或 marker prompt 的使用状态可能影响提示词结构，是否继续？',
+    'Only the active profile can be edited': '只能编辑当前活动 Profile',
     'Base profile name:': '主 profile 名称：',
     'Base profile saved': '主 profile 已保存',
     'Derived profile name:': '派生 profile 名称：',

@@ -5,7 +5,7 @@ import type { Preset, PresetMeta, PromptBaseProfile, PromptProfileEntry } from '
 import { readMeta, saveMeta } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
-import { buildDefaultSnapshotLock, findPromptInPreset, filterFields, promptFieldsEqual } from './promptToggle.js';
+import { buildDefaultSnapshotLock, filterFields, promptFieldsEqual, restoreDefaultPromptFields } from './promptToggle.js';
 
 // 首次对该预设 add base 时全量锁定默认基线：采集全部 prompts 的 {identifier, enabled, originalFields}（白名单5键全量）
 // 写入 meta.defaultSnapshot 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
@@ -58,10 +58,5 @@ export function recordDefaultOriginalFields(meta: PresetMeta, name: string, sess
 
 // 把 defaultSnapshot 记录的原始值字段应用回 preset（reset 到默认时还原首次编辑前的值）。
 export function applyDefaultOriginalFields(preset: Preset, meta: PresetMeta): void {
-    if (!Array.isArray(meta.defaultSnapshot)) return;
-    for (const d of meta.defaultSnapshot) {
-        if (!d.originalFields) continue;
-        const prompt = findPromptInPreset(preset, d.identifier);
-        if (prompt) Object.assign(prompt, filterFields(d.originalFields));
-    }
+    restoreDefaultPromptFields(preset, meta.defaultSnapshot);
 }

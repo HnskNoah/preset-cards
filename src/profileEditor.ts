@@ -295,7 +295,6 @@ export async function openProfileEditorPopup(
                     if (index >= 0) entry.lastActiveIndex = index;
                 }
                 entry.mounted = membership;
-                if (membership && entry.lastActiveIndex === undefined) entry.enabled = false;
             }
             const toggle = pendingToggles.get(bufferKey(name, entry.identifier));
             if (toggle !== undefined) entry.enabled = toggle;
@@ -801,7 +800,14 @@ export async function openProfileEditorPopup(
         const ctx = currentCtx();
         const view = ctx?.entries.find((entry) => entry.identifier === identifier);
         const baseline = baselineStates.find((entry) => entry.identifier === identifier);
-        if (!view || !baseline || !view.editable) return;
+        if (!view || !baseline || !view.membershipEditable) return;
+        if (!view.editable) {
+            const confirmed = await callGenericPopup(
+                L('Changing whether a system or marker prompt is used can affect prompt structure. Continue?'),
+                POPUP_TYPE.CONFIRM,
+            );
+            if (!confirmed) return;
+        }
         const target = !view.mounted;
         const capturedHistoricalIndex = pendingLastActiveIndex.get(identifier);
         if (target === baseline.mounted) pendingMembership.delete(identifier);
@@ -821,7 +827,6 @@ export async function openProfileEditorPopup(
                 stagedOrder.splice(historicalIndex, 0, identifier);
             } else {
                 stagedOrder.push(identifier);
-                if (baseline.lastActiveIndex === undefined) pendingToggles.set(bufferKey(name, identifier), false);
             }
         }
         await renderDialog();

@@ -30,6 +30,8 @@ export interface ProfileEntryView {
     clearable?: boolean;
     /** 是否允许编辑内容：仅普通 prompt（非 system_prompt / marker）可编辑。 */
     editable?: boolean;
+    /** 是否允许切换 mounted/unused：预设中存在定义的 prompt 均允许。 */
+    membershipEditable?: boolean;
     /** 是否允许顺序编辑（仅活动预设、且目标 prompt_order 条目的 order 含该 identifier）。 */
     orderable?: boolean;
 }
@@ -62,6 +64,7 @@ function truncate(str: string, max: number): string {
 export interface ProfileOrderCtx {
     orderIndex: Map<string, number>;
     orderLength: number;
+    canReorder: boolean;
 }
 
 /** 构建顺序编辑上下文：global → 100001；character → 活动角色 id（策略感知）。
@@ -78,7 +81,7 @@ export function buildProfileOrderCtx(preset: Preset, isActive: boolean): Profile
             });
         }
     }
-    return { orderIndex, orderLength };
+    return { orderIndex, orderLength, canReorder: isActive };
 }
 
 /** 构建单个 profile 的展示条目列表（卡片与 profile-editor 弹窗共用）。
@@ -87,7 +90,7 @@ export function buildProfileEntries(
     profile: PresetProfile,
     meta: PresetMeta,
     preset: Preset,
-    orderCtx: ProfileOrderCtx = { orderIndex: new Map(), orderLength: 0 },
+    orderCtx: ProfileOrderCtx = { orderIndex: new Map(), orderLength: 0, canReorder: false },
 ): ProfileEntryView[] {
     if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return [];
 
@@ -112,7 +115,8 @@ export function buildProfileEntries(
     return resolved.map((e) => {
         const prompt = promptLookup.get(e.identifier);
         const hasFields = !!e.fields && Object.keys(e.fields).length > 0;
-        const orderable = e.mounted && orderCtx.orderIndex.has(e.identifier);
+        const editable = !!prompt && !prompt.system_prompt && !prompt.marker;
+        const orderable = e.mounted && orderCtx.canReorder;
         const orderIdx = orderable ? activeIndex++ : undefined;
         return {
             identifier: e.identifier,
@@ -134,11 +138,12 @@ export function buildProfileEntries(
                     || (profile.order !== undefined && e.mounted)
                 : hasFields,
             // base 的 fields 即自身值变更；delta 需自身 changes 里有 fields（父链继承的不可由本 profile 清除）
-            clearable: isPromptDeltaProfile(profile)
+            clearable: editable && (isPromptDeltaProfile(profile)
                 ? profile.changes.some((c) => c.identifier === e.identifier && c.fields && Object.keys(c.fields).length > 0)
-                : hasFields,
-            // system_prompt / marker 条目不渲染编辑入口；预设中缺失的条目也无法编辑
-            editable: !!prompt && !prompt.system_prompt && !prompt.marker,
+                : hasFields),
+            // system_prompt / marker 不编辑字段和 enabled，但允许调整 membership。
+            editable,
+            membershipEditable: !!prompt,
             // 顺序编辑仅对活动预设开放（重排非活动预设的 prompt_order 无意义）
             orderable,
         };
@@ -205,7 +210,10 @@ export function buildPresetList(): PresetCardModel[] {
                 parentName,
                 depth,
                 entries,
-                isActiveProfile: !!activeRef && activeRef.presetName === name && activeRef.profileId === String(p.id),
+                isActiveProfile: isActive
+                    && !!activeRef
+                    && activeRef.presetName === name
+                    && activeRef.profileId === String(p.id),
             };
             return row;
         });

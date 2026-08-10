@@ -46,6 +46,21 @@ export function filterFields(fields: Record<string, any> | undefined): PromptFie
     return out;
 }
 
+export function restoreDefaultPromptFields(
+    preset: Preset,
+    snapshot: PromptDefaultSnapshotEntry[] | undefined,
+): void {
+    for (const entry of snapshot ?? []) {
+        if (!entry.originalFields) continue;
+        const prompt = findPromptInPreset(preset, entry.identifier);
+        if (!prompt) continue;
+        for (const key of PROMPT_FIELD_WHITELIST) {
+            if (!(key in entry.originalFields)) delete prompt[key];
+        }
+        Object.assign(prompt, filterFields(entry.originalFields));
+    }
+}
+
 export function mirrorFieldsToActivePreset(presetName: string, identifier: string, fields: PromptFields): void {
     if (oai_settings.preset_settings_openai !== presetName) return;
     const livePrompts = Array.isArray(oai_settings.prompts) ? oai_settings.prompts : [];
@@ -291,7 +306,7 @@ export function applyProfileToPreset(
     preset: Preset,
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
-    opts?: { showMissingToast?: boolean },
+    opts?: { showMissingToast?: boolean; defaultSnapshot?: PromptDefaultSnapshotEntry[] },
 ): boolean {
     if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) {
         toastr.warning(L('This profile type cannot be edited with switches'));
@@ -303,6 +318,7 @@ export function applyProfileToPreset(
         toastr.warning(L('Base profile not found, applying changes only'));
         return false;
     }
+    restoreDefaultPromptFields(preset, opts?.defaultSnapshot);
     const { missing } = applyResolvedPromptState(preset, states);
     if (opts?.showMissingToast && missing.length > 0) {
         toastr.warning(`${L('Missing prompts skipped')}: ${missing.join(', ')}`);

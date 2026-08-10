@@ -38,18 +38,18 @@ test('delta resolves mounted on, mounted off, and unused states with explicit or
     ]);
 });
 
-test('reactivation restores historical position and a never-mounted prompt appends disabled', () => {
+test('reactivation restores historical position and preserves enabled state', () => {
     const parent: PromptProfileEntry[] = [
         { identifier: 'a', mounted: true, enabled: true, lastActiveIndex: 0 },
         { identifier: 'b', mounted: true, enabled: true, lastActiveIndex: 1 },
-        { identifier: 'c', mounted: false, enabled: false },
+        { identifier: 'c', mounted: false, enabled: true },
         { identifier: 'd', mounted: false, enabled: true, lastActiveIndex: 1 },
     ];
     const restored = applyPromptDelta(parent, [{ identifier: 'd', mounted: true }]);
     assert.deepEqual(restored.filter((entry) => entry.mounted).map((entry) => entry.identifier), ['a', 'd', 'b']);
     const appended = applyPromptDelta(parent, [{ identifier: 'c', mounted: true }]);
     assert.deepEqual(appended.filter((entry) => entry.mounted).map((entry) => [entry.identifier, entry.enabled]), [
-        ['a', true], ['b', true], ['c', false],
+        ['a', true], ['b', true], ['c', true],
     ]);
 
     const staleEnabled = applyPromptDelta([
@@ -58,7 +58,7 @@ test('reactivation restores historical position and a never-mounted prompt appen
     assert.deepEqual(staleEnabled.map(({ identifier, mounted, enabled, lastActiveIndex }) => ({
         identifier, mounted, enabled, lastActiveIndex,
     })), [
-        { identifier: 'never', mounted: true, enabled: false, lastActiveIndex: 0 },
+        { identifier: 'never', mounted: true, enabled: true, lastActiveIndex: 0 },
     ]);
 });
 

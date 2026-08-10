@@ -242,7 +242,9 @@ export async function openPresetCards(): Promise<void> {
                 const profile = getProfile(meta, profileId);
                 if (!profile) return;
 
-                const applied = applyProfileToPreset(preset, profile, supportedProfiles);
+                const applied = applyProfileToPreset(preset, profile, supportedProfiles, {
+                    defaultSnapshot: meta.defaultSnapshot,
+                });
                 if (!applied) return;
 
                 await saveMeta(name, idx, meta);
@@ -607,7 +609,10 @@ export async function openPresetCards(): Promise<void> {
         const profile = getProfile(meta, profileId);
         if (!profile) return;
 
-        const applied = applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
+        const applied = applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], {
+            showMissingToast: true,
+            defaultSnapshot: meta.defaultSnapshot,
+        });
         if (!applied) return;
 
         // 记录最近加载的 profile 为激活（卡片页选中框特效，全局唯一，localStorage 持久化）
@@ -861,6 +866,14 @@ export async function openPresetCards(): Promise<void> {
         const card = $(this).closest('.preset_card');
         const name = card.attr('data-preset-name') as string;
         const idx = card.data('preset-index') as number;
+        const activeProfile = getActiveProfile();
+        if (oai_settings.preset_settings_openai !== name
+            || !activeProfile
+            || activeProfile.presetName !== name
+            || activeProfile.profileId !== String(profileId)) {
+            toastr.warning(L('Only the active profile can be edited'));
+            return;
+        }
 
         const preset = openai_settings[idx] as Preset;
         const meta = readMeta(preset);
