@@ -466,8 +466,11 @@ export async function openProfileEditorPopup(
 
     // 右栏路由：有编辑目标 → 内联编辑表单；否则 staged diff。
     // 手机端（≤768px）默认右栏隐藏，mobileShowRight 时加 .pc-show-right 让右栏全宽覆盖列表。
+    // pc-editing：编辑表单态（编辑表单自带 Save/Cancel，无需 header 提供退出，手机端隐藏左栏 header 省高度）；
+    // diff 视图保留 header（含 commit/reset/close 退出入口）。
     function renderRightPane(ctx?: EditorCtx): void {
         dialog.find('.pc-layout').toggleClass('pc-show-right', mobileShowRight);
+        dialog.find('.pc-layout').toggleClass('pc-editing', !!editTargetId);
         const diffArea = dialog.find('#pc-diff-area');
         const editArea = dialog.find('#pc-edit-area');
         if (editTargetId) {

@@ -1762,6 +1762,7 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    width: min(100%, 560px);
 }
 
 /* ---- PCManager 手机端：单栏列表 + 右栏覆盖（对齐上游 319c2da） ---- */
@@ -1835,7 +1836,12 @@
 .pc-role-badge.role-user { background: rgba(16, 185, 129, 0.2); color: #34d399; }
 .pc-role-badge.role-assistant { background: rgba(139, 92, 246, 0.2); color: #a78bfa; }
 
-/* 编辑界面内容栏：放大 Prompt Text */
+/* 编辑界面内容栏：放大 Prompt Text，且让表单填满（不沿用 420px 限制），与 header 保存/取消右缘对齐 */
+.pc-edit-area .preset_cards_prompt_edit_form {
+    width: 100%;
+    max-width: none;
+}
+
 .pc-edit-area .preset_cards_prompt_edit_form textarea {
     min-height: 300px;
     font-size: 15px;
@@ -1892,8 +1898,14 @@
         flex: 0 0 auto;
     }
 
-    .pc-layout.pc-show-right .pc-left-pane .pc-search-bar,
-    .pc-layout.pc-show-right .pc-left-pane .pc-prompt-list {
+    /* diff 视图：保留 header（commit/reset/close 退出入口），隐藏列表区 */
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-search-bar,
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-prompt-list {
+        display: none;
+    }
+
+    /* 编辑表单态：编辑表单自带 Save/Cancel，隐藏整个左栏（含 header）让右栏全高 */
+    .pc-layout.pc-show-right.pc-editing .pc-left-pane {
         display: none;
     }
 
