@@ -717,18 +717,18 @@
     justify-content: space-between;
     align-items: center;
     padding: 6px 10px;
-    padding-left: calc(14px + var(--pc-depth, 0) * 16px);
+    padding-left: calc(14px + var(--pc-depth, 0) * 8px);
     background: transparent;
     border-radius: 6px;
     font-size: 12px;
     transition: all 0.2s ease;
-    border: 1px solid transparent;
+    border: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.15);
     position: relative;
 }
 
 .preset_card_profile_row:hover {
     background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.05);
-    border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.2);
+    border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.45);
 }
 
 /* 当前激活的 profile：选中框特效 */
@@ -739,17 +739,26 @@
         0 2px 8px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
 }
 
-/* 派生关系树：左侧层级连接线（模板仅 depth>0 的 delta 行渲染该元素） */
+/* 派生关系树：左侧文件树式连接线（模板仅 depth>0 的 delta 行渲染该元素）。
+   垂直主干贯穿行高并对齐父列，水平短线从主干连向行内容；用背景渐变画线避免 border 圆角怪像。 */
 .preset_card_profile_tree_line {
     position: absolute;
-    left: calc(6px + (var(--pc-depth, 0) - 1) * 16px);
+    left: calc(4px + (var(--pc-depth, 0) - 1) * 8px);
     top: 0;
     bottom: 0;
-    width: 24px;
+    width: 1px;
     pointer-events: none;
-    border-left: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-    border-bottom: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-    border-bottom-left-radius: 6px;
+    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
+}
+
+.preset_card_profile_tree_line::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 18px;
+    height: 1px;
+    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
 }
 
 .preset_card_profile_name_wrap {
@@ -762,26 +771,23 @@
 }
 
 .preset_card_profile_badge {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.4px;
-    padding: 1px 5px;
+    font-size: 10px;
+    padding: 2px 6px;
     border-radius: 4px;
-    line-height: 1.6;
+    line-height: 1.4;
     flex-shrink: 0;
     white-space: nowrap;
-}
-
-.preset_card_profile_badge.badge_base {
-    color: var(--SmartThemeQuoteColor);
-    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.12);
-    border: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-}
-
-.preset_card_profile_badge.badge_delta {
     color: #e6a23c;
     background: rgba(230, 162, 60, 0.12);
     border: 1px solid rgba(230, 162, 60, 0.35);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.preset_card_profile_badge:hover {
+    color: #ffb648;
+    border-color: rgba(230, 162, 60, 0.6);
+    background: rgba(230, 162, 60, 0.2);
 }
 
 .preset_card_profile_name {
@@ -1131,7 +1137,6 @@
 .preset_card_profile_edit:hover,
 .preset_card_profile_update:hover,
 .preset_card_profile_export:hover,
-.preset_card_profile_derive:hover,
 .preset_card_profile_reset:hover {
     color: var(--SmartThemeQuoteColor);
 }
@@ -1383,6 +1388,11 @@
     background: var(--SmartThemeButtonHoverColor, rgba(255,255,255,0.1));
 }
 
+.pc-btn-reset:hover {
+    color: var(--SmartThemeQuoteColor);
+    border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
+}
+
 .pc-btn-commit {
     background: #3b82f6;
     color: white;
@@ -1583,6 +1593,9 @@
     opacity: 1;
     color: var(--SmartThemeQuoteColor);
     font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
 }
 
 .pc-breadcrumb-sep {
@@ -1598,8 +1611,8 @@
     color: var(--SmartThemeBodyColor);
     opacity: 0.6;
     cursor: pointer;
-    padding: 4px;
-    font-size: 0.85rem;
+    padding: 1px 4px;
+    font-size: 0.7rem;
     line-height: 1;
     display: flex;
     align-items: center;
@@ -1633,10 +1646,12 @@
 
 .pc-header-actions-center {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
     flex: 1;
     justify-content: center;
+    min-width: 0;
 }
 
 /* 卡片高亮：dirty（会话缓冲未提交）与 persistent（本 profile 持久差异） */
@@ -1836,10 +1851,6 @@
     margin-top: 12px;
 }
 
-.pc-mobile-nav {
-    display: none;
-}
-
 @media (min-width: 769px) {
     .pc-left-pane {
         display: flex !important;
@@ -1847,48 +1858,47 @@
     .pc-right-pane {
         display: flex !important;
     }
-    .pc-mobile-nav {
-        display: none !important;
-    }
 }
 
 @media (max-width: 768px) {
     .pc-manager-container {
-        inset: 6px;
+        inset: 3vh 6px;
         padding: 12px;
         border-radius: 10px;
     }
 
     .pc-layout {
         gap: 0;
+        flex-direction: column;
     }
 
     .pc-left-pane {
         display: flex;
         width: 100%;
         padding: 12px;
+        flex: 1;
+        min-height: 0;
     }
 
     .pc-right-pane {
         display: none;
         width: 100%;
         padding: 12px;
+        flex: 1;
+        min-height: 0;
     }
 
     .pc-layout.pc-show-right .pc-left-pane {
-        display: none !important;
+        flex: 0 0 auto;
+    }
+
+    .pc-layout.pc-show-right .pc-left-pane .pc-search-bar,
+    .pc-layout.pc-show-right .pc-left-pane .pc-prompt-list {
+        display: none;
     }
 
     .pc-layout.pc-show-right .pc-right-pane {
         display: flex !important;
-    }
-
-    .pc-mobile-nav {
-        display: flex;
-        align-items: center;
-        margin-bottom: 12px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
     }
 
     .pc-header-preset-name {

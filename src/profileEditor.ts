@@ -22,6 +22,7 @@ import {
 } from './meta.js';
 import {
     PROMPT_FIELD_WHITELIST,
+    applyBaseProfile,
     buildPromptSnapshot,
     capturePromptFields,
     filterFields,
@@ -41,7 +42,7 @@ import {
     editedIdentifiersForName,
     type PromptEditBuffer,
 } from './presetBuffers.js';
-import { mergeBaseSnapshot, recordDefaultOriginalFields } from './presetSnapshot.js';
+import { applyDefaultOriginalFields, defaultEnabledEntries, mergeBaseSnapshot, recordDefaultOriginalFields } from './presetSnapshot.js';
 import { buildDerivedProfile } from './profileActions.js';
 import { chooseProfileSaveTarget } from './importExport.js';
 import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
@@ -179,16 +180,15 @@ function cssEscape(s: string): string {
     return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/** 面包屑的一项：节点名 + 是否当前节点（末项）+ 是否截断占位（…）。 */
+/** 面包屑的一项：节点名 + 是否当前节点。 */
 export interface BreadcrumbItem {
     name: string;
     isCurrent: boolean;
-    /** 截断占位项（…），不渲染独立 title。 */
-    isEllipsis?: boolean;
 }
 
-// 沿 baseId 链向上收集节点名，构建派生链面包屑（root → 当前）。
-// 截断规则：链 ≤3 全显示；3 < 链 ≤5 显示 `… ▸ 父 ▸ 当前`；链 >5 只显示当前。
+// 构建三段式面包屑「父 ▸ 当前 ▸ 子」：父取当前节点直接上级（沿 baseId 链向上收集，取最近一个），
+// 子取当前节点第一个直接派生（meta.profiles 中 baseId 指向当前 id 的 delta）。无父/无子则对应段省略。
+// title 保留完整派生链（全部祖先 ▸ 当前 ▸ 子），hover 时不丢信息。
 // 防环：visited 记录已访问 id，成环数据不致死循环。
 export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile, meta: PresetMeta): { items: BreadcrumbItem[]; title: string } {
     const chain: { name: string; id: string }[] = [];
@@ -206,20 +206,23 @@ export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile,
         current = { name: parent.name, id: String(parent.id) };
     }
 
-    const title = chain.map((item) => item.name).join(' ▸ ');
-    let items: BreadcrumbItem[];
-    if (chain.length <= 3) {
-        items = chain.map((item, i) => ({ name: item.name, isCurrent: i === chain.length - 1 }));
-    } else if (chain.length <= 5) {
-        const tail = chain.slice(-2);
-        items = [
-            { name: '…', isCurrent: false, isEllipsis: true },
-            ...tail.map((item, i) => ({ name: item.name, isCurrent: i === tail.length - 1 })),
-        ];
-    } else {
-        const last = chain[chain.length - 1];
-        items = [{ name: last.name, isCurrent: true }];
-    }
+    const ancestors = chain.slice(0, -1);
+    const parent = ancestors.length > 0 ? ancestors[ancestors.length - 1] : undefined;
+    const child = (Array.isArray(meta.profiles) ? meta.profiles : []).find(
+        (candidate) => isPromptDeltaProfile(candidate) && String(candidate.baseId) === String(profile.id),
+    );
+    const childName = child ? child.name : undefined;
+
+    const title = [
+        ...ancestors.map((item) => item.name),
+        profile.name,
+        ...(childName ? [childName] : []),
+    ].join(' ▸ ');
+
+    const items: BreadcrumbItem[] = [];
+    if (parent) items.push({ name: parent.name, isCurrent: false });
+    items.push({ name: profile.name, isCurrent: true });
+    if (childName) items.push({ name: childName, isCurrent: false });
     return { items, title };
 }
 
@@ -343,9 +346,9 @@ export async function openProfileEditorPopup(
             i18n: {
                 rename: L('Rename'),
                 viewStaged: L('View Staged'),
+                reset: L('Reset to parent'),
                 commit: L('Commit'),
                 close: L('Close'),
-                backToList: L('Back to list'),
                 searchPrompts: L('Search prompts...'),
                 dragHandle: L('Drag to reorder'),
                 clearValueChange: L('Clear value changes'),
@@ -810,11 +813,83 @@ export async function openProfileEditorPopup(
         });
     });
 
-    // 手机端「返回列表」
-    dialog.on('click', '#pc-btn-mobile-back', function () {
+    // ---- Reset to parent（delta → 上级；base → 隐藏默认）----
+    dialog.on('click', '#pc-btn-reset', async function () {
+        const ctx = currentCtx();
+        if (!ctx) return;
+        if (!isPromptBaseProfile(ctx.profile) && !isPromptDeltaProfile(ctx.profile)) {
+            toastr.warning(L('This profile type cannot be reset'));
+            return;
+        }
+
+        const confirm = await callGenericPopup(L('Reset this configuration to its parent?'), POPUP_TYPE.CONFIRM);
+        if (!confirm) return;
+
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile) return;
+
+        if (isPromptDeltaProfile(profile)) {
+            // 派生：回退到其上级（base 或上层 delta）；若无上级则回退到隐藏默认
+            const parentStates = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
+            if (parentStates.length > 0) {
+                applyBaseProfile(preset, {
+                    formatVersion: 2,
+                    kind: 'prompt_base',
+                    id: profile.baseId || 'parent',
+                    name: 'Parent',
+                    prompts: parentStates,
+                });
+                profile.changes = [];
+            } else {
+                if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
+                    toastr.warning(L('No default baseline available'));
+                    return;
+                }
+                applyDefaultOriginalFields(preset, meta);
+                const defaultPrompts = defaultEnabledEntries(preset, meta);
+                applyBaseProfile(preset, {
+                    formatVersion: 2,
+                    kind: 'prompt_base',
+                    id: profile.baseId || 'default',
+                    name: 'Default',
+                    prompts: defaultPrompts,
+                });
+                profile.changes = [];
+            }
+            await saveMeta(name, idx, meta);
+            toastr.success(L('Configuration reset'));
+            deps.refreshActivePresetUI(name);
+        } else if (isPromptBaseProfile(profile)) {
+            // 主 profile：回退到隐藏默认基准
+            if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
+                toastr.warning(L('No default baseline available'));
+                return;
+            }
+            applyDefaultOriginalFields(preset, meta);
+            // 只回写开关；originalFields 是 reset 专用元数据，不随 profile 持久化
+            const defaultPrompts = defaultEnabledEntries(preset, meta);
+            profile.prompts = structuredClone(defaultPrompts);
+            applyBaseProfile(preset, {
+                formatVersion: 2,
+                kind: 'prompt_base',
+                id: profile.id,
+                name: profile.name,
+                prompts: defaultPrompts,
+            });
+            await saveMeta(name, idx, meta);
+            toastr.success(L('Configuration reset'));
+            deps.refreshActivePresetUI(name);
+        }
+
+        // reset 已消费本会话缓冲：清空并重载基线、重渲染弹窗 + 刷新卡片网格
+        clearBuffers();
+        reorderedIds.clear();
         editTargetId = null;
         mobileShowRight = false;
-        renderRightPane();
+        await renderDialog();
+        await deps.onGridRefresh();
     });
 
     dialog.on('click', '#pc-btn-commit', async function () {

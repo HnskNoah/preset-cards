@@ -171,26 +171,17 @@ export function buildPresetList(): PresetCardModel[] {
         // Decorate each profile row with a type indicator so cards.html can render
         // [Base] / [Delta] badges, the derive button, and expandable entry list.
         // 派生关系按树序展平：delta 跟随其父链显示，缩进层级由 depth 表达。
-        type ProfileRow = PresetProfile & { isBase: boolean; isDelta: boolean; isV1: boolean; parentName: string; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
+        type ProfileRow = PresetProfile & { isV1: boolean; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
         const forest = buildProfileForest(Array.isArray(meta.profiles) ? meta.profiles : []);
         const profiles: PresetProfile[] = flattenProfileForest(forest).map(({ profile: p, depth }) => {
             let entries: ProfileEntryView[] = [];
-            let parentName = '';
             if (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) {
-                if (isPromptDeltaProfile(p)) {
-                    const parent = (Array.isArray(meta.profiles) ? meta.profiles : [])
-                        .find((b) => b.id === p.baseId);
-                    if (parent) parentName = parent.name;
-                }
                 // 展示 = 递归解析 parent 链的完整开关 + 值字段（base 与 delta 统一走 buildProfileEntries）
                 entries = buildProfileEntries(p, meta, preset, orderCtx);
             }
             const row: ProfileRow = {
                 ...p,
-                isBase: isPromptBaseProfile(p),
-                isDelta: isPromptDeltaProfile(p),
                 isV1: !isPromptBaseProfile(p) && !isPromptDeltaProfile(p),
-                parentName,
                 depth,
                 entries,
                 isActiveProfile: !!activeRef && activeRef.presetName === name && activeRef.profileId === String(p.id),
@@ -252,10 +243,6 @@ export function getCardsTemplateContext() {
             delete: L('Delete'),
             derive: L('Derive Profile'),
             resetProfile: L('Reset to parent'),
-            derivedFrom: L('Derived from'),
-            derived: L('Derived'),
-            base: L('Base'),
-            delta: L('Delta'),
         }
     };
 }
