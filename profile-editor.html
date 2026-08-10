@@ -8,15 +8,15 @@
                 <div class="pc-header-breadcrumb-row">
                     <div class="pc-header-breadcrumb" title="{{breadcrumbTitle}}">
                         {{#each breadcrumb}}
-                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" {{#unless this.isEllipsis}}title="{{this.name}}"{{/unless}}>{{this.name}}</span>
-                        {{#unless this.isCurrent}}<span class="pc-breadcrumb-sep">▸</span>{{/unless}}
+                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" title="{{this.name}}">{{this.name}}{{#if this.isCurrent}}<button id="pc-btn-rename" class="pc-btn-rename" title="{{../i18n.rename}}"><i class="fa-solid fa-pen"></i></button>{{/if}}</span>
+                        {{#unless @last}}<span class="pc-breadcrumb-sep">▸</span>{{/unless}}
                         {{/each}}
                     </div>
-                    <button id="pc-btn-rename" class="pc-btn-rename" title="{{i18n.rename}}"><i class="fa-solid fa-pen"></i></button>
                 </div>
                 <div class="pc-header-actions-row">
                     <div class="pc-header-actions-center">
                         <button id="pc-btn-view-staged" class="pc-top-action-btn" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i> {{i18n.viewStaged}} <span>({{stagedCount}})</span></button>
+                        <button id="pc-btn-reset" class="pc-top-action-btn pc-btn-reset" title="{{i18n.reset}}"><i class="fa-solid fa-rotate-left"></i> {{i18n.reset}}</button>
                         <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{i18n.commit}}</button>
                     </div>
                     <button id="pc-btn-close" class="pc-top-action-btn" title="{{i18n.close}}"><i class="fa-solid fa-times"></i></button>
@@ -43,7 +43,7 @@
                         <i class="fa-solid fa-eraser"></i>
                     </button>
                     {{/if}}
-                    {{#if this.editable}}
+                    {{#if this.toggleable}}
                     <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../i18n.toggleEntry}}">
                         {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i> On{{else}}<i class="fa-solid fa-toggle-off"></i> Off{{/if}}
                     </button>
@@ -57,9 +57,6 @@
             </div>
         </div>
         <div class="pc-right-pane">
-            <div class="pc-mobile-nav">
-                <button id="pc-btn-mobile-back" class="pc-top-action-btn" title="{{i18n.backToList}}"><i class="fa-solid fa-arrow-left"></i> {{i18n.backToList}}</button>
-            </div>
             <div class="pc-diff-area" id="pc-diff-area"></div>
             <div class="pc-edit-area" id="pc-edit-area" style="display:none;"></div>
         </div>

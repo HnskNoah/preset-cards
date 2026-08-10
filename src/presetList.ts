@@ -29,6 +29,9 @@ export interface ProfileEntryView {
     clearable?: boolean;
     /** 是否允许编辑内容：仅普通 prompt（非 system_prompt / marker）可编辑。 */
     editable?: boolean;
+    /** 是否允许开关（enabled）：对齐 ST PromptManager 的 isPromptToggleAllowed——普通 prompt 均可开关，
+     * marker 条目仅 ST forceTogglePrompts 白名单内的可开关（如 charDescription/chatHistory/dialogueExamples）。 */
+    toggleable?: boolean;
     /** 是否允许顺序编辑（仅活动预设、且目标 prompt_order 条目的 order 含该 identifier）。 */
     orderable?: boolean;
 }
@@ -80,6 +83,20 @@ export function buildProfileOrderCtx(preset: Preset, isActive: boolean): Profile
     return { orderIndex, orderLength };
 }
 
+/** ST PromptManager 的 marker 条目开关白名单（forceTogglePrompts）：这些 marker 内容虽由 ST 管理，
+ * 但原生允许用户开关其启用状态，我们的编辑器同样放开开关。 */
+const FORCE_TOGGLE_MARKERS = new Set([
+    'charDescription',
+    'charPersonality',
+    'scenario',
+    'personaDescription',
+    'worldInfoBefore',
+    'worldInfoAfter',
+    'main',
+    'chatHistory',
+    'dialogueExamples',
+]);
+
 /** 构建单个 profile 的展示条目列表（卡片与 profile-editor 弹窗共用）。
  * 展示 = 递归解析 parent 链的完整开关 + 值字段；name/content 供弹窗搜索。 */
 export function buildProfileEntries(
@@ -130,6 +147,8 @@ export function buildProfileEntries(
                 : hasFields,
             // system_prompt / marker 条目不渲染编辑入口；预设中缺失的条目也无法编辑
             editable: !!prompt && !prompt.system_prompt && !prompt.marker,
+            // 开关对齐 ST isPromptToggleAllowed：普通 prompt 均可开关；marker 仅白名单内的可开关
+            toggleable: !!prompt && (!prompt.marker || FORCE_TOGGLE_MARKERS.has(prompt.identifier)),
             // 顺序编辑仅对活动预设开放（重排非活动预设的 prompt_order 无意义）
             orderable: orderIdx !== undefined,
         };
@@ -171,26 +190,17 @@ export function buildPresetList(): PresetCardModel[] {
         // Decorate each profile row with a type indicator so cards.html can render
         // [Base] / [Delta] badges, the derive button, and expandable entry list.
         // 派生关系按树序展平：delta 跟随其父链显示，缩进层级由 depth 表达。
-        type ProfileRow = PresetProfile & { isBase: boolean; isDelta: boolean; isV1: boolean; parentName: string; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
+        type ProfileRow = PresetProfile & { isV1: boolean; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
         const forest = buildProfileForest(Array.isArray(meta.profiles) ? meta.profiles : []);
         const profiles: PresetProfile[] = flattenProfileForest(forest).map(({ profile: p, depth }) => {
             let entries: ProfileEntryView[] = [];
-            let parentName = '';
             if (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) {
-                if (isPromptDeltaProfile(p)) {
-                    const parent = (Array.isArray(meta.profiles) ? meta.profiles : [])
-                        .find((b) => b.id === p.baseId);
-                    if (parent) parentName = parent.name;
-                }
                 // 展示 = 递归解析 parent 链的完整开关 + 值字段（base 与 delta 统一走 buildProfileEntries）
                 entries = buildProfileEntries(p, meta, preset, orderCtx);
             }
             const row: ProfileRow = {
                 ...p,
-                isBase: isPromptBaseProfile(p),
-                isDelta: isPromptDeltaProfile(p),
                 isV1: !isPromptBaseProfile(p) && !isPromptDeltaProfile(p),
-                parentName,
                 depth,
                 entries,
                 isActiveProfile: !!activeRef && activeRef.presetName === name && activeRef.profileId === String(p.id),
@@ -252,10 +262,6 @@ export function getCardsTemplateContext() {
             delete: L('Delete'),
             derive: L('Derive Profile'),
             resetProfile: L('Reset to parent'),
-            derivedFrom: L('Derived from'),
-            derived: L('Derived'),
-            base: L('Base'),
-            delta: L('Delta'),
         }
     };
 }
