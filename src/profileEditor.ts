@@ -179,10 +179,12 @@ function cssEscape(s: string): string {
     return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/** 面包屑的一项：节点名 + 是否当前节点（末项）。 */
+/** 面包屑的一项：节点名 + 是否当前节点（末项）+ 是否截断占位（…）。 */
 export interface BreadcrumbItem {
     name: string;
     isCurrent: boolean;
+    /** 截断占位项（…），不渲染独立 title。 */
+    isEllipsis?: boolean;
 }
 
 // 沿 baseId 链向上收集节点名，构建派生链面包屑（root → 当前）。
@@ -192,7 +194,7 @@ export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile,
     const chain: { name: string; id: string }[] = [];
     const visited = new Set<string>();
     let current: { name: string; id: string } = { name: profile.name, id: String(profile.id) };
-    while (current && !visited.has(current.id)) {
+    while (!visited.has(current.id)) {
         visited.add(current.id);
         chain.unshift(current);
         if (chain.length > 50) break; // 硬上限，防御极端损坏数据
@@ -211,7 +213,7 @@ export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile,
     } else if (chain.length <= 5) {
         const tail = chain.slice(-2);
         items = [
-            { name: '…', isCurrent: false },
+            { name: '…', isCurrent: false, isEllipsis: true },
             ...tail.map((item, i) => ({ name: item.name, isCurrent: i === tail.length - 1 })),
         ];
     } else {
@@ -798,7 +800,7 @@ export async function openProfileEditorPopup(
             if (newName !== currentName && key !== 'Escape') {
                 ctx.profile.name = newName;
                 await saveMeta(name, idx, ctx.meta);
-                toastr.success(L('Rename'));
+                toastr.success(`${L('Rename')}: ${newName}`);
                 // 刷新标题/面包屑/卡片
                 await renderDialog();
                 await deps.onGridRefresh();

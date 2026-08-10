@@ -8,7 +8,7 @@
                 <div class="pc-header-breadcrumb-row">
                     <div class="pc-header-breadcrumb" title="{{breadcrumbTitle}}">
                         {{#each breadcrumb}}
-                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" title="{{this.name}}">{{this.name}}</span>
+                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" {{#unless this.isEllipsis}}title="{{this.name}}"{{/unless}}>{{this.name}}</span>
                         {{#unless this.isCurrent}}<span class="pc-breadcrumb-sep">▸</span>{{/unless}}
                         {{/each}}
                     </div>

@@ -39,14 +39,21 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
         }
     }
 
+    // 根候选 = base/v1 节点 + baseId 无对应 base/delta 父的孤立 delta。
+    // 按原数组顺序收集（同层保持原数组相对顺序）；成环簇（互相引用但无根祖先）随后收尾。
     const roots: ProfileTreeNode[] = [];
     for (const p of profiles) {
         if (isPromptBaseProfile(p) || !isPromptDeltaProfile(p)) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
+            continue;
+        }
+        const parent = nodeById.get(String(p.baseId));
+        if (!parent || (!isPromptBaseProfile(parent.profile) && !isPromptDeltaProfile(parent.profile))) {
+            roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
         }
     }
-    // 未被任何根可达的 delta（孤立：baseId 无对应 base/delta 父；或成环：互相引用但无根祖先）
-    // 作为根节点收尾（对齐 importExport：先 root 树、再收尾未访问节点），保证每个 profile 都展示且不丢。
+    // 未被任何根可达的 delta（成环：互相引用但无根祖先）作为根节点收尾，
+    // 保证每个 profile 都展示且不丢（对齐 importExport：先 root 树、再收尾未访问节点）。
     const reached = new Set<string>();
     const mark = (node: ProfileTreeNode): void => {
         if (reached.has(String(node.profile.id))) return;
