@@ -606,6 +606,59 @@
     min-height: 64px;
 }
 
+/* 采样参数区块：T/P/K/Context/Tokens/Stream 三列网格 */
+.preset_edit_section_title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.7;
+    margin: 12px 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.preset_edit_sampling_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.preset_edit_sampling_grid .preset_edit_field input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    font-size: 13px;
+    outline: none;
+    box-sizing: border-box;
+    font-family: inherit;
+    transition: border-color 0.2s ease;
+}
+
+.preset_edit_sampling_grid .preset_edit_field input[type="number"]:focus {
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.preset_edit_sampling_grid .preset_edit_field input[type="number"]::placeholder {
+    opacity: 0.4;
+}
+
+.preset_edit_stream_wrap {
+    display: flex;
+    align-items: center;
+    height: 36px;
+}
+
+.preset_edit_stream_wrap input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--SmartThemeQuoteColor);
+    cursor: pointer;
+}
+
 /* Model selector in edit */
 .preset_edit_models_grid {
     display: flex;

@@ -340,6 +340,9 @@ export async function openPresetCards(): Promise<void> {
         const idx = $(this).data('preset-index') as number;
 
         openEditModal(name, idx, async () => {
+            // 采样参数等预设本体字段已改：同步活动预设运行态
+            refreshActivePresetUI(name);
+
             // Refresh the card in-place
             const preset = openai_settings[idx] as Preset;
             const meta = readMeta(preset);
@@ -395,6 +398,20 @@ export async function openPresetCards(): Promise<void> {
                 applyCachedBackgrounds(card);
             } else {
                 bgEl.remove();
+            }
+
+            // Refresh footer tags (T/P/K/Ctx/Tok/Stream)
+            const footerEl = card.find('.preset_card_footer');
+            if (footerEl.length > 0) {
+                footerEl.empty();
+                const tags: string[] = [];
+                if (preset['temperature'] != null) tags.push(`<span class="preset_card_tag" title="Temperature"><span class="tag_label">T</span><span class="tag_value">${preset['temperature']}</span></span>`);
+                if (preset['top_p'] != null) tags.push(`<span class="preset_card_tag" title="Top P"><span class="tag_label">P</span><span class="tag_value">${preset['top_p']}</span></span>`);
+                if (preset['top_k'] != null) tags.push(`<span class="preset_card_tag" title="Top K"><span class="tag_label">K</span><span class="tag_value">${preset['top_k']}</span></span>`);
+                if (preset['openai_max_context']) tags.push(`<span class="preset_card_tag" title="Context"><span class="tag_label">Ctx</span><span class="tag_value">${preset['openai_max_context']}</span></span>`);
+                if (preset['openai_max_tokens']) tags.push(`<span class="preset_card_tag" title="Max Tokens (Response)"><span class="tag_label">Tok</span><span class="tag_value">${preset['openai_max_tokens']}</span></span>`);
+                if (preset['stream_openai']) tags.push('<span class="preset_card_tag" title="Streaming"><span class="tag_value">Stream</span></span>');
+                footerEl.append(tags.join(''));
             }
         });
     });

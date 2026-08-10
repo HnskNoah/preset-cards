@@ -29,12 +29,24 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
         description: meta.description,
         bgImage: meta.bgImage,
         availableModels,
+        sampling: {
+            temperature: preset['temperature'] != null ? String(preset['temperature']) : '',
+            topP: preset['top_p'] != null ? String(preset['top_p']) : '',
+            topK: preset['top_k'] != null ? String(preset['top_k']) : '',
+            contextTokens: preset['openai_max_context'] != null ? String(preset['openai_max_context']) : '',
+            maxTokens: preset['openai_max_tokens'] != null ? String(preset['openai_max_tokens']) : '',
+            streaming: !!preset['stream_openai'],
+        },
         i18n: {
             descTitle: L('Description'),
             descPlaceholder: L('Add a short description for this preset...'),
             modelsTitle: L('Applicable Models'),
             bgImageTitle: L('Background Image URL'),
             bgImagePlaceholder: L('e.g., https://example.com/bg.jpg'),
+            samplingTitle: L('Sampling'),
+            contextTitle: L('Context'),
+            tokensTitle: L('Tokens'),
+            streamTitle: L('Streaming'),
         }
     });
 
@@ -59,6 +71,28 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     const newModels = dialog.find('.preset_edit_model_option.active').map(function () {
         return $(this).data('model-id') as string;
     }).get();
+
+    // 采样参数：仅写非空值（空=保持原值）；stream 为显式布尔。
+    const toNumOrUndef = (sel: string): number | undefined => {
+        const raw = dialog.find(sel).val()?.toString().trim() ?? '';
+        if (raw === '') return undefined;
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : undefined;
+    };
+    const temp = toNumOrUndef('#preset_edit_temp');
+    const topP = toNumOrUndef('#preset_edit_top_p');
+    const topK = toNumOrUndef('#preset_edit_top_k');
+    const context = toNumOrUndef('#preset_edit_context');
+    const maxTokens = toNumOrUndef('#preset_edit_max_tokens');
+    const streaming = dialog.find('#preset_edit_stream').is(':checked');
+
+    // 直接写预设本体字段（saveMeta 会把整个预设 POST 到 /api/presets/save）
+    if (temp !== undefined) preset['temperature'] = temp;
+    if (topP !== undefined) preset['top_p'] = topP;
+    if (topK !== undefined) preset['top_k'] = topK;
+    if (context !== undefined) preset['openai_max_context'] = context;
+    if (maxTokens !== undefined) preset['openai_max_tokens'] = maxTokens;
+    preset['stream_openai'] = streaming;
 
     await saveMeta(presetName, presetIndex, { description: newDesc, models: newModels, bgImage: newBgImage, profiles: meta.profiles, defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked });
     toastr.success(t`Preset updated`);
