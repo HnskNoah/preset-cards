@@ -1267,9 +1267,17 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
+/* 未激活条目：参考 ST PromptManager（promptmanager.css:198-209），只淡化名称文字并弱化边框，
+   保留卡片结构可见（不做整卡 opacity/grayscale，避免在部分主题下颜色几乎消失）。 */
 .pc-prompt-card.disabled {
-    opacity: 0.5;
-    filter: grayscale(1);
+    background: var(--SmartThemeButtonDisplayColor, rgba(255, 255, 255, 0.03));
+    border-color: var(--SmartThemeButtonBorderColor, rgba(255, 255, 255, 0.08));
+    filter: none;
+    opacity: 1;
+}
+
+.pc-prompt-card.disabled .pc-card-name {
+    color: var(--white30a, rgba(255, 255, 255, 0.3));
 }
 
 .pc-card-header {
