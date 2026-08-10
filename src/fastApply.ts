@@ -93,8 +93,9 @@ export async function fastApplyPreset(presetIndex: number, presetName: string): 
         }
     }
 
-    // 同步 ToolManager 工具递归上限（原生经 #tool_call_recurse_limit input 处理器设置，openai.js:6919）
-    ToolManager.RECURSE_LIMIT = oai_settings.tool_call_recurse_limit as number;
+    // 同步 ToolManager 工具递归上限（原生经 #tool_call_recurse_limit input 处理器设置，openai.js:6919）；
+    // ?? 5 为防御性兜底（oai_settings 加载后必有该值，理论不可达）。
+    ToolManager.RECURSE_LIMIT = (oai_settings.tool_call_recurse_limit ?? 5) as number;
 
     // ── Phase 3: 批量 DOM 直写 ──
     if (oai_settings.bind_preset_to_connection) {
