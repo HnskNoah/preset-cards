@@ -3,6 +3,7 @@
 
 declare module '@sillytavern/script' {
     export function getRequestHeaders(options?: { omitContentType?: boolean }): Record<string, string>;
+    export function saveSettingsDebounced(loopCounter?: number): void;
 }
 
 declare module '@sillytavern/scripts/extensions' {
@@ -21,10 +22,14 @@ declare module '@sillytavern/scripts/i18n' {
 
 declare module '@sillytavern/scripts/utils' {
     export function download(content: string | Blob, filename: string, contentType?: string): void;
+    export function cancelDebounce(func: (...args: unknown[]) => unknown): void;
 }
 
 declare module '@sillytavern/scripts/events' {
     export const event_types: {
+        OAI_PRESET_CHANGED_BEFORE: string;
+        OAI_PRESET_CHANGED_AFTER: string;
+        PRESET_CHANGED: string;
         PRESET_DELETED: string;
         [key: string]: string;
     };
@@ -87,15 +92,18 @@ declare module '@sillytavern/scripts/openai' {
     export const settingsToUpdate: Record<string, [string, string, boolean, boolean]>;
     export function getChatCompletionPreset(settings?: Record<string, unknown>): Record<string, unknown>;
     export const chat_completion_sources: Record<string, string>;
+    export const custom_prompt_post_processing_types: Record<string, string>;
     export let openai_setting_names: Record<string, number>;
     export let openai_settings: Record<string, unknown>[];
     export const oai_settings: {
         preset_settings_openai: string | null;
+        bind_preset_to_connection?: boolean;
         extensions?: Record<string, unknown>;
         [key: string]: unknown;
     };
     export const promptManager: {
         render(afterTryGenerate?: boolean): void;
+        renderDebounced: () => void;
         saveServiceSettings(): Promise<void>;
         configuration: {
             promptOrder: {
@@ -105,4 +113,10 @@ declare module '@sillytavern/scripts/openai' {
         };
         activeCharacter?: { id: number } | null;
     } | null;
+}
+
+declare module '@sillytavern/scripts/tool-calling' {
+    export class ToolManager {
+        static RECURSE_LIMIT: number;
+    }
 }
