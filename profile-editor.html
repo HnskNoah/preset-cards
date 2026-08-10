@@ -2,17 +2,23 @@
     <div class="pc-layout">
         <div class="pc-left-pane">
             <div class="pc-header">
-                <h2>
-                    <span class="pc-header-title-row">
-                        {{#if isBase}}<span class="preset_card_profile_badge badge_base">{{i18n.base}}</span>{{/if}}
-                        {{#if isDelta}}{{#if parentName}}<span class="preset_card_profile_badge badge_delta" title="{{i18n.derivedFrom}}">{{parentName}}</span>{{else}}<span class="preset_card_profile_badge badge_delta" title="{{i18n.derivedFrom}}">{{i18n.delta}}</span>{{/if}}{{/if}}
-                        <span class="pc-header-profile-name" title="{{profileName}}">{{profileName}}</span>
-                    </span>
-                    <small class="pc-header-subtitle" title="{{presetName}}">{{presetName}}</small>
-                </h2>
-                <div class="pc-header-controls">
-                    <button id="pc-btn-view-staged" class="pc-top-action-btn" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i> {{i18n.viewStaged}} <span>({{stagedCount}})</span></button>
-                    <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{i18n.commit}}</button>
+                <div class="pc-header-preset-row">
+                    <span class="pc-header-preset-name" title="{{presetName}}">{{presetName}}</span>
+                </div>
+                <div class="pc-header-breadcrumb-row">
+                    <div class="pc-header-breadcrumb" title="{{breadcrumbTitle}}">
+                        {{#each breadcrumb}}
+                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" title="{{this.name}}">{{this.name}}</span>
+                        {{#unless this.isCurrent}}<span class="pc-breadcrumb-sep">▸</span>{{/unless}}
+                        {{/each}}
+                    </div>
+                    <button id="pc-btn-rename" class="pc-btn-rename" title="{{i18n.rename}}"><i class="fa-solid fa-pen"></i></button>
+                </div>
+                <div class="pc-header-actions-row">
+                    <div class="pc-header-actions-center">
+                        <button id="pc-btn-view-staged" class="pc-top-action-btn" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i> {{i18n.viewStaged}} <span>({{stagedCount}})</span></button>
+                        <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{i18n.commit}}</button>
+                    </div>
                     <button id="pc-btn-close" class="pc-top-action-btn" title="{{i18n.close}}"><i class="fa-solid fa-times"></i></button>
                 </div>
             </div>
