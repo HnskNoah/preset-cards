@@ -126,7 +126,7 @@ export async function commitBufferedEditsToProfile(
     missingParent: 'full-changes' | 'abort',
 ): Promise<boolean> {
     if (isPromptBaseProfile(profile)) {
-        // enabled 全量合并；fields 仅对本次编辑的条目（与编辑初值无净变化时清除），
+        // enabled 合并当前目标 order 中的条目；fields 仅对本次编辑的条目（与编辑初值无净变化时清除），
         // 其余条目保留既有 fields（见 mergeBaseSnapshot）
         mergeBaseSnapshot(profile, snapshot, name, sessionEdits);
         recordDefaultOriginalFields(meta, name, sessionEdits);

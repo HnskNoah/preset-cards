@@ -34,7 +34,7 @@ npm run build      # 生产构建，输出 dist/index.js（sourcemap 已禁用�
 ## 使用说明
 
 1. **打开**：侧边栏点击 **Preset Cards**，或运行 `/presetcards`。
-2. **新建主 profile**：卡片「配置快照」区点击 `+`，输入名称，保存当前全部 prompt 开关为 Base（首次自动锁定出厂基线）。
+2. **新建主 profile**：卡片「配置快照」区点击 `+`，输入名称，保存当前 `prompt_order.order` 中已挂载 prompt 的开关为 Base（首次自动锁定全量出厂基线）。
 3. **新建派生 profile**：在某条 profile 上点击派生图标（fork），输入名称，得到一份相对上级的 Delta；此后可在其上编辑开关/值后再覆盖更新。
 4. **编辑 profile**：点击 profile 名称，加载后自动打开 **Profile 编辑器**弹窗。左栏逐条切换开关、清除值变更或拖拽排序；点击条目在右栏编辑 content / name / role / position（+ 注入深度），改动先进「暂存更改」。
 5. **Commit**：点弹窗顶部 Commit，选择「更新当前配置」直接写回，或「新建为子配置」把当前状态保存为新的 Delta；关弹窗时有未提交改动会弹「丢弃」确认，确认后缓冲清除。
@@ -45,12 +45,12 @@ npm run build      # 生产构建，输出 dist/index.js（sourcemap 已禁用�
 ## 数据说明
 
 - 所有扩展数据存于预设对象的 `extensions['preset_cards']`（描述、适用模型、背景图、profiles、隐藏默认基准），通过 ST 的 `/api/presets/save` 持久化。
-- **Base（`formatVersion: 2`, `kind: 'prompt_base'`）**：`prompts[]` 为 `{ identifier, enabled, fields? }`，保存全量开关快照，`fields` 只含「与出厂基线有差异」的值字段。
+- **Base（`formatVersion: 2`, `kind: 'prompt_base'`）**：`prompts[]` 为 `{ identifier, enabled, fields? }`，只保存当前 `prompt_order.order` 中已挂载 prompt 的开关快照，`fields` 只含「与出厂基线有差异」的值字段。
 - **Delta（`formatVersion: 2`, `kind: 'prompt_delta'`）**：`{ baseId, changes[] }`，`changes` 为 `{ identifier, enabled?, fields? }`，仅记录相对上级的差异，可嵌套。
 - **值字段白名单**：`content / name / role / injection_position / injection_depth`（`PROMPT_FIELD_WHITELIST`）；`injection_order` 仍为内部字段，UI 不编辑、不随 profile 捕获，避免加载 profile 时用旧快照覆盖用户后续调整的注入值。
 - **隐藏默认基准（`defaultSnapshot`）**：首次为该预设新建 Base 时幂等全量锁定（`{ identifier, enabled, originalFields }`），不显示、不参与派生；作为 reset 的出厂基线，编辑条目的原始值字段惰性记录于此（reset 还原用）。
 - 另有旧版 v1 全量快照（`settings` 深拷贝）用于向后兼容，不可派生。
-- 读取开关时以 `prompt_order` 的 global 条目（character_id=100001）为运行时真值，缺失时回退 `prompts[].enabled`，再缺失默认启用。
+- 读取 profile 快照开关时使用当前目标 `prompt_order` 条目（global 为 character_id=100001，character 为活动角色）；reset 的隐藏默认基线仍默认读取 global 条目，缺失时回退 `prompts[].enabled`，再缺失默认启用。
 
 ## 与 ST 集成的已知注意点
 
