@@ -1240,6 +1240,57 @@
     padding-right: 8px;
 }
 
+.pc-active-prompt-list,
+.pc-unused-prompt-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.pc-unused-section {
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    padding-bottom: 10px;
+}
+
+.pc-unused-section summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+    opacity: 0.72;
+    padding: 6px 2px 10px;
+}
+
+.pc-prompt-card.unused {
+    border-style: dashed;
+    background: rgba(0, 0, 0, 0.12);
+}
+
+.pc-unused-status {
+    font-size: 0.72rem;
+    opacity: 0.55;
+}
+
+.pc-btn-membership {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--SmartThemeBodyColor);
+    cursor: pointer;
+    opacity: 0.72;
+}
+
+.pc-btn-membership:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+    border-color: var(--SmartThemeQuoteColor);
+}
+
 .pc-prompt-card {
     background: var(--SmartThemeButtonDisplayColor, rgba(255, 255, 255, 0.05));
     border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
@@ -1439,6 +1490,7 @@
 .pc-diff-item.diff-modify { border-left-color: #8b5cf6; }
 .pc-diff-item.diff-delete { border-left-color: #ef4444; }
 .pc-diff-item.diff-added { border-left-color: #10b981; }
+.pc-diff-item.diff-membership { border-left-color: #14b8a6; }
 
 .pc-btn-undo {
     background: transparent;
@@ -1718,7 +1770,7 @@
     background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.08);
 }
 
-.pc-prompt-list.sorting .pc-prompt-card {
+.pc-active-prompt-list.sorting .pc-prompt-card {
     opacity: 0.6;
 }
 

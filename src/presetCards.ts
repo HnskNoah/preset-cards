@@ -18,9 +18,10 @@ import {
     type Preset,
     type PromptBaseProfile,
     type PromptDeltaProfile,
+    type PromptProfileEntry,
 } from './meta.js';
 import {
-    applyBaseProfile,
+    applyResolvedPromptState,
     applyProfileToPreset,
     buildBaseSnapshotDiff,
     resolveParentStates,
@@ -30,6 +31,7 @@ import {
     buildTreeExportData,
     chooseFromOptions,
     chooseProfileExportAction,
+    LegacyProfileFormatError,
     mergeImportedProfiles,
     warnV1ExcludedFromTreeExport,
 } from './importExport.js';
@@ -222,8 +224,15 @@ export async function openPresetCards(): Promise<void> {
 
         const container = $('<div class="preset_card_profiles_section" style="margin-top:0; padding:0; border:none; box-shadow:none; background:transparent;"></div>');
         const list = $('<div class="preset_card_profiles_list"></div>');
+        const supportedProfiles = meta.profiles.filter(
+            (profile): profile is PromptBaseProfile | PromptDeltaProfile => isPromptBaseProfile(profile) || isPromptDeltaProfile(profile),
+        );
+        if (supportedProfiles.length === 0) {
+            toastr.info(L('No configurations saved for this preset'));
+            return;
+        }
 
-        meta.profiles.forEach(p => {
+        supportedProfiles.forEach(p => {
             const row = $('<div class="preset_card_profile_row" style="cursor:pointer; padding:10px 14px; margin-bottom:4px;"></div>')
                 .attr('data-profile-id', String(p.id));
             row.append($('<div class="preset_card_profile_name" style="font-size:14px;"></div>').text(p.name));
@@ -233,7 +242,8 @@ export async function openPresetCards(): Promise<void> {
                 const profile = getProfile(meta, profileId);
                 if (!profile) return;
 
-                applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
+                const applied = applyProfileToPreset(preset, profile, supportedProfiles);
+                if (!applied) return;
 
                 await saveMeta(name, idx, meta);
                 toastr.success(L('Configuration loaded'));
@@ -552,7 +562,7 @@ export async function openPresetCards(): Promise<void> {
 
         // 与锁定基线做差异：fields 只存与基线不同的字段（content 差异进 base，又避免全量 content 快照）
         profiles.push({
-            formatVersion: 2,
+            formatVersion: 3,
             kind: 'prompt_base',
             id: newProfileId(),
             name: profileName,
@@ -597,7 +607,8 @@ export async function openPresetCards(): Promise<void> {
         const profile = getProfile(meta, profileId);
         if (!profile) return;
 
-        applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
+        const applied = applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
+        if (!applied) return;
 
         // 记录最近加载的 profile 为激活（卡片页选中框特效，全局唯一，localStorage 持久化）
         setActiveProfile({ presetName: name, profileId: String(profileId) });
@@ -666,31 +677,30 @@ export async function openPresetCards(): Promise<void> {
 
         if (isPromptDeltaProfile(profile)) {
             // 派生：回退到其上级（base 或上层 delta）；若无上级则回退到隐藏默认
+            const parent = getProfile(meta, profile.baseId);
             const parentStates = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
-            if (parentStates.length > 0) {
-                applyBaseProfile(preset, {
-                    formatVersion: 2,
-                    kind: 'prompt_base',
-                    id: profile.baseId || 'parent',
-                    name: 'Parent',
-                    prompts: parentStates,
-                });
+            if (parent && (isPromptBaseProfile(parent) || isPromptDeltaProfile(parent))) {
+                // Clear child-only field overrides before applying the parent sparse snapshot.
+                if (meta.defaultSnapshot?.length) applyDefaultOriginalFields(preset, meta);
+                applyResolvedPromptState(preset, parentStates);
                 profile.changes = [];
+                delete profile.order;
             } else {
-                if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
+                if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0
+                    || !meta.defaultSnapshot.every((entry) => typeof entry.mounted === 'boolean')) {
                     toastr.warning(L('No default baseline available'));
                     return;
                 }
                 applyDefaultOriginalFields(preset, meta);
-                const tmp: PromptBaseProfile = {
-                    formatVersion: 2,
-                    kind: 'prompt_base',
-                    id: profile.baseId || 'default',
-                    name: 'Default',
-                    prompts: meta.defaultSnapshot,
-                };
-                applyBaseProfile(preset, tmp);
+                const defaults: PromptProfileEntry[] = meta.defaultSnapshot.map((entry) => ({
+                    identifier: entry.identifier,
+                    mounted: entry.mounted,
+                    enabled: entry.enabled,
+                    lastActiveIndex: entry.lastActiveIndex,
+                }));
+                applyResolvedPromptState(preset, defaults);
                 profile.changes = [];
+                delete profile.order;
             }
             await saveMeta(name, idx, meta);
             toastr.success(L('Configuration reset'));
@@ -698,21 +708,20 @@ export async function openPresetCards(): Promise<void> {
             clearBufferedForName(name, sessionEdits, pendingToggles);
         } else if (isPromptBaseProfile(profile)) {
             // 主 profile：回退到隐藏默认基准
-            if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
+            if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0
+                || !meta.defaultSnapshot.every((entry) => typeof entry.mounted === 'boolean')) {
                 toastr.warning(L('No default baseline available'));
                 return;
             }
             applyDefaultOriginalFields(preset, meta);
             // 只回写开关；originalFields 是 reset 专用元数据，不随 profile 持久化
-            profile.prompts = structuredClone(meta.defaultSnapshot).map(({ identifier, enabled }) => ({ identifier, enabled }));
-            const tmp: PromptBaseProfile = {
-                formatVersion: 2,
-                kind: 'prompt_base',
-                id: profile.id,
-                name: profile.name,
-                prompts: meta.defaultSnapshot,
-            };
-            applyBaseProfile(preset, tmp);
+            profile.prompts = meta.defaultSnapshot.map((entry) => ({
+                identifier: entry.identifier,
+                mounted: entry.mounted,
+                enabled: entry.enabled,
+                lastActiveIndex: entry.lastActiveIndex,
+            }));
+            applyResolvedPromptState(preset, profile.prompts);
             await saveMeta(name, idx, meta);
             toastr.success(L('Configuration reset'));
             refreshActivePresetUI(name);
@@ -836,7 +845,9 @@ export async function openPresetCards(): Promise<void> {
                 await refreshGrid({ applyBackgrounds: true });
             } catch (err) {
                 console.error(err);
-                toastr.error(L('Failed to parse configuration file'));
+                toastr.error(err instanceof LegacyProfileFormatError
+                    ? L('Legacy profiles must be rebuilt manually')
+                    : L('Failed to parse configuration file'));
             }
         };
         input.click();

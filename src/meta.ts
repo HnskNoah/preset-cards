@@ -2,6 +2,7 @@ import { getRequestHeaders } from '@sillytavern/script';
 import { t } from '@sillytavern/scripts/i18n';
 import { openai_settings, oai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_KEY } from './constants.js';
+import { isV3BaseProfileData, isV3DeltaProfileData } from './profileSchema.js';
 
 /** 预设对象的最小结构;其余字段是 ST 的任意设置,保持宽松。 */
 export type Preset = Record<string, any> & {
@@ -22,50 +23,64 @@ export interface PromptFields {
     role?: string;
     injection_position?: number;
     injection_depth?: number;
-    injection_order?: number;
 }
 
-/** 主 profile：记录当前目标 prompt_order.order 中 prompts 的开关，可附带值字段（fields），不存扩展。 */
+export interface PromptProfileEntry {
+    identifier: string;
+    mounted: boolean;
+    enabled: boolean;
+    lastActiveIndex?: number;
+    fields?: PromptFields;
+}
+
+/** v3 主 profile：完整保存 mounted / enabled / active order / unused 状态。 */
 export interface PromptBaseProfile {
-    formatVersion: 2;
+    formatVersion: 3;
     kind: 'prompt_base';
     id: string;
     name: string;
-    prompts: { identifier: string; enabled: boolean; fields?: PromptFields }[];
+    prompts: PromptProfileEntry[];
 }
 
 /** 派生 profile 的一条差异：开关差异 + 值差异（content/role/name 等）。 */
 export interface PromptDeltaChange {
     identifier: string;
+    mounted?: boolean;
     enabled?: boolean;
-    fields?: Record<string, any>;
+    lastActiveIndex?: number;
+    fields?: PromptFields;
 }
 
 /** 派生 profile：相对主 profile 的差异，加载时「主 + 子」叠加应用。 */
 export interface PromptDeltaProfile {
-    formatVersion: 2;
+    formatVersion: 3;
     kind: 'prompt_delta';
     id: string;
     name: string;
     baseId: string;
     changes: PromptDeltaChange[];
+    /** 完整的 mounted identifier 顺序；缺省表示继承父级顺序。 */
+    order?: string[];
 }
 
 /** defaultSnapshot 条目：开关 + 惰性记录首次编辑前的原始值字段（reset 还原用，可选）。 */
 export interface PromptDefaultSnapshotEntry {
     identifier: string;
+    mounted: boolean;
     enabled: boolean;
+    lastActiveIndex?: number;
     originalFields?: PromptFields;
 }
 
-export type PresetProfile = PresetProfileV1 | PromptBaseProfile | PromptDeltaProfile;
+export type LegacyPresetProfile = PresetProfileV1 & Record<string, any>;
+export type PresetProfile = LegacyPresetProfile | PromptBaseProfile | PromptDeltaProfile;
 
 export function isPromptBaseProfile(profile: PresetProfile): profile is PromptBaseProfile {
-    return (profile as { kind?: string }).kind === 'prompt_base';
+    return isV3BaseProfileData(profile);
 }
 
 export function isPromptDeltaProfile(profile: PresetProfile): profile is PromptDeltaProfile {
-    return (profile as { kind?: string }).kind === 'prompt_delta';
+    return isV3DeltaProfileData(profile);
 }
 
 export interface PresetMeta {

@@ -18,20 +18,19 @@ import {
     type PromptBaseProfile,
     type PromptDeltaChange,
     type PromptDeltaProfile,
-    type PromptFields,
+    type PromptProfileEntry,
 } from './meta.js';
 import {
     PROMPT_FIELD_WHITELIST,
     buildPromptSnapshot,
     capturePromptFields,
     filterFields,
-    findOrderList,
     findPromptInPreset,
+    applyResolvedPromptState,
     promptFieldsEqual,
     resolveParentStates,
     resolveProfilePrompts,
-    resolvePromptOrderTarget,
-    snapshotToChanges,
+    snapshotToDelta,
 } from './promptToggle.js';
 import {
     applyBufferedEdits,
@@ -44,8 +43,9 @@ import {
 import { mergeBaseSnapshot, recordDefaultOriginalFields } from './presetSnapshot.js';
 import { buildDerivedProfile } from './profileActions.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
+import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView } from './presetList.js';
 import { buildPromptEditForm } from './editModal.js';
+import { arrangePromptEntries, mountedOrder } from './promptState.js';
 
 /** 弹窗依赖：缓冲 Map 与刷新回调由 presetCards 闭包注入。 */
 export interface ProfileEditorDeps {
@@ -63,7 +63,7 @@ export function applyBufferedAndSnapshot(
     sessionEdits: Map<string, PromptEditBuffer>,
     pendingToggles: Map<string, boolean>,
     pendingClears: Map<string, true>,
-): { identifier: string; enabled: boolean; fields?: PromptFields }[] {
+): PromptProfileEntry[] {
     const missing = applyBufferedEdits(preset, name, sessionEdits, pendingToggles);
     if (missing.length > 0) {
         toastr.warning(`${L('Missing prompts skipped')}: ${missing.join(', ')}`);
@@ -118,7 +118,7 @@ function applyPendingClearsToProfile(
  * 仅处理 base/delta；成功时返回 true。 */
 export async function commitBufferedEditsToProfile(
     profile: PromptBaseProfile | PromptDeltaProfile,
-    snapshot: { identifier: string; enabled: boolean; fields?: PromptFields }[],
+    snapshot: PromptProfileEntry[],
     meta: PresetMeta,
     name: string,
     idx: number,
@@ -134,11 +134,19 @@ export async function commitBufferedEditsToProfile(
         // 基线用父链解析状态（不含本 delta 自身 changes），否则未编辑的已存差异与基线相等而被 diff 掉
         const parentEntries = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
         if (parentEntries.length > 0) {
-            profile.changes = snapshotToChanges(snapshot, parentEntries, profile.changes);
+            const delta = snapshotToDelta(snapshot, parentEntries);
+            profile.changes = delta.changes;
+            if (delta.order) profile.order = delta.order;
+            else delete profile.order;
         } else if (missingParent === 'full-changes') {
             // 父链缺失：全量写成差异（含值字段）；空 fields（clear 条目）不写入（F3）
             profile.changes = snapshot.map((s) => {
-                const change: PromptDeltaChange = { identifier: s.identifier, enabled: s.enabled };
+                const change: PromptDeltaChange = {
+                    identifier: s.identifier,
+                    mounted: s.mounted,
+                    enabled: s.enabled,
+                    lastActiveIndex: s.lastActiveIndex,
+                };
                 if (s.fields && Object.keys(s.fields).length > 0) change.fields = s.fields;
                 return change;
             });
@@ -166,6 +174,8 @@ interface StagedItem {
     key: string;
     label: string;
     toggle?: { original: boolean; target: boolean };
+    membership?: { original: boolean; target: boolean };
+    order?: boolean;
     fields: StagedFieldChange[];
     /** R1：本条目存在「清除值变更」待提交（commit 时删除 profile 快照 fields）。 */
     clear?: boolean;
@@ -238,24 +248,77 @@ export async function openProfileEditorPopup(
     let searchIndex = new Map<string, { name: string; content: string }>();
     let editTargetId: string | null = null;
     let mobileShowRight = false;
-    /** 本会话拖拽重排过的条目（打脏标记，立即保存不进 diff；序号保持不更新）。 */
+    /** 本会话拖拽重排过的条目。 */
     const reorderedIds = new Set<string>();
+    const pendingMembership = new Map<string, boolean>();
+    const pendingLastActiveIndex = new Map<string, number>();
     /** R1：本会话「清除值变更」缓冲（key = bufferKey(name, identifier)）；Commit 才删除 profile 快照 fields。 */
     const pendingClears = new Map<string, true>();
-    /** 弹窗打开时的 prompt_order 快照：拖拽脏标记的基准（改回原位则清除）。
-     * R7：复用 buildProfileOrderCtx 的顺序索引构建（非活动预设返回空 map；拖拽本就仅活动预设开放）。 */
-    const initialOrderIndex = buildProfileOrderCtx(openai_settings[idx] as Preset, oai_settings.preset_settings_openai === name).orderIndex;
+    let baselineStates: PromptProfileEntry[] = [];
+    let initialMountedOrder: string[] = [];
+    let stagedOrder: string[] = [];
     let popup: Popup;
 
+    const reloadBaseline = (): boolean => {
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return false;
+        const supported = meta.profiles.filter(
+            (candidate): candidate is PromptBaseProfile | PromptDeltaProfile => isPromptBaseProfile(candidate) || isPromptDeltaProfile(candidate),
+        );
+        baselineStates = resolveProfilePrompts(profile, supported, new Set());
+        const known = new Set(baselineStates.map((entry) => entry.identifier));
+        for (const prompt of Array.isArray(preset.prompts) ? preset.prompts : []) {
+            if (!prompt || typeof prompt.identifier !== 'string' || !prompt.identifier || known.has(prompt.identifier)) continue;
+            baselineStates.push({ identifier: prompt.identifier, mounted: false, enabled: false });
+            known.add(prompt.identifier);
+        }
+        initialMountedOrder = mountedOrder(baselineStates);
+        stagedOrder = [...initialMountedOrder];
+        return true;
+    };
+    if (!reloadBaseline()) return;
+
     // 读取当前预设/元数据/profile 解析后的展示条目（每次调用取最新内存态，clear 等直接改内存对象）
-    const currentCtx = (): { preset: Preset; meta: PresetMeta; profile: PromptBaseProfile | PromptDeltaProfile; entries: ProfileEntryView[]; orderCtx: ProfileOrderCtx } | undefined => {
+    const currentCtx = (): { preset: Preset; meta: PresetMeta; profile: PromptBaseProfile | PromptDeltaProfile; entries: ProfileEntryView[]; states: PromptProfileEntry[] } | undefined => {
         const preset = openai_settings[idx] as Preset;
         const meta = readMeta(preset);
         const profile = getProfile(meta, profileId);
         if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return undefined;
-        const isActive = oai_settings.preset_settings_openai === name;
-        const orderCtx = buildProfileOrderCtx(preset, isActive);
-        return { preset, meta, profile, entries: buildProfileEntries(profile, meta, preset, orderCtx), orderCtx };
+        const states = baselineStates.map((entry) => ({ ...entry, fields: entry.fields ? { ...entry.fields } : undefined }));
+        for (const entry of states) {
+            const membership = pendingMembership.get(entry.identifier);
+            if (membership !== undefined) {
+                if (!membership && entry.mounted) {
+                    const index = pendingLastActiveIndex.get(entry.identifier) ?? stagedOrder.indexOf(entry.identifier);
+                    if (index >= 0) entry.lastActiveIndex = index;
+                }
+                entry.mounted = membership;
+                if (membership && entry.lastActiveIndex === undefined) entry.enabled = false;
+            }
+            const toggle = pendingToggles.get(bufferKey(name, entry.identifier));
+            if (toggle !== undefined) entry.enabled = toggle;
+        }
+        const arranged = arrangePromptEntries(states, stagedOrder);
+        const viewProfile: PromptBaseProfile = {
+            formatVersion: 3,
+            kind: 'prompt_base',
+            id: '__editor__',
+            name: profile.name,
+            prompts: arranged,
+        };
+        const viewMeta: PresetMeta = { ...meta, profiles: [viewProfile] };
+        return {
+            preset,
+            meta,
+            profile,
+            entries: buildProfileEntries(viewProfile, viewMeta, preset, buildProfileOrderCtx(
+                preset,
+                oai_settings.preset_settings_openai === name,
+            )),
+            states: arranged,
+        };
     };
 
     // 搜索索引：一次构建（entries 来自内存解析，content 可能较长），applySearch 只读缓存。
@@ -283,12 +346,14 @@ export async function openProfileEditorPopup(
         const resolvedCtx = ctx ?? currentCtx();
         if (!resolvedCtx) return [];
         const nameById = new Map(resolvedCtx.entries.map((e) => [e.identifier, e.name]));
-        const enabledById = new Map(resolvedCtx.entries.map((e) => [e.identifier, e.enabled]));
+        const enabledById = new Map(baselineStates.map((e) => [e.identifier, e.enabled]));
+        const mountedById = new Map(baselineStates.map((e) => [e.identifier, e.mounted]));
 
         const keys = new Set<string>();
         for (const k of pendingToggles.keys()) if (k.startsWith(prefix)) keys.add(k);
         for (const k of sessionEdits.keys()) if (k.startsWith(prefix)) keys.add(k);
         for (const k of pendingClears.keys()) if (k.startsWith(prefix)) keys.add(k);
+        for (const identifier of pendingMembership.keys()) keys.add(bufferKey(name, identifier));
 
         const items: StagedItem[] = [];
         for (const key of keys) {
@@ -297,6 +362,10 @@ export async function openProfileEditorPopup(
             const toggleTarget = pendingToggles.get(key);
             if (toggleTarget !== undefined) {
                 item.toggle = { original: enabledById.get(identifier) ?? true, target: toggleTarget };
+            }
+            const membershipTarget = pendingMembership.get(identifier);
+            if (membershipTarget !== undefined) {
+                item.membership = { original: mountedById.get(identifier) ?? false, target: membershipTarget };
             }
             const session = sessionEdits.get(key);
             if (session) {
@@ -315,6 +384,10 @@ export async function openProfileEditorPopup(
                 item.clear = true;
             }
             items.push(item);
+        }
+        if (stagedOrder.length !== initialMountedOrder.length
+            || stagedOrder.some((identifier, index) => identifier !== initialMountedOrder[index])) {
+            items.unshift({ identifier: '__order__', key: '__order__', label: L('Order adjusted'), fields: [], order: true });
         }
         // 按 entries（prompt_order 展示顺序）排序，而非 identifier 字母序；未知 identifier 排最后
         const orderIdx = new Map(resolvedCtx.entries.map((e, i) => [e.identifier, i]));
@@ -337,7 +410,8 @@ export async function openProfileEditorPopup(
             presetName: name,
             breadcrumb,
             breadcrumbTitle,
-            entries: ctx.entries,
+            activeEntries: ctx.entries.filter((entry) => entry.mounted),
+            unusedEntries: ctx.entries.filter((entry) => !entry.mounted),
             stagedCount: items.length,
             canCommit: items.length > 0,
             i18n: {
@@ -352,6 +426,10 @@ export async function openProfileEditorPopup(
                 toggleEntry: L('Toggle entry'),
                 noEntries: L('No entries'),
                 noSearchResults: L('No prompts found'),
+                unusedPrompts: L('Unused Prompts'),
+                unusedStatus: L('Not used for generation'),
+                activatePrompt: L('Activate prompt'),
+                deactivatePrompt: L('Move to unused'),
             },
         });
 
@@ -393,7 +471,8 @@ export async function openProfileEditorPopup(
                 const idx = searchIndex.get(identifier);
                 if (idx) idx.name = session.edited.name.toLowerCase();
             }
-            if (sessionEdits.has(key) || pendingToggles.has(key) || pendingClears.has(key) || reorderedIds.has(identifier)) {
+            if (sessionEdits.has(key) || pendingToggles.has(key) || pendingClears.has(key)
+                || pendingMembership.has(identifier) || reorderedIds.has(identifier)) {
                 entry.addClass('dirty');
             }
         });
@@ -410,6 +489,7 @@ export async function openProfileEditorPopup(
             if (match) visible++;
         });
         dialog.find('#pc-prompt-empty-search').toggle(visible === 0 && q.length > 0);
+        if (q) dialog.find('.pc-unused-section').prop('open', true);
     }
 
     function renderStagedPane(ctx?: EditorCtx): void {
@@ -423,6 +503,24 @@ export async function openProfileEditorPopup(
         diffArea.append($('<h3 class="pc-diff-title"></h3>').text(L('Staged Changes')));
         const list = $('<ul class="pc-diff-list"></ul>');
         for (const item of items) {
+            if (item.order) {
+                const undo = $('<button class="pc-btn-undo"></button>')
+                    .append($('<i class="fa-solid fa-rotate-left"></i>'))
+                    .append(' ' + L('Undo'))
+                    .on('click', () => {
+                        stagedOrder = [...initialMountedOrder];
+                        reorderedIds.clear();
+                        void renderDialog();
+                    });
+                list.append($('<li class="pc-diff-item diff-reorder"></li>')
+                    .append($('<span class="pc-diff-desc"></span>').text(L('Order adjusted')))
+                    .append(undo));
+            }
+            if (item.membership) {
+                list.append($('<li class="pc-diff-item diff-membership"></li>')
+                    .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${L('Usage status')} ${item.membership.original ? L('Active') : L('Unused')} → ${item.membership.target ? L('Active') : L('Unused')}`))
+                    .append(buildUndoBtn(item.key, item.identifier)));
+            }
             if (item.toggle) {
                 list.append($('<li class="pc-diff-item diff-toggle"></li>')
                     .append($('<span class="pc-diff-desc"></span>').text(`${L('Switch')}: ${item.toggle.original ? L('On') : L('Off')} → ${item.toggle.target ? L('On') : L('Off')}`))
@@ -451,12 +549,13 @@ export async function openProfileEditorPopup(
             // toggle/值编辑项仍按原语义整体撤销
             if (onlyClear) {
                 pendingClears.delete(key);
+                refreshEntryRow(identifier);
+                refreshCounts();
+                renderRightPane();
             } else {
                 undoStaged(key, identifier);
+                void renderDialog();
             }
-            refreshEntryRow(identifier);
-            refreshCounts();
-            renderRightPane();
         });
         return undo;
     }
@@ -497,6 +596,10 @@ export async function openProfileEditorPopup(
         const header = $('<div class="pc-editor-header"></div>');
         header.append($('<h3></h3>').text(prompt.name ?? identifier));
         const actions = $('<div class="pc-editor-actions"></div>');
+        const mounted = currentCtx()?.entries.find((entry) => entry.identifier === identifier)?.mounted ?? false;
+        const membershipBtn = $('<button class="pc-btn-icon pc-btn-membership" title="' + (mounted ? L('Move to unused') : L('Activate prompt')) + '"></button>')
+            .attr('data-identifier', identifier)
+            .append($(`<i class="fa-solid ${mounted ? 'fa-link-slash' : 'fa-plus'}"></i>`));
 
         const prevSession = sessionEdits.get(bufferKey(name, identifier));
         const current = prevSession ? { ...capturePromptFields(prompt), ...prevSession.edited } : undefined;
@@ -536,7 +639,7 @@ export async function openProfileEditorPopup(
             renderRightPane();
         });
 
-        actions.append(saveBtn).append(cancelBtn);
+        actions.append(membershipBtn).append(saveBtn).append(cancelBtn);
         header.append(actions);
         wrap.append(header);
         wrap.append(form.container);
@@ -577,13 +680,39 @@ export async function openProfileEditorPopup(
         }
 
         row.toggleClass('disabled', !enabled);
-        row.toggleClass('dirty', sessionEdits.has(key) || pendingToggles.has(key) || pendingClears.has(key) || reorderedIds.has(identifier));
+        row.toggleClass('dirty', sessionEdits.has(key) || pendingToggles.has(key) || pendingClears.has(key)
+            || pendingMembership.has(identifier) || reorderedIds.has(identifier));
         row.toggleClass('persistent', !!view?.hasPersistentDiff);
     }
 
-    // Undo 某条缓冲：撤销 toggle 目标 + 还原值编辑（镜像 clear 的 full undo）
+    function recomputeReorderedIds(): void {
+        reorderedIds.clear();
+        const initialIndex = new Map(initialMountedOrder.map((entry, index) => [entry, index]));
+        stagedOrder.forEach((identifier, index) => {
+            if (initialIndex.get(identifier) !== index) reorderedIds.add(identifier);
+        });
+    }
+
+    // Undo 某条缓冲：只恢复该条 membership，其余 staged order 与拖拽改动保持不变。
     function undoStaged(key: string, identifier: string): void {
         pendingToggles.delete(key);
+        pendingMembership.delete(identifier);
+        pendingLastActiveIndex.delete(identifier);
+
+        const baseline = baselineStates.find((entry) => entry.identifier === identifier);
+        if (baseline) {
+            stagedOrder = stagedOrder.filter((id) => id !== identifier);
+            if (baseline.mounted) {
+                const historicalIndex = baseline.lastActiveIndex
+                    ?? initialMountedOrder.indexOf(identifier);
+                const insertIndex = historicalIndex >= 0
+                    ? Math.min(historicalIndex, stagedOrder.length)
+                    : stagedOrder.length;
+                stagedOrder.splice(insertIndex, 0, identifier);
+            }
+        }
+        recomputeReorderedIds();
+
         const session = sessionEdits.get(key);
         if (session) {
             sessionEdits.delete(key);
@@ -606,17 +735,13 @@ export async function openProfileEditorPopup(
                 }
             }
         }
-        refreshEntryRow(identifier);
-        refreshCounts();
-        renderRightPane();
     }
 
-    // 拖拽排序：仅活动预设可拖；拖拽后立即落盘（不进 diff）
+    // 拖拽排序只更新 staged active order；搜索中禁用。
     function setupSortable(): void {
-        const listEl = dialog.find('.pc-prompt-list');
+        const listEl = dialog.find('.pc-active-prompt-list');
         if (!listEl.length) return;
-        const isActive = oai_settings.preset_settings_openai === name;
-        const shouldSortable = isActive && !searchQuery;
+        const shouldSortable = !searchQuery && oai_settings.preset_settings_openai === name;
         const isSortable = !!listEl.data('ui-sortable');
         // 幂等切换：避免每次按键 destroy/重建（搜索中本就禁用拖拽）
         if (isSortable && !shouldSortable) listEl.sortable('destroy');
@@ -628,44 +753,32 @@ export async function openProfileEditorPopup(
                 placeholder: 'pc-sortable-placeholder',
                 start: () => listEl.addClass('sorting'),
                 stop: () => listEl.removeClass('sorting'),
-                update: () => { void onReorder(listEl); },
+                update: () => { onReorder(listEl); },
             });
         }
     }
 
-    async function onReorder(listEl: JQuery<HTMLElement>): Promise<void> {
-        const preset = openai_settings[idx] as Preset;
-        const orderList = findOrderList(preset, resolvePromptOrderTarget());
-        if (!orderList || !Array.isArray(orderList.order)) return;
-
+    function onReorder(listEl: JQuery<HTMLElement>): void {
         const domIds = listEl.find('.pc-prompt-card').map(function () {
             return String($(this).data('identifier'));
         }).get();
-        const order = orderList.order as { identifier: string }[];
-        const inDom = new Set(domIds);
-        // R9：O(n) 建索引，避免 domIds.map(id => order.find(...)) 的 O(n²)
-        const byId = new Map(order.map((o) => [o.identifier, o]));
-        const newOrder = [
-            ...domIds.map((id) => byId.get(id)).filter((o): o is { identifier: string } => !!o),
-            ...order.filter((o) => !inDom.has(o.identifier)),
-        ];
-        if (newOrder.length === order.length && newOrder.every((o, i) => o.identifier === order[i].identifier)) return;
-
-        // 相对弹窗打开时的原始顺序重算脏标记：位置变化的标脏，改回原位的清除
-        const newIndex = new Map(newOrder.map((o, i) => [o.identifier, i]));
-        for (const o of newOrder) {
-            const dirtyNow = initialOrderIndex.get(o.identifier) !== newIndex.get(o.identifier);
-            const wasDirty = reorderedIds.has(o.identifier);
-            if (dirtyNow !== wasDirty) {
-                if (dirtyNow) reorderedIds.add(o.identifier);
-                else reorderedIds.delete(o.identifier);
-                refreshEntryRow(o.identifier);
-            }
-        }
-
-        orderList.order = newOrder;
-        await saveMeta(name, idx, readMeta(preset));
-        deps.refreshActivePresetUI(name);
+        stagedOrder = domIds;
+        reorderedIds.clear();
+        const initialIndex = new Map(initialMountedOrder.map((identifier, index) => [identifier, index]));
+        stagedOrder.forEach((identifier, index) => {
+            if (initialIndex.get(identifier) !== index) reorderedIds.add(identifier);
+        });
+        listEl.find('.pc-prompt-card').each(function (index) {
+            const identifier = String($(this).data('identifier'));
+            $(this).find('.pc-card-index span').text(String(index + 1).padStart(2, '0'));
+            $(this).toggleClass('dirty', reorderedIds.has(identifier)
+                || sessionEdits.has(bufferKey(name, identifier))
+                || pendingToggles.has(bufferKey(name, identifier))
+                || pendingClears.has(bufferKey(name, identifier))
+                || pendingMembership.has(identifier));
+        });
+        refreshCounts();
+        renderRightPane();
     }
 
     function refreshCounts(ctx?: EditorCtx): void {
@@ -680,7 +793,39 @@ export async function openProfileEditorPopup(
     const clearBuffers = (): void => {
         clearBufferedForName(name, sessionEdits, pendingToggles);
         pendingClears.clear();
+        pendingMembership.clear();
+        pendingLastActiveIndex.clear();
     };
+
+    async function toggleMembership(identifier: string): Promise<void> {
+        const ctx = currentCtx();
+        const view = ctx?.entries.find((entry) => entry.identifier === identifier);
+        const baseline = baselineStates.find((entry) => entry.identifier === identifier);
+        if (!view || !baseline || !view.editable) return;
+        const target = !view.mounted;
+        const capturedHistoricalIndex = pendingLastActiveIndex.get(identifier);
+        if (target === baseline.mounted) pendingMembership.delete(identifier);
+        else pendingMembership.set(identifier, target);
+
+        if (!target) {
+            const currentIndex = stagedOrder.indexOf(identifier);
+            if (target !== baseline.mounted && currentIndex >= 0) pendingLastActiveIndex.set(identifier, currentIndex);
+            else pendingLastActiveIndex.delete(identifier);
+        } else {
+            pendingLastActiveIndex.delete(identifier);
+        }
+        stagedOrder = stagedOrder.filter((id) => id !== identifier);
+        if (target) {
+            const historicalIndex = capturedHistoricalIndex ?? baseline.lastActiveIndex;
+            if (historicalIndex !== undefined && historicalIndex >= 0 && historicalIndex <= stagedOrder.length) {
+                stagedOrder.splice(historicalIndex, 0, identifier);
+            } else {
+                stagedOrder.push(identifier);
+                if (baseline.lastActiveIndex === undefined) pendingToggles.set(bufferKey(name, identifier), false);
+            }
+        }
+        await renderDialog();
+    }
 
     // ---- 事件（delegated，重渲染 innerHTML 后仍然有效） ----
     dialog.on('click', '.pc-prompt-card', function (e) {
@@ -692,6 +837,12 @@ export async function openProfileEditorPopup(
         editTargetId = identifier;
         mobileShowRight = true;
         renderRightPane();
+    });
+
+    dialog.on('click', '.pc-btn-membership', function (e) {
+        e.stopPropagation();
+        const identifier = String($(this).attr('data-identifier') ?? $(this).closest('.pc-prompt-card').data('identifier'));
+        void toggleMembership(identifier);
     });
 
     dialog.on('click', '.pc-btn-toggle', function (e) {
@@ -707,8 +858,7 @@ export async function openProfileEditorPopup(
         const ctx = currentCtx();
         let resolvedEnabled: boolean | undefined;
         if (ctx) {
-            const resolved = resolveProfilePrompts(ctx.profile, ctx.meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
-            resolvedEnabled = resolved.find((x) => x.identifier === identifier)?.enabled;
+            resolvedEnabled = baselineStates.find((entry) => entry.identifier === identifier)?.enabled;
         }
         if (resolvedEnabled === target) {
             pendingToggles.delete(key);
@@ -817,6 +967,27 @@ export async function openProfileEditorPopup(
         renderRightPane();
     });
 
+    function buildCommitSnapshot(ctx: EditorCtx): PromptProfileEntry[] {
+        const snapshot = ctx.states.map((entry) => ({ ...entry, fields: entry.fields ? { ...entry.fields } : undefined }));
+        const parentStates = isPromptDeltaProfile(ctx.profile)
+            ? resolveParentStates(ctx.profile, ctx.meta.profiles.filter(
+                (candidate): candidate is PromptBaseProfile | PromptDeltaProfile => isPromptBaseProfile(candidate) || isPromptDeltaProfile(candidate),
+            ))
+            : [];
+        const parentById = new Map(parentStates.map((entry) => [entry.identifier, entry]));
+        for (const entry of snapshot) {
+            const key = bufferKey(name, entry.identifier);
+            const session = sessionEdits.get(key);
+            if (session) entry.fields = filterFields(session.edited);
+            if (pendingClears.has(key) && !session) {
+                const parent = parentById.get(entry.identifier);
+                if (parent?.fields) entry.fields = { ...parent.fields };
+                else delete entry.fields;
+            }
+        }
+        return snapshot;
+    }
+
     dialog.on('click', '#pc-btn-commit', async function () {
         const ctx = currentCtx();
         if (!ctx) return;
@@ -837,7 +1008,10 @@ export async function openProfileEditorPopup(
         }
 
         const preset = openai_settings[idx] as Preset;
-        const snapshot = applyBufferedAndSnapshot(preset, name, sessionEdits, pendingToggles, pendingClears);
+        const snapshot = buildCommitSnapshot(ctx);
+        const missing = applyBufferedEdits(preset, name, sessionEdits, pendingToggles);
+        if (missing.length > 0) toastr.warning(`${L('Missing prompts skipped')}: ${missing.join(', ')}`);
+        applyResolvedPromptState(preset, snapshot);
 
         if (choice === 'update') {
             // R1/F1：先删旧快照 fields 再提交——mergeBaseSnapshot 的 prior-copy 会把被清字段复活并随 saveMeta 落盘；
@@ -847,11 +1021,13 @@ export async function openProfileEditorPopup(
             if (!ok) return;
         } else {
             const profiles = Array.isArray(ctx.meta.profiles) ? ctx.meta.profiles : [];
-            const parentEntries = resolveProfilePrompts(ctx.profile, ctx.meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
+            const parentEntries = baselineStates;
             // previousChanges 传空：新建 delta 只存「相对父链解析状态」的净差异（本次快照 + 本次编辑），
             // 不冗余拷贝源 profile 已持久化的字段差异（否则数据膨胀/导出树冗余）。
-            const changes = snapshotToChanges(snapshot, parentEntries, []);
-            profiles.push(buildDerivedProfile(ctx.profile, deltaName as string, changes));
+            const deltaState = snapshotToDelta(snapshot, parentEntries);
+            const derived = buildDerivedProfile(ctx.profile, deltaName as string, deltaState.changes);
+            if (deltaState.order) derived.order = deltaState.order;
+            profiles.push(derived);
             ctx.meta.profiles = profiles;
             recordDefaultOriginalFields(ctx.meta, name, sessionEdits);
             await saveMeta(name, idx, ctx.meta);
@@ -863,6 +1039,7 @@ export async function openProfileEditorPopup(
         // 本批编辑已消费，清空当前 name 的记录（其他卡的缓冲保留）
         clearBuffers();
         reorderedIds.clear();
+        reloadBaseline();
         editTargetId = null;
         mobileShowRight = false;
 

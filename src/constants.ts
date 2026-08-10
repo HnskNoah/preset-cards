@@ -136,6 +136,16 @@ export const LOCAL_DICT: Record<string, string> = {
     'Back to list': '返回列表',
     'Save': '保存',
     'No prompts found': '未找到匹配的 prompt',
+    'Unused Prompts': '未使用 Prompts',
+    'Not used for generation': '未参与生成',
+    'Activate prompt': '激活 prompt',
+    'Move to unused': '移到未使用',
+    'Usage status': '使用状态',
+    'Active': '活动',
+    'Unused': '未使用',
+    'Order adjusted': '顺序已调整',
+    'Legacy profiles are not included in the tree export': '旧版 v1/v2 配置不会包含在关系链导出中',
+    'Legacy profiles must be rebuilt manually': '仅支持导入 v3 配置；旧版 v1/v2 配置需要手动重建',
 };
 
 export interface ModelDef {

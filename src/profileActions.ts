@@ -11,7 +11,7 @@ export function buildDerivedProfile(
     name: string,
     changes: PromptDeltaChange[] = [],
 ): PromptDeltaProfile {
-    return { formatVersion: 2, kind: 'prompt_delta', id: newProfileId(), name, baseId: parent.id, changes };
+    return { formatVersion: 3, kind: 'prompt_delta', id: newProfileId(), name, baseId: parent.id, changes };
 }
 
 // 递归收集所有派生后代（含多层 delta 链）：id → 其后代 id 列表。

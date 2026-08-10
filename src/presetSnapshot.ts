@@ -1,7 +1,7 @@
 // defaultSnapshot（隐藏默认基准）的生成、合并与应用。
 // 纯数据操作 + ST openai 全局；不接触 dialog/DOM。
 
-import type { Preset, PresetMeta, PromptBaseProfile, PromptFields } from './meta.js';
+import type { Preset, PresetMeta, PromptBaseProfile, PromptProfileEntry } from './meta.js';
 import { readMeta, saveMeta } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
@@ -13,7 +13,7 @@ import { buildDefaultSnapshotLock, findPromptInPreset, filterFields, promptField
 // 提供 reset 的可靠出厂基线，也让 add base 能按「与基线的差异」存储（见 buildBaseSnapshotDiff）。
 export async function lockDefaultSnapshot(preset: Preset, name: string, idx: number): Promise<void> {
     const meta = readMeta(preset);
-    if (meta.defaultSnapshotLocked) return;
+    if (meta.defaultSnapshotLocked && meta.defaultSnapshot?.every((entry) => typeof entry.mounted === 'boolean')) return;
     meta.defaultSnapshot = buildDefaultSnapshotLock(preset);
     meta.defaultSnapshotLocked = true;
     await saveMeta(name, idx, meta);
@@ -22,12 +22,14 @@ export async function lockDefaultSnapshot(preset: Preset, name: string, idx: num
 // 把当前开关/值快照合并进主 profile（「保存→更新」与「覆盖」共用）：
 // enabled 回写当前目标 order 中的条目；fields 仅对本次会话编辑过且有净变化的条目写回，其余条目保留既有 fields，
 // 避免重建快照时丢失此前已保存的值编辑。
-export function mergeBaseSnapshot(profile: PromptBaseProfile, snapshot: { identifier: string; enabled: boolean; fields?: PromptFields }[], name: string, sessionEdits: Map<string, PromptEditBuffer>): void {
+export function mergeBaseSnapshot(profile: PromptBaseProfile, snapshot: PromptProfileEntry[], name: string, sessionEdits: Map<string, PromptEditBuffer>): void {
     const previousPrompts = profile.prompts;
     profile.prompts = snapshot.map((s) => {
-        const entry: { identifier: string; enabled: boolean; fields?: PromptFields } = {
+        const entry: PromptProfileEntry = {
             identifier: s.identifier,
+            mounted: s.mounted,
             enabled: s.enabled,
+            lastActiveIndex: s.lastActiveIndex,
         };
         const session = sessionEdits.get(bufferKey(name, s.identifier));
         if (session && s.fields && !promptFieldsEqual(s.fields, session.initial)) {

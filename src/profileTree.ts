@@ -17,17 +17,18 @@ export interface FlattenedProfileRow {
 
 /**
  * 把平铺的 profiles 组织成派生关系森林。
- * 根 = base/v1 节点 + baseId 无对应 base/delta 父的孤立 delta；同层保持原数组相对顺序。
+ * 仅组织 v3 节点。根 = base + baseId 无对应 v3 父的孤立 delta；同层保持原数组相对顺序。
  */
 export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[] {
+    const supported = profiles.filter((profile) => isPromptBaseProfile(profile) || isPromptDeltaProfile(profile));
     const childrenByParent = new Map<string, ProfileTreeNode[]>();
     const nodeById = new Map<string, ProfileTreeNode>();
 
-    for (const p of profiles) {
+    for (const p of supported) {
         nodeById.set(String(p.id), { profile: p, children: [] });
     }
 
-    for (const p of profiles) {
+    for (const p of supported) {
         if (isPromptDeltaProfile(p)) {
             const parent = nodeById.get(String(p.baseId));
             if (parent && (isPromptBaseProfile(parent.profile) || isPromptDeltaProfile(parent.profile))) {
@@ -39,11 +40,11 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
         }
     }
 
-    // 根候选 = base/v1 节点 + baseId 无对应 base/delta 父的孤立 delta。
+    // 根候选 = v3 base + baseId 无对应 v3 父的孤立 delta。
     // 按原数组顺序收集（同层保持原数组相对顺序）；成环簇（互相引用但无根祖先）随后收尾。
     const roots: ProfileTreeNode[] = [];
-    for (const p of profiles) {
-        if (isPromptBaseProfile(p) || !isPromptDeltaProfile(p)) {
+    for (const p of supported) {
+        if (isPromptBaseProfile(p)) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
             continue;
         }
@@ -61,7 +62,7 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
         for (const child of node.children) mark(child);
     };
     for (const root of roots) mark(root);
-    for (const p of profiles) {
+    for (const p of supported) {
         if (!reached.has(String(p.id))) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
             reached.add(String(p.id));

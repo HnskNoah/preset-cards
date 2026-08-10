@@ -15,6 +15,7 @@ export interface ModelChip {
 export interface ProfileEntryView {
     identifier: string;
     name: string;
+    mounted: boolean;
     enabled: boolean;
     /** 该条目的角色（profile 覆盖值优先，否则预设原值，缺省 system），仅展示用。 */
     role?: string;
@@ -103,13 +104,19 @@ export function buildProfileEntries(
         }
     }
 
-    const resolved = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
+    const supportedProfiles = meta.profiles.filter(
+        (candidate): candidate is PromptBaseProfile | PromptDeltaProfile => isPromptBaseProfile(candidate) || isPromptDeltaProfile(candidate),
+    );
+    const resolved = resolveProfilePrompts(profile, supportedProfiles, new Set());
+    let activeIndex = 0;
     return resolved.map((e) => {
         const prompt = promptLookup.get(e.identifier);
         const hasFields = !!e.fields && Object.keys(e.fields).length > 0;
-        const orderIdx = orderCtx.orderIndex.get(e.identifier);
+        const orderable = e.mounted && orderCtx.orderIndex.has(e.identifier);
+        const orderIdx = orderable ? activeIndex++ : undefined;
         return {
             identifier: e.identifier,
+            mounted: e.mounted,
             name: e.fields?.name ?? promptNames.get(e.identifier) ?? e.identifier,
             role: e.fields?.role ?? prompt?.role ?? 'system',
             index: orderIdx !== undefined ? String(orderIdx + 1).padStart(2, '0') : undefined,
@@ -122,7 +129,9 @@ export function buildProfileEntries(
             // 故「子 delta 有继承值差异 → 有铅笔（hasFields）无琥珀（hasPersistentDiff）」为预期行为。
             hasPersistentDiff: isPromptDeltaProfile(profile)
                 ? profile.changes.some((c) => c.identifier === e.identifier
-                    && (c.enabled !== undefined || (c.fields && Object.keys(c.fields).length > 0)))
+                    && (c.mounted !== undefined || c.enabled !== undefined || c.lastActiveIndex !== undefined
+                        || (c.fields && Object.keys(c.fields).length > 0)))
+                    || (profile.order !== undefined && e.mounted)
                 : hasFields,
             // base 的 fields 即自身值变更；delta 需自身 changes 里有 fields（父链继承的不可由本 profile 清除）
             clearable: isPromptDeltaProfile(profile)
@@ -131,7 +140,7 @@ export function buildProfileEntries(
             // system_prompt / marker 条目不渲染编辑入口；预设中缺失的条目也无法编辑
             editable: !!prompt && !prompt.system_prompt && !prompt.marker,
             // 顺序编辑仅对活动预设开放（重排非活动预设的 prompt_order 无意义）
-            orderable: orderIdx !== undefined,
+            orderable,
         };
     });
 }
@@ -171,9 +180,12 @@ export function buildPresetList(): PresetCardModel[] {
         // Decorate each profile row with a type indicator so cards.html can render
         // [Base] / [Delta] badges, the derive button, and expandable entry list.
         // 派生关系按树序展平：delta 跟随其父链显示，缩进层级由 depth 表达。
-        type ProfileRow = PresetProfile & { isBase: boolean; isDelta: boolean; isV1: boolean; parentName: string; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
+        type ProfileRow = (PromptBaseProfile | PromptDeltaProfile) & { isBase: boolean; isDelta: boolean; isV1: false; parentName: string; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
         const forest = buildProfileForest(Array.isArray(meta.profiles) ? meta.profiles : []);
-        const profiles: PresetProfile[] = flattenProfileForest(forest).map(({ profile: p, depth }) => {
+        const profiles: (PromptBaseProfile | PromptDeltaProfile)[] = flattenProfileForest(forest)
+            .filter(({ profile }) => isPromptBaseProfile(profile) || isPromptDeltaProfile(profile))
+            .map(({ profile: rawProfile, depth }) => {
+            const p = rawProfile as PromptBaseProfile | PromptDeltaProfile;
             let entries: ProfileEntryView[] = [];
             let parentName = '';
             if (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) {
@@ -189,7 +201,7 @@ export function buildPresetList(): PresetCardModel[] {
                 ...p,
                 isBase: isPromptBaseProfile(p),
                 isDelta: isPromptDeltaProfile(p),
-                isV1: !isPromptBaseProfile(p) && !isPromptDeltaProfile(p),
+                isV1: false,
                 parentName,
                 depth,
                 entries,

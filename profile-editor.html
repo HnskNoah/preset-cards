@@ -26,7 +26,27 @@
                 <input type="text" id="pc-search-input" class="pc-form-control" placeholder="{{i18n.searchPrompts}}" style="width: 100%; box-sizing: border-box;" />
             </div>
             <div class="pc-prompt-list" id="pc-prompt-list">
-                {{#each entries}}
+                <details class="pc-unused-section">
+                    <summary>{{i18n.unusedPrompts}} ({{unusedEntries.length}})</summary>
+                    <div class="pc-unused-prompt-list">
+                    {{#each unusedEntries}}
+                    <div class="pc-prompt-card unused {{#if this.hasPersistentDiff}}persistent{{/if}}" data-identifier="{{this.identifier}}">
+                        <div class="pc-card-title">
+                            <span class="pc-card-name" title="{{this.name}}">{{this.name}}</span>
+                            <span class="pc-unused-status">{{../i18n.unusedStatus}}</span>
+                        </div>
+                        {{#if this.clearable}}
+                        <button class="pc-card-clear" title="{{../i18n.clearValueChange}}"><i class="fa-solid fa-eraser"></i></button>
+                        {{/if}}
+                        {{#if this.editable}}
+                        <button class="pc-btn-membership" title="{{../i18n.activatePrompt}}"><i class="fa-solid fa-plus"></i></button>
+                        {{/if}}
+                    </div>
+                    {{/each}}
+                    </div>
+                </details>
+                <div class="pc-active-prompt-list" id="pc-active-prompt-list">
+                {{#each activeEntries}}
                 <div class="pc-prompt-card {{#if this.hasPersistentDiff}}persistent{{/if}} {{#unless this.enabled}}disabled{{/unless}}" data-identifier="{{this.identifier}}">
                     {{#if this.orderable}}
                     <div class="pc-card-index pc-drag-handle" title="{{../i18n.dragHandle}}">
@@ -44,13 +64,17 @@
                     </button>
                     {{/if}}
                     {{#if this.editable}}
+                    <button class="pc-btn-membership" title="{{../i18n.deactivatePrompt}}"><i class="fa-solid fa-link-slash"></i></button>
+                    {{/if}}
+                    {{#if this.editable}}
                     <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../i18n.toggleEntry}}">
                         {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i> On{{else}}<i class="fa-solid fa-toggle-off"></i> Off{{/if}}
                     </button>
                     {{/if}}
                 </div>
                 {{/each}}
-                {{#unless entries.length}}
+                </div>
+                {{#unless activeEntries.length}}
                 <div class="pc-prompt-empty">{{i18n.noEntries}}</div>
                 {{/unless}}
                 <div id="pc-prompt-empty-search" class="pc-prompt-empty" style="display:none;">{{i18n.noSearchResults}}</div>
