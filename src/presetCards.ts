@@ -95,6 +95,8 @@ export async function openPresetCards(): Promise<void> {
         if (opts?.applyBackgrounds !== false) applyCachedBackgrounds(dialog);
         if (query) dialog.find('#preset_cards_search').val(query);
         if (isConciseMode) dialog.find('#preset_cards_concise_btn').addClass('active');
+        // 默认折叠：自动展开当前激活 profile 的祖先链，保证其可见
+        dialog.find('.preset_card_profile_row.active').parents('.preset_card_profile_group').addClass('expanded');
         dialog.find('#preset_cards_search').trigger('input');
     }
 
@@ -600,6 +602,12 @@ export async function openPresetCards(): Promise<void> {
         download(buildTreeExportData(meta), `${name}-tree.json`, 'application/json');
     });
 
+    // ---- Profiles: 分组折叠切换（点击箭头展开/收起子级 delta） ----
+    dialog.on('click', '.preset_card_profile_toggle', function (e) {
+        e.stopPropagation();
+        $(this).closest('.preset_card_profile_group').toggleClass('expanded');
+    });
+
     // ---- Profiles: Load Configuration (click = apply only; edit via pencil button) ----
     dialog.on('click', '.preset_card_profile_name', async function (e) {
         e.stopPropagation();
@@ -660,8 +668,9 @@ export async function openPresetCards(): Promise<void> {
         await saveMeta(name, idx, meta);
         toastr.success(L('Derived profile created'));
 
-        // Refresh UI
+        // 新 delta 默认折叠不可见：展开父 profile 的祖先链，保证新节点可见
         await refreshGrid();
+        dialog.find(`.preset_card_profile_row[data-profile-id="${String(parent.id)}"]`).parents('.preset_card_profile_group').addClass('expanded');
     });
 
     // ---- Profiles: Reset to parent (delta -> base; base -> hidden default) ----
@@ -852,7 +861,9 @@ export async function openPresetCards(): Promise<void> {
                 await saveMeta(name, idx, meta);
                 toastr.success(L('Configuration saved'));
 
+                // 导入的整棵子树默认折叠不可见：展开该卡全部 profile 组，让导入树可见
                 await refreshGrid({ applyBackgrounds: true });
+                dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');
             } catch (err) {
                 console.error(err);
                 toastr.error(L('Failed to parse configuration file'));
@@ -900,6 +911,8 @@ export async function openPresetCards(): Promise<void> {
 
     updateCount(presets.length, presets.length);
     applyCachedBackgrounds(dialog);
+    // 默认折叠：自动展开当前激活 profile 的祖先链，保证其可见
+    dialog.find('.preset_card_profile_row.active').parents('.preset_card_profile_group').addClass('expanded');
 
     callGenericPopup(dialog, POPUP_TYPE.TEXT, '', {
         wide: true,

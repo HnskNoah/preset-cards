@@ -4,7 +4,7 @@ import { isPromptBaseProfile, isPromptDeltaProfile, readMeta, type Preset, type 
 import { findOrderList, resolveProfilePrompts, resolvePromptOrderTarget } from './promptToggle.js';
 import { getActiveProfile } from './activeProfile.js';
 import { L } from './i18n.js';
-import { buildProfileForest, flattenProfileForest } from './profileTree.js';
+import { buildProfileForest, buildProfileNested, type NestedProfileNode } from './profileTree.js';
 
 export interface ModelChip {
     label: string;
@@ -52,7 +52,22 @@ export interface PresetCardModel {
     description: string;
     bgImage: string;
     modelChips: ModelChip[];
-    profiles: PresetProfile[];
+    profiles: ProfileNode[];
+}
+
+/** 单条 profile 的卡片行视图模型（含递归 children，供分组折叠渲染）。 */
+export interface ProfileRow {
+    id: string;
+    name: string;
+    isV1: boolean;
+    depth: number;
+    entries: ProfileEntryView[];
+    isActiveProfile: boolean;
+    childCount: number;
+}
+
+export interface ProfileNode extends ProfileRow {
+    children: ProfileNode[];
 }
 
 function truncate(str: string, max: number): string {
@@ -187,26 +202,28 @@ export function buildPresetList(): PresetCardModel[] {
         // Read custom metadata
         const meta = readMeta(preset);
 
-        // Decorate each profile row with a type indicator so cards.html can render
-        // [Base] / [Delta] badges, the derive button, and expandable entry list.
-        // 派生关系按树序展平：delta 跟随其父链显示，缩进层级由 depth 表达。
-        type ProfileRow = PresetProfile & { isV1: boolean; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
-        const forest = buildProfileForest(Array.isArray(meta.profiles) ? meta.profiles : []);
-        const profiles: PresetProfile[] = flattenProfileForest(forest).map(({ profile: p, depth }) => {
+        // Decorate each profile node: base/delta 徽章、derive 按钮、可展开条目列表。
+        // 派生关系按嵌套树组织（base/delta 每级独立折叠），depth 表达层级。
+        const decorate = (node: NestedProfileNode): ProfileNode => {
+            const p = node.profile;
             let entries: ProfileEntryView[] = [];
             if (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) {
                 // 展示 = 递归解析 parent 链的完整开关 + 值字段（base 与 delta 统一走 buildProfileEntries）
                 entries = buildProfileEntries(p, meta, preset, orderCtx);
             }
             const row: ProfileRow = {
-                ...p,
+                id: String(p.id),
+                name: p.name,
                 isV1: !isPromptBaseProfile(p) && !isPromptDeltaProfile(p),
-                depth,
+                depth: node.depth,
                 entries,
                 isActiveProfile: !!activeRef && activeRef.presetName === name && activeRef.profileId === String(p.id),
+                childCount: node.children.length,
             };
-            return row;
-        });
+            return { ...row, children: node.children.map(decorate) };
+        };
+        const forest = buildProfileForest(Array.isArray(meta.profiles) ? meta.profiles : []);
+        const profiles: ProfileNode[] = buildProfileNested(forest).map(decorate);
 
         // Build model chips from metadata
         const modelChips = meta.models.map(mid => {

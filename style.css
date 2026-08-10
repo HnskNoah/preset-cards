@@ -775,12 +775,56 @@
     gap: 4px;
 }
 
+/* 分组折叠：每组 = 一行 + 可折叠子级容器。默认折叠（children 隐藏），点 toggle 展开。 */
+.preset_card_profile_group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.preset_card_profile_children {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    margin-left: 14px;
+    border-left: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
+    padding-left: 6px;
+}
+
+.preset_card_profile_group.expanded > .preset_card_profile_children {
+    display: flex;
+}
+
+.preset_card_profile_toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.6;
+    transition: transform 0.2s ease, opacity 0.2s;
+    border-radius: 4px;
+    margin-right: 2px;
+}
+
+.preset_card_profile_toggle:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.preset_card_profile_group.expanded > .preset_card_profile_row .preset_card_profile_toggle i {
+    transform: rotate(90deg);
+}
+
 .preset_card_profile_row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 6px 10px;
-    padding-left: calc(14px + var(--pc-depth, 0) * 8px);
     background: transparent;
     border-radius: 6px;
     font-size: 12px;
@@ -802,27 +846,7 @@
         0 2px 8px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
 }
 
-/* 派生关系树：左侧文件树式连接线（模板仅 depth>0 的 delta 行渲染该元素）。
-   垂直主干贯穿行高并对齐父列，水平短线从主干连向行内容；用背景渐变画线避免 border 圆角怪像。 */
-.preset_card_profile_tree_line {
-    position: absolute;
-    left: calc(4px + (var(--pc-depth, 0) - 1) * 8px);
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    pointer-events: none;
-    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-}
-
-.preset_card_profile_tree_line::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 0;
-    width: 18px;
-    height: 1px;
-    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-}
+/* 派生关系：分组折叠（base/delta 每级独立折叠）。旧树线样式已废弃删除。 */
 
 .preset_card_profile_name_wrap {
     display: flex;
