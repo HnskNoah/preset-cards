@@ -4,6 +4,7 @@
             <div class="pc-header">
                 <div class="pc-header-preset-row">
                     <span class="pc-header-preset-name" title="{{presetName}}">{{presetName}}</span>
+                    <button id="pc-btn-close" class="pc-top-action-btn" title="{{i18n.close}}"><i class="fa-solid fa-times"></i></button>
                 </div>
                 <div class="pc-header-breadcrumb-row">
                     <div class="pc-header-breadcrumb" title="{{breadcrumbTitle}}">
@@ -19,7 +20,6 @@
                         <button id="pc-btn-reset" class="pc-top-action-btn pc-btn-reset" title="{{i18n.reset}}"><i class="fa-solid fa-rotate-left"></i> {{i18n.reset}}</button>
                         <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{i18n.commit}}</button>
                     </div>
-                    <button id="pc-btn-close" class="pc-top-action-btn" title="{{i18n.close}}"><i class="fa-solid fa-times"></i></button>
                 </div>
             </div>
             <div class="pc-search-bar">

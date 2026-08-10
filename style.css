@@ -1546,10 +1546,10 @@
     border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
 }
 
-/* 头部三段式：第一行 preset 名 / 第二行面包屑+改名 / 第三行暂存提交+关闭 */
+/* 头部三段式：第一行 preset 名（居右退出按钮）/ 第二行面包屑+改名 / 第三行暂存提交重置 */
 .pc-header-preset-row {
     display: flex;
-    justify-content: center;
+    justify-content: space-between;
     align-items: center;
     min-width: 0;
 }
@@ -1560,7 +1560,9 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100%;
+    flex: 1;
+    min-width: 0;
+    text-align: center;
 }
 
 .pc-header-breadcrumb-row {
