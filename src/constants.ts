@@ -86,9 +86,6 @@ export const LOCAL_DICT: Record<string, string> = {
     'This profile type cannot be reset': '此类型配置无法重置',
     'This profile type cannot be edited with switches': '此类型配置无法用开关编辑',
     'Cannot derive from a legacy profile': '无法从旧版配置派生',
-    'Base': '主',
-    'Delta': '派生',
-    'Derived': '派生',
     'No entries': '无条目',
     'Toggle entry': '切换条目开关',
     'Save changes': '保存修改',
@@ -133,7 +130,6 @@ export const LOCAL_DICT: Record<string, string> = {
     'You have uncommitted changes': '您还有未提交的更改',
     'You have uncommitted changes. Discard them?': '您还有未提交的更改，要丢弃吗？',
     'Uncommitted changes discarded': '未提交的更改已丢弃',
-    'Back to list': '返回列表',
     'Save': '保存',
     'No prompts found': '未找到匹配的 prompt',
 };
