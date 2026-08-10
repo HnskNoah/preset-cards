@@ -93,7 +93,8 @@
                     </div>
                     <div class="preset_card_profiles_list">
                         {{#each this.profiles}}
-                        <div class="preset_card_profile_row {{#if this.isActiveProfile}}active{{/if}}" data-profile-id="{{this.id}}">
+                        <div class="preset_card_profile_row {{#if this.isActiveProfile}}active{{/if}}" data-profile-id="{{this.id}}" style="--pc-depth: {{this.depth}};">
+                            {{#if this.depth}}<span class="preset_card_profile_tree_line"></span>{{/if}}
                             <div class="preset_card_profile_name_wrap">
                                 {{#if this.isBase}}<span class="preset_card_profile_badge badge_base">base</span>{{/if}}
                                 {{#if this.isDelta}}{{#if this.parentName}}<span class="preset_card_profile_badge badge_delta" title="{{../../i18n.derivedFrom}}">{{this.parentName}}</span>{{else}}<span class="preset_card_profile_badge badge_delta" title="{{../../i18n.derivedFrom}}">{{../../i18n.derived}}</span>{{/if}}{{/if}}
@@ -103,7 +104,7 @@
                                 <i class="fa-solid fa-code-fork preset_card_profile_derive" title="{{../../i18n.derive}}"></i>
                                 <i class="fa-solid fa-rotate-left preset_card_profile_reset" title="{{../../i18n.resetProfile}}"></i>
                                 <i class="fa-solid fa-file-export preset_card_profile_export" title="{{../../i18n.exportConfig}}"></i>
-                                <i class="fa-solid fa-pencil preset_card_profile_edit" title="{{../../i18n.rename}}"></i>
+                                <i class="fa-solid fa-pencil preset_card_profile_edit" title="{{../../i18n.edit}}"></i>
                                 <i class="fa-solid fa-trash-can preset_card_profile_delete" title="{{../../i18n.delete}}"></i>
                             </div>
                         </div>

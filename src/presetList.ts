@@ -4,6 +4,7 @@ import { isPromptBaseProfile, isPromptDeltaProfile, readMeta, type Preset, type 
 import { findOrderList, resolveProfilePrompts, resolvePromptOrderTarget } from './promptToggle.js';
 import { getActiveProfile } from './activeProfile.js';
 import { L } from './i18n.js';
+import { buildProfileForest, flattenProfileForest } from './profileTree.js';
 
 export interface ModelChip {
     label: string;
@@ -169,8 +170,10 @@ export function buildPresetList(): PresetCardModel[] {
 
         // Decorate each profile row with a type indicator so cards.html can render
         // [Base] / [Delta] badges, the derive button, and expandable entry list.
-        type ProfileRow = PresetProfile & { isBase: boolean; isDelta: boolean; isV1: boolean; parentName: string; entries: ProfileEntryView[]; isActiveProfile: boolean };
-        const profiles: PresetProfile[] = (Array.isArray(meta.profiles) ? meta.profiles : []).map((p) => {
+        // 派生关系按树序展平：delta 跟随其父链显示，缩进层级由 depth 表达。
+        type ProfileRow = PresetProfile & { isBase: boolean; isDelta: boolean; isV1: boolean; parentName: string; depth: number; entries: ProfileEntryView[]; isActiveProfile: boolean };
+        const forest = buildProfileForest(Array.isArray(meta.profiles) ? meta.profiles : []);
+        const profiles: PresetProfile[] = flattenProfileForest(forest).map(({ profile: p, depth }) => {
             let entries: ProfileEntryView[] = [];
             let parentName = '';
             if (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) {
@@ -188,6 +191,7 @@ export function buildPresetList(): PresetCardModel[] {
                 isDelta: isPromptDeltaProfile(p),
                 isV1: !isPromptBaseProfile(p) && !isPromptDeltaProfile(p),
                 parentName,
+                depth,
                 entries,
                 isActiveProfile: !!activeRef && activeRef.presetName === name && activeRef.profileId === String(p.id),
             };
@@ -244,7 +248,6 @@ export function getCardsTemplateContext() {
             exportConfig: L('Export configuration'),
             importConfig: L('Import configuration'),
             exportAll: L('Export all configurations'),
-            rename: L('Rename'),
             edit: L('Edit'),
             delete: L('Delete'),
             derive: L('Derive Profile'),

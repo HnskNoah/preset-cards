@@ -179,6 +179,50 @@ function cssEscape(s: string): string {
     return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+/** 面包屑的一项：节点名 + 是否当前节点（末项）+ 是否截断占位（…）。 */
+export interface BreadcrumbItem {
+    name: string;
+    isCurrent: boolean;
+    /** 截断占位项（…），不渲染独立 title。 */
+    isEllipsis?: boolean;
+}
+
+// 沿 baseId 链向上收集节点名，构建派生链面包屑（root → 当前）。
+// 截断规则：链 ≤3 全显示；3 < 链 ≤5 显示 `… ▸ 父 ▸ 当前`；链 >5 只显示当前。
+// 防环：visited 记录已访问 id，成环数据不致死循环。
+export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile, meta: PresetMeta): { items: BreadcrumbItem[]; title: string } {
+    const chain: { name: string; id: string }[] = [];
+    const visited = new Set<string>();
+    let current: { name: string; id: string } = { name: profile.name, id: String(profile.id) };
+    while (!visited.has(current.id)) {
+        visited.add(current.id);
+        chain.unshift(current);
+        if (chain.length > 50) break; // 硬上限，防御极端损坏数据
+        // 当前节点若是 delta，沿 baseId 向上找父；base/v1 或父缺失/非 base/delta 即到根
+        const node = getProfile(meta, current.id);
+        if (!node || !isPromptDeltaProfile(node)) break;
+        const parent = getProfile(meta, node.baseId);
+        if (!parent || (!isPromptBaseProfile(parent) && !isPromptDeltaProfile(parent))) break;
+        current = { name: parent.name, id: String(parent.id) };
+    }
+
+    const title = chain.map((item) => item.name).join(' ▸ ');
+    let items: BreadcrumbItem[];
+    if (chain.length <= 3) {
+        items = chain.map((item, i) => ({ name: item.name, isCurrent: i === chain.length - 1 }));
+    } else if (chain.length <= 5) {
+        const tail = chain.slice(-2);
+        items = [
+            { name: '…', isCurrent: false, isEllipsis: true },
+            ...tail.map((item, i) => ({ name: item.name, isCurrent: i === tail.length - 1 })),
+        ];
+    } else {
+        const last = chain[chain.length - 1];
+        items = [{ name: last.name, isCurrent: true }];
+    }
+    return { items, title };
+}
+
 export async function openProfileEditorPopup(
     deps: ProfileEditorDeps,
     name: string,
@@ -287,24 +331,17 @@ export async function openProfileEditorPopup(
         const ctx = currentCtx();
         if (!ctx) return;
         const items = stagedItems(ctx);
-        const isDelta = isPromptDeltaProfile(ctx.profile);
-        const parentName = isDelta
-            ? (ctx.meta.profiles.find((p) => p.id === (ctx.profile as PromptDeltaProfile).baseId)?.name ?? '')
-            : '';
+        const { items: breadcrumb, title: breadcrumbTitle } = buildBreadcrumb(ctx.profile, ctx.meta);
 
         const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'profile-editor', {
             presetName: name,
-            profileName: ctx.profile.name,
-            isBase: isPromptBaseProfile(ctx.profile),
-            isDelta,
-            parentName,
+            breadcrumb,
+            breadcrumbTitle,
             entries: ctx.entries,
             stagedCount: items.length,
             canCommit: items.length > 0,
             i18n: {
-                base: L('Base'),
-                delta: L('Delta'),
-                derivedFrom: L('Derived from'),
+                rename: L('Rename'),
                 viewStaged: L('View Staged'),
                 commit: L('Commit'),
                 close: L('Close'),
@@ -731,6 +768,46 @@ export async function openProfileEditorPopup(
         editTargetId = null;
         mobileShowRight = true;
         renderRightPane();
+    });
+
+    // 重命名当前 profile：面包屑末项（当前节点）变行内 input，Enter/blur 提交 → saveMeta + 刷新。
+    dialog.on('click', '#pc-btn-rename', function () {
+        const ctx = currentCtx();
+        if (!ctx) return;
+
+        const currentItem = dialog.find('.pc-breadcrumb-item.pc-breadcrumb-current');
+        if (currentItem.length === 0) return;
+
+        const currentName = ctx.profile.name;
+        const input = $('<input>', {
+            type: 'text',
+            class: 'pc-header-rename-input',
+            value: currentName,
+        });
+        currentItem.replaceWith(input);
+        input.focus();
+
+        let done = false;
+        input.on('blur keydown', async function (evt) {
+            const key = (evt.originalEvent as KeyboardEvent | undefined)?.key ?? '';
+            if (evt.type === 'keydown' && key !== 'Enter' && key !== 'Escape') return;
+            evt.stopPropagation();
+            if (done) return;
+            done = true;
+
+            const newName = key === 'Escape' ? currentName : (input.val() as string).trim() || currentName;
+
+            if (newName !== currentName && key !== 'Escape') {
+                ctx.profile.name = newName;
+                await saveMeta(name, idx, ctx.meta);
+                toastr.success(`${L('Rename')}: ${newName}`);
+                // 刷新标题/面包屑/卡片
+                await renderDialog();
+                await deps.onGridRefresh();
+            } else {
+                await renderDialog();
+            }
+        });
     });
 
     // 手机端「返回列表」

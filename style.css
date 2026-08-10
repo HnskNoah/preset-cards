@@ -717,11 +717,13 @@
     justify-content: space-between;
     align-items: center;
     padding: 6px 10px;
+    padding-left: calc(14px + var(--pc-depth, 0) * 16px);
     background: transparent;
     border-radius: 6px;
     font-size: 12px;
     transition: all 0.2s ease;
     border: 1px solid transparent;
+    position: relative;
 }
 
 .preset_card_profile_row:hover {
@@ -735,6 +737,19 @@
     background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.12);
     box-shadow: 0 0 0 1px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25),
         0 2px 8px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
+}
+
+/* 派生关系树：左侧层级连接线（模板仅 depth>0 的 delta 行渲染该元素） */
+.preset_card_profile_tree_line {
+    position: absolute;
+    left: calc(6px + (var(--pc-depth, 0) - 1) * 16px);
+    top: 0;
+    bottom: 0;
+    width: 24px;
+    pointer-events: none;
+    border-left: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
+    border-bottom: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
+    border-bottom-left-radius: 6px;
 }
 
 .preset_card_profile_name_wrap {
@@ -1121,18 +1136,6 @@
     color: var(--SmartThemeQuoteColor);
 }
 
-.preset_card_profile_edit_input {
-    width: 100%;
-    background: var(--SmartThemeBlurTintColor);
-    border: 1px solid var(--SmartThemeQuoteColor);
-    color: var(--SmartThemeBodyColor);
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 12px;
-    outline: none;
-    font-family: inherit;
-}
-
 /* ---- Mobile / Touch adaptations ---- */
 @media (hover: none) and (pointer: coarse), (max-width: 500px) {
     .preset_card_profile_actions {
@@ -1222,21 +1225,10 @@
 
 .pc-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
     margin-bottom: 16px;
-}
-
-.pc-header h2 {
-    margin: 0;
-    font-size: 1.15rem;
-    font-weight: 600;
-}
-
-.pc-header-controls {
-    display: flex;
-    gap: 8px;
-    align-items: center;
 }
 
 .pc-prompt-list {
@@ -1544,37 +1536,107 @@
     border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
 }
 
-/* 头部：profile 名 + 徽章 + 下方小字 preset 名 */
-.pc-header h2 {
+/* 头部三段式：第一行 preset 名 / 第二行面包屑+改名 / 第三行暂存提交+关闭 */
+.pc-header-preset-row {
     display: flex;
-    flex-direction: column;
-    gap: 3px;
+    justify-content: center;
+    align-items: center;
     min-width: 0;
-    flex: 1;
 }
 
-.pc-header-title-row {
+.pc-header-preset-name {
+    font-size: 1.15rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.pc-header-breadcrumb-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.pc-header-breadcrumb {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
-}
-
-.pc-header-profile-name {
-    white-space: nowrap;
+    max-width: 100%;
     overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
+    white-space: nowrap;
 }
 
-.pc-header-subtitle {
-    font-size: 0.7rem;
-    font-weight: normal;
+.pc-breadcrumb-item {
+    font-size: 0.8rem;
     color: var(--SmartThemeBodyColor);
-    opacity: 0.5;
+    opacity: 0.6;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex-shrink: 0;
+}
+
+.pc-breadcrumb-item.pc-breadcrumb-current {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+    font-weight: 600;
+}
+
+.pc-breadcrumb-sep {
+    font-size: 0.7rem;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.35;
+    flex-shrink: 0;
+}
+
+.pc-btn-rename {
+    background: transparent;
+    border: none;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.6;
+    cursor: pointer;
+    padding: 4px;
+    font-size: 0.85rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.pc-btn-rename:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.pc-header-rename-input {
+    width: 180px;
+    background: var(--SmartThemeBlurTintColor);
+    border: 1px solid var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBodyColor);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.85rem;
+    outline: none;
+    font-family: inherit;
+}
+
+.pc-header-actions-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.pc-header-actions-center {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex: 1;
+    justify-content: center;
 }
 
 /* 卡片高亮：dirty（会话缓冲未提交）与 persistent（本 profile 持久差异） */
@@ -1829,8 +1891,12 @@
         border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
     }
 
-    .pc-header h2 {
+    .pc-header-preset-name {
         font-size: 1rem;
+    }
+
+    .pc-header-rename-input {
+        width: 140px;
     }
 }
 

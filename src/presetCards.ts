@@ -583,7 +583,7 @@ export async function openPresetCards(): Promise<void> {
         download(buildTreeExportData(meta), `${name}-tree.json`, 'application/json');
     });
 
-    // ---- Profiles: Load Configuration (click = apply + open profile editor popup) ----
+    // ---- Profiles: Load Configuration (click = apply only; edit via pencil button) ----
     dialog.on('click', '.preset_card_profile_name', async function (e) {
         e.stopPropagation();
         const row = $(this).closest('.preset_card_profile_row');
@@ -602,36 +602,16 @@ export async function openPresetCards(): Promise<void> {
         // 记录最近加载的 profile 为激活（卡片页选中框特效，全局唯一，localStorage 持久化）
         setActiveProfile({ presetName: name, profileId: String(profileId) });
 
-        if (isPromptBaseProfile(profile) || isPromptDeltaProfile(profile)) {
-            // 主/派生 profile：保存到磁盘并同步运行态，然后打开 profile 编辑器弹窗
-            await saveMeta(name, idx, meta);
-            toastr.success(L('Configuration loaded'));
-            activatePreset(name, idx);
+        await saveMeta(name, idx, meta);
+        toastr.success(L('Configuration loaded'));
 
-            // 加载已整体覆盖 preset：本卡此前的未保存编辑已失去意义，清缓冲（其他卡的缓冲保留）
-            clearBufferedForName(name, sessionEdits, pendingToggles);
+        // 激活该 preset（若尚未激活）并触发原生 UI 重载
+        activatePreset(name, idx);
 
-            // 先刷新卡片网格让选中态全局切换，再开弹窗
-            await refreshGrid();
+        // 加载已整体覆盖 preset：本卡此前的未保存编辑已失去意义，清缓冲（其他卡的缓冲保留）
+        clearBufferedForName(name, sessionEdits, pendingToggles);
 
-            await openProfileEditorPopup(
-                { sessionEdits, pendingToggles, refreshActivePresetUI, onGridRefresh: () => refreshGrid() },
-                name,
-                idx,
-                profileId,
-            );
-        } else {
-            // v1 全量快照：不弹窗，走现有加载逻辑
-            await saveMeta(name, idx, meta);
-            toastr.success(L('Configuration loaded'));
-
-            // 激活该 preset（若尚未激活）并触发原生 UI 重载
-            activatePreset(name, idx);
-
-            clearBufferedForName(name, sessionEdits, pendingToggles);
-
-            await refreshGrid();
-        }
+        await refreshGrid();
     });
 
     // ---- Profiles: Derive from Base ----
@@ -862,60 +842,32 @@ export async function openPresetCards(): Promise<void> {
         input.click();
     });
 
-    // ---- Profiles: Edit/Rename Configuration ----
-    dialog.on('click', '.preset_card_profile_edit', function (e) {
+    // ---- Profiles: Edit Configuration (open profile editor popup) ----
+    dialog.on('click', '.preset_card_profile_edit', async function (e) {
         e.stopPropagation();
         const row = $(this).closest('.preset_card_profile_row');
-        const nameContainer = row.find('.preset_card_profile_name');
+        const profileId = row.data('profile-id');
+        const card = $(this).closest('.preset_card');
+        const name = card.attr('data-preset-name') as string;
+        const idx = card.data('preset-index') as number;
 
-        // Prevent double click/edit
-        if (nameContainer.length === 0) return;
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile) return;
 
-        const currentName = nameContainer.text();
+        // v1 快照无开关/值编辑界面，直接提示不可编辑
+        if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) {
+            toastr.warning(L('This profile type cannot be edited with switches'));
+            return;
+        }
 
-        const input = $('<input>', {
-            type: 'text',
-            class: 'preset_card_profile_edit_input',
-            value: currentName
-        });
-
-        nameContainer.replaceWith(input);
-        input.focus();
-
-        let done = false;
-
-        input.on('blur keydown', async function (evt) {
-            const key = (evt.originalEvent as KeyboardEvent | undefined)?.key ?? '';
-            if (evt.type === 'keydown' && key !== 'Enter' && key !== 'Escape') return;
-            evt.stopPropagation();
-            // Enter 提交后 replaceWith 移除 input 会触发 blur 重入，guard 防二次 saveMeta
-            if (done) return;
-            done = true;
-
-            const newName = (key === 'Escape') ? currentName : (input.val() as string).trim() || currentName;
-
-            const newContainer = $('<div>', {
-                class: 'preset_card_profile_name',
-                title: 'Load configuration',
-                text: newName
-            });
-            input.replaceWith(newContainer);
-
-            if (newName !== currentName && key !== 'Escape') {
-                const profileId = row.data('profile-id');
-                const card = row.closest('.preset_card');
-                const name = card.attr('data-preset-name') as string;
-                const idx = card.data('preset-index') as number;
-
-                const preset = openai_settings[idx] as Preset;
-                const meta = readMeta(preset);
-                const profile = getProfile(meta, profileId);
-                if (profile) {
-                    profile.name = newName;
-                    await saveMeta(name, idx, meta);
-                }
-            }
-        });
+        await openProfileEditorPopup(
+            { sessionEdits, pendingToggles, refreshActivePresetUI, onGridRefresh: () => refreshGrid() },
+            name,
+            idx,
+            profileId,
+        );
     });
 
     // ---- Import button ----
