@@ -1,6 +1,7 @@
 import { getRequestHeaders } from '@sillytavern/script';
+import { fastApplyPreset } from './fastApply.js';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
-import { oai_settings, openai_settings, openai_setting_names, promptManager, settingsToUpdate, getChatCompletionPreset } from '@sillytavern/scripts/openai';
+import { oai_settings, openai_settings, openai_setting_names, settingsToUpdate, getChatCompletionPreset } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { t } from '@sillytavern/scripts/i18n';
 import { download } from '@sillytavern/scripts/utils';
@@ -68,27 +69,20 @@ export async function openPresetCards(): Promise<void> {
         el.text(visible === total ? `${total} ${L('presets')}` : `${visible} / ${total}`);
     }
 
-    // If the preset is currently active, reload it natively and refresh the Prompt Manager list.
-    // promptManager may be absent in some ST builds, hence the optional chain.
+    // 刷新当前活动预设的运行态：从内存 openai_settings 重载已保存状态（profile 编辑/重置后调用），
+    // 走快路径 fastApplyPreset（内部含 render），不再触发原生 change 慢路径。
     function refreshActivePresetUI(presetName: string): void {
         if (oai_settings.preset_settings_openai === presetName) {
-            $('#settings_preset_openai').trigger('change');
-            promptManager?.render?.(false);
+            const idx = openai_setting_names[presetName];
+            if (idx !== undefined) void fastApplyPreset(idx, presetName);
         }
     }
 
-    // 激活 preset 并刷新运行态（恰好一次原生 change）：
-    // - 未激活：切到它并触发 change 重载（同卡片点击），刷新卡片高亮；
-    // - 已激活：仅触发 change 刷新（等价旧 refreshActivePresetUI）。
-    // 须在 saveMeta 落盘之后调用（ST onSettingsPresetChange 从内存 openai_settings 重载，不会冲掉已保存改动）。
+    // 激活 preset 并刷新运行态（走快路径 fastApplyPreset，不触发原生 change 慢路径）。
+    // 须在 saveMeta 落盘之后调用（fastApplyPreset 从内存 openai_settings 重载，不会冲掉已保存改动）。
     function activatePreset(name: string, idx: number): void {
-        if (oai_settings.preset_settings_openai !== name) {
-            oai_settings.preset_settings_openai = name;
-            $('#settings_preset_openai').val(idx).trigger('change');
-            refreshActiveCardSelection();
-        } else {
-            refreshActivePresetUI(name);
-        }
+        void fastApplyPreset(idx, name);
+        refreshActiveCardSelection();
     }
 
     // 整卡列表重渲染并触发搜索过滤；重渲染后默认重新应用背景图（applyCachedBackgrounds 幂等，
@@ -104,14 +98,12 @@ export async function openPresetCards(): Promise<void> {
         dialog.find('#preset_cards_search').trigger('input');
     }
 
-    // 活动预设被删后重选第一个剩余预设并触发原生下拉 change（无剩余时保持 null）。
+    // 活动预设被删后重选第一个剩余预设并走快路径应用（无剩余时保持 null）。
     function reselectFirstPreset(): void {
         if (Object.keys(openai_setting_names).length) {
             const newActiveName = Object.keys(openai_setting_names)[0];
             oai_settings.preset_settings_openai = newActiveName;
-            const newValue = openai_setting_names[newActiveName];
-            $(`#settings_preset_openai option[value="${newValue}"]`).prop('selected', true);
-            $('#settings_preset_openai').trigger('change');
+            void fastApplyPreset(openai_setting_names[newActiveName], newActiveName);
         }
     }
 
@@ -326,7 +318,7 @@ export async function openPresetCards(): Promise<void> {
         dialog.find('.preset_card').removeClass('selected');
         $(this).addClass('selected');
 
-        $('#settings_preset_openai').val(idx).trigger('change');
+        void fastApplyPreset(idx, name);
         toastr.success(`${t`Switched to`} ${name}`);
     });
 
