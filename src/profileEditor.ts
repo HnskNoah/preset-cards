@@ -596,7 +596,7 @@ export async function openProfileEditorPopup(
         const toggle = row.find('.pc-btn-toggle');
         if (toggle.length) {
             toggle.toggleClass('on', enabled).toggleClass('off', !enabled);
-            toggle.html(enabled ? '<i class="fa-solid fa-toggle-on"></i> On' : '<i class="fa-solid fa-toggle-off"></i> Off');
+            toggle.html(enabled ? '<i class="fa-solid fa-toggle-on"></i>' : '<i class="fa-solid fa-toggle-off"></i>');
         }
 
         const clearBtn = row.find('.pc-card-clear');

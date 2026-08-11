@@ -791,15 +791,34 @@
     padding-left: 6px;
 }
 
+/* 子节点连接线：每个子 profile 左侧的 L 形箭头，指向该行垂直中线。
+   竖线(border-left)在 14px；折叠图标左移对齐到该竖线；
+   横线从竖线连到子行中线。 */
+.preset_card_profile_children > .preset_card_profile_group > .preset_card_profile_row::before {
+    content: '';
+    position: absolute;
+    left: -6px;
+    top: 50%;
+    width: 5px;
+    height: 1px;
+    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+
 .preset_card_profile_group.expanded > .preset_card_profile_children {
     display: flex;
 }
 
 .preset_card_profile_toggle {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
+    width: 14px;
     height: 18px;
     flex-shrink: 0;
     cursor: pointer;
@@ -808,7 +827,7 @@
     opacity: 0.6;
     transition: transform 0.2s ease, opacity 0.2s;
     border-radius: 4px;
-    margin-right: 2px;
+    margin: 0;
 }
 
 .preset_card_profile_toggle:hover {
@@ -831,6 +850,12 @@
     transition: all 0.2s ease;
     border: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.15);
     position: relative;
+}
+
+/* 有折叠图标（有子节点）的行：内容起点右移到 14px，与 children 竖线对齐；
+   徽章/名称从竖线位置开始，折叠图标贴行左缘。叶子行保持默认 padding。 */
+.preset_card_profile_row:has(.preset_card_profile_toggle) {
+    padding-left: 14px;
 }
 
 .preset_card_profile_row:hover {
@@ -1446,11 +1471,17 @@
     background: transparent;
     border: 1px solid var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
-    padding: 4px 12px;
+    width: 26px;
+    height: 24px;
+    padding: 0;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 0.8rem;
-    transition: background 0.15s;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .pc-btn-toggle:hover {
@@ -1939,16 +1970,16 @@
     font-size: 1.1rem;
     font-weight: 800;
     color: var(--SmartThemeBodyColor);
-    min-width: 48px;
+    min-width: 5ch;
     text-align: center;
-    margin-right: 8px;
+    margin-right: 6px;
     user-select: none;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 8px 6px;
-    margin-left: -6px;
+    padding: 8px 4px;
+    margin-left: -4px;
     border-radius: 6px;
     transition: background 0.2s, opacity 0.2s;
     opacity: 0.6;
