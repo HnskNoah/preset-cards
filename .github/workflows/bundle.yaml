@@ -5,15 +5,17 @@ on:
     branches:
       - dev-ts
       - ts
-    paths-ignore:
-      - 'dist/**'
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
 
+permissions:
+  contents: write
+
 jobs:
   bundle:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       # checkout
