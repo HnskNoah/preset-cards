@@ -1,0 +1,67 @@
+<div id="preset_profile_editor" class="pc-manager-container">
+    <div class="pc-layout">
+        <div class="pc-left-pane">
+            <div class="pc-header">
+                <div class="pc-header-preset-row">
+                    <span class="pc-header-preset-name" title="{{presetName}}">{{presetName}}</span>
+                    <button id="pc-btn-close" class="pc-top-action-btn" title="{{i18n.close}}"><i class="fa-solid fa-times"></i></button>
+                </div>
+                <div class="pc-header-breadcrumb-row">
+                    <div class="pc-header-breadcrumb" title="{{breadcrumbTitle}}">
+                        {{#each breadcrumb}}
+                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" title="{{this.name}}">{{this.name}}{{#if this.isCurrent}}<button id="pc-btn-rename" class="pc-btn-rename" title="{{../i18n.rename}}"><i class="fa-solid fa-pen"></i></button>{{/if}}</span>
+                        {{#unless @last}}<span class="pc-breadcrumb-sep">▸</span>{{/unless}}
+                        {{/each}}
+                    </div>
+                </div>
+                <div class="pc-header-actions-row">
+                    <div class="pc-header-actions-center">
+                        <button id="pc-btn-lock" class="pc-top-action-btn pc-btn-lock" title="{{i18n.lockList}}"><i class="fa-solid fa-lock"></i> <span class="pc-btn-label">{{i18n.lockList}}</span></button>
+                        <button id="pc-btn-view-staged-desktop" class="pc-top-action-btn pc-btn-view-staged" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i><span class="pc-btn-label">{{i18n.viewStaged}}</span><span class="pc-staged-count">({{stagedCount}})</span></button>
+                        <button id="pc-btn-reset" class="pc-top-action-btn pc-btn-reset" title="{{i18n.reset}}"><i class="fa-solid fa-rotate-left"></i> <span class="pc-btn-label">{{i18n.reset}}</span></button>
+                        <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> <span class="pc-btn-label">{{i18n.commit}}</span></button>
+                    </div>
+                </div>
+            </div>
+            <div class="pc-search-bar">
+                <button id="pc-btn-view-staged-mobile" class="pc-top-action-btn pc-btn-view-staged" title="{{i18n.viewStaged}}"><i class="fa-solid fa-list-check"></i><span class="pc-btn-label">{{i18n.viewStaged}}</span><span class="pc-staged-count">({{stagedCount}})</span></button>
+                <input type="text" id="pc-search-input" class="pc-form-control pc-search-input" placeholder="{{i18n.searchPrompts}}" />
+                <button id="pc-btn-back" class="pc-top-action-btn pc-btn-back" title="{{i18n.back}}"><i class="fa-solid fa-arrow-left"></i><span class="pc-btn-label">{{i18n.back}}</span></button>
+            </div>
+            <div class="pc-prompt-list" id="pc-prompt-list">
+                {{#each entries}}
+                <div class="pc-prompt-card {{#if this.hasPersistentDiff}}persistent{{/if}} {{#unless this.enabled}}disabled{{/unless}}" data-identifier="{{this.identifier}}">
+                    {{#if this.orderable}}
+                    <div class="pc-card-index pc-drag-handle" title="{{../i18n.dragHandle}}">
+                        <i class="fa-solid fa-grip-vertical pc-drag-handle-icon"></i>
+                        <span>{{this.index}}</span>
+                    </div>
+                    {{/if}}
+                    <div class="pc-card-title">
+                        <span class="pc-card-name" title="{{this.name}}">{{this.name}}</span>
+                        <span class="pc-role-badge role-{{this.role}}">{{this.role}}</span>
+                    </div>
+                    {{#if this.clearable}}
+                    <button class="pc-card-clear" title="{{../i18n.clearValueChange}}">
+                        <i class="fa-solid fa-eraser"></i>
+                    </button>
+                    {{/if}}
+                    {{#if this.toggleable}}
+                    <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../i18n.toggleEntry}}">
+                        {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i> On{{else}}<i class="fa-solid fa-toggle-off"></i> Off{{/if}}
+                    </button>
+                    {{/if}}
+                </div>
+                {{/each}}
+                {{#unless entries.length}}
+                <div class="pc-prompt-empty">{{i18n.noEntries}}</div>
+                {{/unless}}
+                <div id="pc-prompt-empty-search" class="pc-prompt-empty" style="display:none;">{{i18n.noSearchResults}}</div>
+            </div>
+        </div>
+        <div class="pc-right-pane">
+            <div class="pc-diff-area" id="pc-diff-area"></div>
+            <div class="pc-edit-area" id="pc-edit-area" style="display:none;"></div>
+        </div>
+    </div>
+</div>

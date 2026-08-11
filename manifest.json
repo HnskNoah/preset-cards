@@ -1,0 +1,16 @@
+{
+    "display_name": "Preset Cards",
+    "loading_order": 16,
+    "requires": [],
+    "optional": [],
+    "js": "dist/index.js",
+    "css": "style.css",
+    "author": "HnskNoah",
+    "version": "1.1.1",
+    "homePage": "https://github.com/HnskNoah/preset-cards",
+    "hooks": {
+        "activate": "init",
+        "install": "refresh",
+        "update": "refresh"
+    }
+}

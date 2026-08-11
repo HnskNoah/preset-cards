@@ -1,0 +1,52 @@
+<div id="preset_edit_modal">
+    <h4>{{presetName}}</h4>
+    <div class="preset_edit_field">
+        <label>{{i18n.descTitle}}</label>
+        <textarea id="preset_edit_desc" placeholder="{{i18n.descPlaceholder}}">{{description}}</textarea>
+    </div>
+    <div class="preset_edit_section_title">{{i18n.samplingTitle}}</div>
+    <div class="preset_edit_sampling_grid">
+        <div class="preset_edit_field">
+            <label>T</label>
+            <input type="number" step="0.01" id="preset_edit_temp" value="{{sampling.temperature}}" placeholder="—" />
+        </div>
+        <div class="preset_edit_field">
+            <label>P</label>
+            <input type="number" step="0.01" id="preset_edit_top_p" value="{{sampling.topP}}" placeholder="—" />
+        </div>
+        <div class="preset_edit_field">
+            <label>K</label>
+            <input type="number" step="1" id="preset_edit_top_k" value="{{sampling.topK}}" placeholder="—" />
+        </div>
+        <div class="preset_edit_field">
+            <label>{{i18n.contextTitle}}</label>
+            <input type="number" step="1" id="preset_edit_context" value="{{sampling.contextTokens}}" placeholder="—" />
+        </div>
+        <div class="preset_edit_field">
+            <label>{{i18n.tokensTitle}}</label>
+            <input type="number" step="1" id="preset_edit_max_tokens" value="{{sampling.maxTokens}}" placeholder="—" />
+        </div>
+        <div class="preset_edit_field preset_edit_stream_field">
+            <label>{{i18n.streamTitle}}</label>
+            <div class="preset_edit_stream_wrap">
+                <input type="checkbox" id="preset_edit_stream" {{#if sampling.streaming}}checked{{/if}} />
+            </div>
+        </div>
+    </div>
+    <div class="preset_edit_field">
+        <label>{{i18n.bgImageTitle}}</label>
+        <input type="text" id="preset_edit_bg_image" placeholder="{{i18n.bgImagePlaceholder}}" value="{{bgImage}}" />
+    </div>
+    <div class="preset_edit_field">
+        <label>{{i18n.modelsTitle}}</label>
+        <div class="preset_edit_models_grid" id="preset_edit_models_grid">
+            {{#each availableModels}}
+            <div class="preset_edit_model_option {{#if this.selected}}active{{/if}}" data-model-id="{{this.id}}">
+                {{#if this.logo}}<img src="{{this.logo}}" alt="" />{{/if}}
+                <span>{{this.label}}</span>
+                <span class="check_mark fa-solid fa-check"></span>
+            </div>
+            {{/each}}
+        </div>
+    </div>
+</div>

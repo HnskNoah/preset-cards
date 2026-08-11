@@ -1,0 +1,140 @@
+<div id="preset_cards_container">
+    <div id="preset_cards_toolbar">
+        <div id="preset_cards_search_wrapper">
+            <i class="fa-solid fa-magnifying-glass search_icon"></i>
+            <input type="text" id="preset_cards_search" placeholder="{{i18n.searchPlaceholder}}" />
+        </div>
+        <div class="preset_cards_toolbar_actions">
+            <span id="preset_cards_count"></span>
+            <button id="preset_cards_clear_cache_btn" class="menu_button" title="{{i18n.clearCache}}">
+                <i class="fa-solid fa-broom"></i>
+            </button>
+            <button id="preset_cards_concise_btn" class="menu_button" title="{{i18n.conciseMode}}">
+                <i class="fa-solid fa-compress"></i>
+            </button>
+            <button id="preset_cards_multiselect_btn" class="menu_button" title="{{i18n.multiSelect}}">
+                <i class="fa-solid fa-list-check"></i>
+            </button>
+            <button id="preset_cards_batch_delete_btn" class="menu_button hidden" title="{{i18n.batchDelete}}">
+                <i class="fa-solid fa-trash-can"></i>
+            </button>
+            <button id="preset_cards_import_btn" class="menu_button" title="{{i18n.importPreset}}">
+                <i class="fa-solid fa-file-import"></i>
+            </button>
+        </div>
+    </div>
+    <div id="preset_cards_grid">
+        {{#each presets}}
+        <div class="preset_card {{#if this.isActive}}selected{{/if}} {{#if this.bgImage}}has_bg{{/if}}" data-preset-name="{{this.name}}"
+            data-preset-index="{{this.index}}">
+            {{#if this.bgImage}}
+            <div class="preset_card_bg_image" data-bg-url="{{this.bgImage}}"></div>
+            {{/if}}
+            <div class="preset_card_header">
+                <div class="batch_selection_indicator"><i class="fa-solid fa-check"></i></div>
+                <div class="preset_card_logo_wrap">
+                    {{#if this.logoPath}}
+                    <img src="{{this.logoPath}}" alt="" />
+                    {{else}}
+                    <span class="logo_placeholder fa-solid fa-microchip"></span>
+                    {{/if}}
+                </div>
+                <div class="preset_card_title_area">
+                    <span class="preset_card_name" title="{{this.name}}">{{this.name}}</span>
+                    {{#if this.sourceAndModel}}
+                    <span class="preset_card_source_line" title="{{this.sourceAndModel}}">{{this.sourceAndModel}}</span>
+                    {{/if}}
+                </div>
+                <div class="preset_card_header_right">
+                    <div class="preset_card_actions">
+                        <button class="preset_card_export_btn menu_button" title="{{../i18n.exportConfig}}" data-preset-name="{{this.name}}"
+                            data-preset-index="{{this.index}}">
+                            <i class="fa-solid fa-file-export"></i>
+                        </button>
+                        <button class="preset_card_edit_btn menu_button" title="{{../i18n.edit}}" data-preset-name="{{this.name}}"
+                            data-preset-index="{{this.index}}">
+                            <i class="fa-solid fa-pen-to-square"></i>
+                        </button>
+                        <button class="preset_card_delete_btn menu_button" title="{{../i18n.delete}}" data-preset-name="{{this.name}}"
+                            data-preset-index="{{this.index}}">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                    <span class="preset_card_active_badge" data-i18n="Active">Active</span>
+                </div>
+            </div>
+            <div class="preset_card_body">
+                {{#if this.description}}
+                <div class="preset_card_desc" title="{{this.description}}">{{this.description}}</div>
+                {{/if}}
+                {{#if this.modelChips.length}}
+                <div class="preset_card_tags">
+                    {{#each this.modelChips}}
+                    <span class="preset_card_chip" title="{{this.label}}">
+                        {{#if this.logo}}<img src="{{this.logo}}" alt="">{{/if}}
+                        {{this.label}}
+                    </span>
+                    {{/each}}
+                </div>
+                {{/if}}
+                
+                <div class="preset_card_profiles_section">
+                    <div class="preset_card_profiles_header">
+                        <span class="profiles_title">{{../i18n.configurations}}</span>
+                        <div>
+                            <button class="preset_card_import_profile_btn menu_button" title="{{../i18n.importConfig}}">
+                                <i class="fa-solid fa-file-import"></i>
+                            </button>
+                            <button class="preset_card_export_all_btn menu_button" title="{{../i18n.exportAll}}">
+                                <i class="fa-solid fa-file-export"></i>
+                            </button>
+                            <button class="preset_card_add_profile_btn menu_button" title="{{../i18n.addBaseConfig}}">
+                                <i class="fa-solid fa-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="preset_card_profiles_list">
+                        {{#*inline "profileNode"}}
+                        <div class="preset_card_profile_group">
+                            <div class="preset_card_profile_row {{#if this.isActiveProfile}}active{{/if}}" data-profile-id="{{this.id}}">
+                                {{#if this.childCount}}<span class="preset_card_profile_toggle"><i class="fa-solid fa-caret-right"></i></span>{{/if}}
+                                <div class="preset_card_profile_name_wrap">
+                                    <i class="fa-solid fa-code-fork preset_card_profile_derive preset_card_profile_badge" title="{{@root.i18n.derive}}"></i>
+                                    <div class="preset_card_profile_name" title="{{@root.i18n.loadConfig}}">{{this.name}}</div>
+                                </div>
+                                <div class="preset_card_profile_actions">
+                                    {{#if this.isActiveProfile}}<i class="fa-solid fa-pencil preset_card_profile_edit" title="{{@root.i18n.edit}}"></i>{{/if}}
+                                    <i class="fa-solid fa-rotate-left preset_card_profile_reset" title="{{@root.i18n.resetProfile}}"></i>
+                                    <i class="fa-solid fa-file-export preset_card_profile_export" title="{{@root.i18n.exportConfig}}"></i>
+                                    <i class="fa-solid fa-trash-can preset_card_profile_delete" title="{{@root.i18n.delete}}"></i>
+                                </div>
+                            </div>
+                            {{#if this.children.length}}
+                            <div class="preset_card_profile_children">
+                                {{#each this.children}}{{> profileNode}}{{/each}}
+                            </div>
+                            {{/if}}
+                        </div>
+                        {{/inline}}
+                        {{#each this.profiles}}{{> profileNode}}{{/each}}
+                    </div>
+                </div>
+            </div>
+            <div class="preset_card_footer">
+                {{#if this.temperature}}<span class="preset_card_tag" title="Temperature"><span
+                        class="tag_label">T</span><span class="tag_value">{{this.temperature}}</span></span>{{/if}}
+                {{#if this.topP}}<span class="preset_card_tag" title="Top P"><span class="tag_label">P</span><span
+                        class="tag_value">{{this.topP}}</span></span>{{/if}}
+                {{#if this.topK}}<span class="preset_card_tag" title="Top K"><span class="tag_label">K</span><span
+                        class="tag_value">{{this.topK}}</span></span>{{/if}}
+                {{#if this.contextTokens}}<span class="preset_card_tag" title="Context"><span
+                        class="tag_label">Ctx</span><span class="tag_value">{{this.contextTokens}}</span></span>{{/if}}
+                {{#if this.maxTokens}}<span class="preset_card_tag" title="Max Tokens (Response)"><span
+                        class="tag_label">Tok</span><span class="tag_value">{{this.maxTokens}}</span></span>{{/if}}
+                {{#if this.streaming}}<span class="preset_card_tag" title="Streaming"><span
+                        class="tag_value">Stream</span></span>{{/if}}
+            </div>
+        </div>
+        {{/each}}
+    </div>
+</div>
