@@ -152,7 +152,7 @@ jobs:
           cp -f "$ROOT/profile-editor.html" "$TMP/profile-editor.html"
           cp -rf "$ROOT/llm-logos" "$TMP/llm-logos"
 
-          git clone --no-checkout "https://x-access-token:${RELEASE_REPO_TOKEN}@github.com/HnskNoah/preset-cards-release.git" "$TMP/repo"
+          git clone --no-checkout "https://${RELEASE_REPO_TOKEN}@github.com/HnskNoah/preset-cards-release.git" "$TMP/repo"
           REL="$TMP/repo"
           git -C "$REL" checkout -B TS-sync origin/TS
           rm -rf "$REL/dist" "$REL/llm-logos"
