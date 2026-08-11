@@ -94,7 +94,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     if (maxTokens !== undefined) preset['openai_max_tokens'] = maxTokens;
     preset['stream_openai'] = streaming;
 
-    await saveMeta(presetName, presetIndex, { description: newDesc, models: newModels, bgImage: newBgImage, profiles: meta.profiles, defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked });
+    await saveMeta(presetName, presetIndex, { description: newDesc, models: newModels, bgImage: newBgImage, profiles: meta.profiles, defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked, defaultExtra: meta.defaultExtra });
     toastr.success(t`Preset updated`);
     if (onSaved) onSaved();
 }

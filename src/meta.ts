@@ -25,6 +25,25 @@ export interface PromptFields {
     injection_order?: number;
 }
 
+/** 采样参数快照（全可选）：缺失的键在加载 profile 时保持预设当前值，不覆盖。
+ * 键与 SAMPLING_KEYS 一一对应（temperature/top_p/top_k/top_a/min_p/frequency_penalty/
+ * presence_penalty/repetition_penalty/seed/n/openai_max_context/openai_max_tokens/stream_openai）。 */
+export interface PromptSampling {
+    temperature?: number;
+    top_p?: number;
+    top_k?: number;
+    top_a?: number;
+    min_p?: number;
+    frequency_penalty?: number;
+    presence_penalty?: number;
+    repetition_penalty?: number;
+    seed?: number;
+    n?: number;
+    openai_max_context?: number;
+    openai_max_tokens?: number;
+    stream_openai?: boolean;
+}
+
 /** 主 profile：记录当前目标 prompt_order.order 中 prompts 的开关，可附带值字段（fields），不存扩展。 */
 export interface PromptBaseProfile {
     formatVersion: 2;
@@ -32,6 +51,11 @@ export interface PromptBaseProfile {
     id: string;
     name: string;
     prompts: { identifier: string; enabled: boolean; fields?: PromptFields }[];
+    /** 采样参数快照（可选）：加载时存在键覆盖预设对应值，缺失键不动。 */
+    sampling?: PromptSampling;
+    /** 附加快照（可选）：v1 迁移保留的、v2 无对应结构的预设键（如 impersonation_prompt、bias_preset_selected 等），
+     * 加载时 Object.assign 还原到预设（保留 extensions）。缺失键不动。 */
+    extra?: Record<string, any>;
 }
 
 /** 派生 profile 的一条差异：开关差异 + 值差异（content/role/name 等）。 */
@@ -49,6 +73,10 @@ export interface PromptDeltaProfile {
     name: string;
     baseId: string;
     changes: PromptDeltaChange[];
+    /** 采样参数快照（可选）：加载时存在键覆盖预设对应值，缺失键不动。 */
+    sampling?: PromptSampling;
+    /** 附加快照（可选）：同 PromptBaseProfile.extra，v1 迁移保留的预设键。 */
+    extra?: Record<string, any>;
 }
 
 /** defaultSnapshot 条目：仅 mounted prompt 保存开关；全部 prompt 可保存 reset 用原始字段。 */
@@ -77,6 +105,8 @@ export interface PresetMeta {
     defaultSnapshot?: PromptDefaultSnapshotEntry[];
     /** 默认基准是否已全量锁定（区分旧版仅开关快照与新版含 originalFields 的全量基线）。 */
     defaultSnapshotLocked?: boolean;
+    /** 出厂 extra 基线：首次 add base 时与 defaultSnapshot 一起锁定；reset 时把预设的 extra 键还原到出厂值。 */
+    defaultExtra?: Record<string, any>;
 }
 
 /** 按 id 查 profile（id 归一化为字符串，兼容数字/字符串来源）。 */
@@ -101,6 +131,9 @@ export function readMeta(preset: Preset | undefined): PresetMeta {
         bgImage: ext?.bgImage || '',
         defaultSnapshot: Array.isArray(ext?.defaultSnapshot) ? ext.defaultSnapshot : undefined,
         defaultSnapshotLocked: ext?.defaultSnapshotLocked === true,
+        defaultExtra: ext?.defaultExtra && typeof ext.defaultExtra === 'object' && !Array.isArray(ext.defaultExtra)
+            ? ext.defaultExtra
+            : undefined,
     };
 }
 
@@ -120,6 +153,7 @@ export async function saveMeta(presetName: string, presetIndex: number, meta: Pr
         bgImage: meta.bgImage || '',
         defaultSnapshot: meta.defaultSnapshot,
         defaultSnapshotLocked: meta.defaultSnapshotLocked === true,
+        defaultExtra: meta.defaultExtra,
     };
 
     // Also update oai_settings if this is the current preset
