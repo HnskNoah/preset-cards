@@ -1,0 +1,435 @@
+import { oai_settings, openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
+import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
+import { t } from '@sillytavern/scripts/i18n';
+import { download } from '@sillytavern/scripts/utils';
+import { L } from './i18n.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
+import type { Preset, PromptBaseProfile } from './meta.js';
+import { captureSampling } from './promptToggle.js';
+import { buildDerivedProfile, collectDescendantProfileIds, isArchiveProfile } from './profileActions.js';
+import { resetProfileCore } from './profileMutators.js';
+import { buildProfileExportData, buildTreeExportData, chooseFromOptions, chooseProfileExportAction, warnV1ExcludedFromTreeExport } from './importExport.js';
+import { openEditModal } from './editModal.js';
+import { clearBufferedForName } from './presetBuffers.js';
+import { openProfileEditorPopup } from './profileEditor.js';
+import { getActiveProfile, setActiveProfile } from './activeProfile.js';
+import { fastApplyPreset } from './fastApply.js';
+import { addBaseProfile, clearImageCacheAndRefresh, deletePresetByName, exportPresetFile, importProfileFile, loadProfile, refreshActiveCardSelection, refreshActivePresetUI, refreshGrid, reselectFirstPreset, showConciseProfilesModal } from './presetCardsState.js';
+import { refreshCardInPlace } from './presetCardsRender.js';
+import type { CardsContext } from './presetCardsContext.js';
+
+function updateCount(ctx: CardsContext, visible: number, total: number): void {
+    const el = ctx.dialog.find('#preset_cards_count');
+    el.text(visible === total ? `${total} ${L('presets')}` : `${visible} / ${total}`);
+}
+
+/** 从事件目标提取 profile 行上下文（row + card + profileId + name + idx）。 */
+function rowContext(el: JQuery<HTMLElement>): { card: JQuery<HTMLElement>; profileId: string; name: string; idx: number } {
+    const row = el.closest('.preset_card_profile_row');
+    const card = el.closest('.preset_card');
+    return {
+        card,
+        profileId: String(row.data('profile-id')),
+        name: card.attr('data-preset-name') as string,
+        idx: card.data('preset-index') as number,
+    };
+}
+
+/** 从事件目标提取卡片上下文（card + name + idx）。 */
+function cardContext(el: JQuery<HTMLElement>): { card: JQuery<HTMLElement>; name: string; idx: number } {
+    const card = el.closest('.preset_card');
+    return {
+        card,
+        name: card.attr('data-preset-name') as string,
+        idx: card.data('preset-index') as number,
+    };
+}
+
+/** 绑定全部卡片页事件 handler（逻辑下沉 state，本文件仅做 DOM 绑定）。 */
+export function bindCardsHandlers(ctx: CardsContext): void {
+    // ---- Search ----
+    ctx.dialog.on('input', '#preset_cards_search', function () {
+        const q = String($(this).val()).toLowerCase().trim();
+        let vis = 0;
+        ctx.dialog.find('.preset_card').each(function () {
+            const name = String($(this).data('preset-name')).toLowerCase();
+            const desc = $(this).find('.preset_card_desc').text().toLowerCase();
+            const match = !q || name.includes(q) || desc.includes(q);
+            $(this).toggle(match);
+            if (match) vis++;
+        });
+        const emptyEl = ctx.dialog.find('#preset_cards_empty');
+        if (vis === 0 && emptyEl.length === 0) {
+            ctx.dialog.find('#preset_cards_grid').append(
+                `<div id="preset_cards_empty">${t`No presets found`}</div>`,
+            );
+        }
+        ctx.dialog.find('#preset_cards_empty').toggle(vis === 0);
+        updateCount(ctx, vis, ctx.presets.length);
+    });
+
+    // ---- Long press for Concise Mode Profiles ----
+    ctx.dialog.on('mousedown touchstart', '.preset_card', function (e) {
+        if (!ctx.isConciseMode || ctx.isBatchMode) return;
+        if (e.type === 'mousedown' && (e as JQuery.MouseDownEvent).which !== 1) return;
+        const card = $(this);
+        ctx.pressTimer = window.setTimeout(function () {
+            card.data('long-pressed', true);
+            void showConciseProfilesModal(ctx, card);
+        }, 600);
+    });
+    ctx.dialog.on('mousemove touchmove', '.preset_card', function () {
+        if (ctx.pressTimer !== undefined) { clearTimeout(ctx.pressTimer); ctx.pressTimer = undefined; }
+    });
+    ctx.dialog.on('mouseup touchend mouseleave', '.preset_card', function () {
+        if (ctx.pressTimer !== undefined) { clearTimeout(ctx.pressTimer); ctx.pressTimer = undefined; }
+    });
+    ctx.dialog.on('contextmenu', '.preset_card', function (e) {
+        if (ctx.isConciseMode && !ctx.isBatchMode && $(this).data('long-pressed')) {
+            e.preventDefault();
+        }
+    });
+
+    // ---- Card click → switch preset or batch select ----
+    ctx.dialog.on('click', '.preset_card', function (e) {
+        if ($(this).data('long-pressed')) {
+            $(this).data('long-pressed', false);
+            return;
+        }
+        if ($(e.target as Element).closest('.preset_card_actions').length) return;
+        if ($(e.target as Element).closest('.preset_card_profiles_section').length) return;
+
+        const name = $(this).attr('data-preset-name') as string;
+        if (ctx.isBatchMode) {
+            if (ctx.batchSelectedCards.has(name)) {
+                ctx.batchSelectedCards.delete(name);
+                $(this).removeClass('batch_selected');
+            } else {
+                ctx.batchSelectedCards.add(name);
+                $(this).addClass('batch_selected');
+            }
+            return;
+        }
+
+        const idx = $(this).data('preset-index') as number;
+        ctx.dialog.find('.preset_card').removeClass('selected');
+        $(this).addClass('selected');
+        void fastApplyPreset(idx, name);
+        toastr.success(`${t`Switched to`} ${name}`);
+    });
+
+    // ---- Clear Cache button ----
+    ctx.dialog.on('click', '#preset_cards_clear_cache_btn', async function () {
+        await clearImageCacheAndRefresh(ctx);
+    });
+
+    // ---- Edit button ----
+    ctx.dialog.on('click', '.preset_card_edit_btn', function (e) {
+        e.stopPropagation();
+        const name = $(this).data('preset-name') as string;
+        const idx = $(this).data('preset-index') as number;
+
+        openEditModal(name, idx, async () => {
+            refreshActivePresetUI(name);
+            refreshCardInPlace(ctx, idx);
+        });
+    });
+
+    // ---- Export button ----
+    ctx.dialog.on('click', '.preset_card_export_btn', function (e) {
+        e.stopPropagation();
+        const name = $(this).attr('data-preset-name') as string;
+        const idx = $(this).data('preset-index') as number;
+        exportPresetFile(name, idx);
+    });
+
+    // ---- Delete button ----
+    ctx.dialog.on('click', '.preset_card_delete_btn', async function (e) {
+        e.stopPropagation();
+        const nameToDelete = $(this).attr('data-preset-name') as string;
+        const confirm = await callGenericPopup(t`Delete the preset? This action is irreversible and your current settings will be overwritten.`, POPUP_TYPE.CONFIRM);
+        if (!confirm) return;
+
+        const deleted = await deletePresetByName(ctx, nameToDelete, {
+            activeHandling: 'immediate',
+            emitLog: 'Error emitting PRESET_DELETED',
+            onDeleted: () => toastr.success(t`Preset deleted`),
+            onBeforeEmit: () => {
+                ctx.dialog.find('#preset_cards_search').trigger('input');
+                refreshActiveCardSelection(ctx);
+            },
+        });
+        if (!deleted) {
+            toastr.warning(t`Preset was not deleted from server`);
+        }
+    });
+
+    // ---- Concise Mode toggle ----
+    ctx.dialog.on('click', '#preset_cards_concise_btn', function () {
+        ctx.isConciseMode = !ctx.isConciseMode;
+        $(this).toggleClass('active', ctx.isConciseMode);
+        ctx.dialog.toggleClass('preset_cards_concise_mode', ctx.isConciseMode);
+        localStorage.setItem('preset_cards_concise', String(ctx.isConciseMode));
+    });
+
+    // ---- Multi-select toggle ----
+    ctx.dialog.on('click', '#preset_cards_multiselect_btn', function () {
+        ctx.isBatchMode = !ctx.isBatchMode;
+        $(this).toggleClass('active', ctx.isBatchMode);
+        ctx.dialog.toggleClass('preset_cards_batch_mode', ctx.isBatchMode);
+        if (ctx.isBatchMode) {
+            ctx.dialog.find('#preset_cards_batch_delete_btn').removeClass('hidden');
+        } else {
+            ctx.dialog.find('#preset_cards_batch_delete_btn').addClass('hidden');
+            ctx.batchSelectedCards.clear();
+            ctx.dialog.find('.preset_card').removeClass('batch_selected');
+        }
+    });
+
+    // ---- Batch Delete button ----
+    ctx.dialog.on('click', '#preset_cards_batch_delete_btn', async function () {
+        if (ctx.batchSelectedCards.size === 0) {
+            toastr.info(t`No presets selected`);
+            return;
+        }
+        const confirm = await callGenericPopup(t`Delete ${ctx.batchSelectedCards.size} presets? This action is irreversible.`, POPUP_TYPE.CONFIRM);
+        if (!confirm) return;
+
+        let activeDeleted = false;
+        let deletedCount = 0;
+        for (const nameToDelete of ctx.batchSelectedCards) {
+            if (openai_setting_names[nameToDelete] === undefined) continue;
+            const wasActive = oai_settings.preset_settings_openai === nameToDelete;
+            const deleted = await deletePresetByName(ctx, nameToDelete, {
+                activeHandling: 'deferred',
+                emitLog: 'Error emitting PRESET_DELETED for batch mode',
+            });
+            if (deleted) deletedCount++;
+            if (wasActive) activeDeleted = true;
+        }
+        if (activeDeleted) {
+            reselectFirstPreset();
+            refreshActiveCardSelection(ctx);
+        }
+        if (deletedCount > 0) {
+            toastr.success(t`${deletedCount} presets deleted`);
+            ctx.dialog.find('#preset_cards_search').trigger('input');
+        }
+        // Exit batch mode（直接调状态，不用合成 click）
+        ctx.isBatchMode = false;
+        ctx.dialog.find('#preset_cards_multiselect_btn').removeClass('active');
+        ctx.dialog.toggleClass('preset_cards_batch_mode', false);
+        ctx.dialog.find('#preset_cards_batch_delete_btn').addClass('hidden');
+        ctx.batchSelectedCards.clear();
+        ctx.dialog.find('.preset_card').removeClass('batch_selected');
+    });
+
+    // ---- Profiles: Add Configuration (Save Base Profile) ----
+    ctx.dialog.on('click', '.preset_card_add_profile_btn', async function (e) {
+        e.stopPropagation();
+        const { name, idx } = cardContext($(this));
+        const profileName = await Popup.show.input(L('Base profile name:'), '');
+        if (!profileName) return;
+        await addBaseProfile(ctx, name, idx, profileName);
+    });
+
+    // ---- Profiles: Export All Configurations ----
+    ctx.dialog.on('click', '.preset_card_export_all_btn', async function (e) {
+        e.stopPropagation();
+        const { name, idx } = cardContext($(this));
+        const choice = await chooseFromOptions(L('Export configuration'), [[L('Export all configurations'), 'export']]);
+        if (choice !== 'export') return;
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        warnV1ExcludedFromTreeExport(meta);
+        download(buildTreeExportData(meta), `${name}-tree.json`, 'application/json');
+    });
+
+    // ---- Profiles: 分组折叠切换 ----
+    ctx.dialog.on('click', '.preset_card_profile_toggle', function (e) {
+        e.stopPropagation();
+        $(this).closest('.preset_card_profile_group').toggleClass('expanded');
+    });
+
+    // ---- Profiles: Load Configuration ----
+    ctx.dialog.on('click', '.preset_card_profile_name', async function (e) {
+        e.stopPropagation();
+        const { profileId, name, idx } = rowContext($(this));
+        await loadProfile(ctx, name, idx, profileId);
+    });
+
+    // ---- Profiles: Derive from Base ----
+    ctx.dialog.on('click', '.preset_card_profile_derive', async function (e) {
+        e.stopPropagation();
+        const { profileId, name, idx } = rowContext($(this));
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const parent = getProfile(meta, profileId);
+        if (!parent) return;
+        if (isArchiveProfile(parent as PromptBaseProfile) || (!isPromptBaseProfile(parent) && !isPromptDeltaProfile(parent))) {
+            toastr.warning(L('Cannot derive from a legacy profile'));
+            return;
+        }
+        const deltaName = await Popup.show.input(L('Derived profile name:'), '');
+        if (!deltaName) return;
+        const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
+        profiles.push(buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined));
+        meta.profiles = profiles;
+        try {
+            await saveMeta(name, idx, meta);
+        } catch (err) {
+            console.error('Derive failed', err);
+            toastr.error(L('Failed to save preset metadata'));
+            return;
+        }
+        toastr.success(L('Derived profile created'));
+        await refreshGrid(ctx);
+        ctx.dialog.find(`.preset_card_profile_row[data-profile-id="${String(parent.id)}"]`).parents('.preset_card_profile_group').addClass('expanded');
+    });
+
+    // ---- Profiles: Reset to parent ----
+    ctx.dialog.on('click', '.preset_card_profile_reset', async function (e) {
+        e.stopPropagation();
+        const { profileId, name, idx } = rowContext($(this));
+
+        const confirm = await callGenericPopup(L('Reset this configuration to its parent?'), POPUP_TYPE.CONFIRM);
+        if (!confirm) return;
+
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile) return;
+        if (isArchiveProfile(profile as PromptBaseProfile)) {
+            toastr.warning(L('This profile type cannot be reset'));
+            return;
+        }
+        if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) {
+            toastr.warning(L('This profile type cannot be reset'));
+            return;
+        }
+
+        try {
+            const result = await resetProfileCore(preset, meta, profile, name, idx);
+            if (result !== 'reset') return;
+        } catch (err) {
+            console.error('Reset failed', err);
+            toastr.error(L('Failed to save preset metadata'));
+            return;
+        }
+        refreshActivePresetUI(name);
+        clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
+        await refreshGrid(ctx);
+    });
+
+    // ---- Profiles: Delete Configuration (级联) ----
+    ctx.dialog.on('click', '.preset_card_profile_delete', async function (e) {
+        e.stopPropagation();
+        const { profileId, name, idx } = rowContext($(this));
+
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile) return;
+
+        const descendantIds = collectDescendantProfileIds(meta, profileId);
+        let confirmText = L('Delete this configuration?');
+        if (descendantIds.length > 0) {
+            const names = descendantIds.map((id) => getProfile(meta, id)?.name || id).join(', ');
+            confirmText += `\n${L('This will also delete the following derived configurations')}: ${names}`;
+        }
+        const confirm = await callGenericPopup(confirmText, POPUP_TYPE.CONFIRM);
+        if (!confirm) return;
+
+        const deleteIds = new Set([String(profileId), ...descendantIds]);
+        meta.profiles = (meta.profiles || []).filter(p => !deleteIds.has(String(p.id)));
+        // 级联：遍历全部 archive 隐藏 base——最后一个可见子节点被删则移除 archive。
+        const remainingArchives = (meta.profiles || []).filter((p) => isPromptBaseProfile(p) && isArchiveProfile(p as PromptBaseProfile));
+        for (const archive of remainingArchives) {
+            const stillReferenced = (meta.profiles || []).some(p =>
+                isPromptDeltaProfile(p) && String(p.baseId) === String(archive.id));
+            if (!stillReferenced) {
+                meta.profiles = (meta.profiles || []).filter(p => String(p.id) !== String(archive.id));
+            }
+        }
+        if (meta.archiveBaseId && !(meta.profiles || []).some(p => String(p.id) === meta.archiveBaseId)) {
+            delete meta.archiveBaseId;
+        }
+        const active = getActiveProfile();
+        if (active && active.presetName === name && deleteIds.has(active.profileId)) {
+            setActiveProfile(undefined);
+        }
+        try {
+            await saveMeta(name, idx, meta);
+        } catch (err) {
+            console.error('Delete profile failed', err);
+            toastr.error(L('Failed to save preset metadata'));
+            return;
+        }
+        await refreshGrid(ctx);
+    });
+
+    // ---- Profiles: Export Configuration ----
+    ctx.dialog.on('click', '.preset_card_profile_export', async function (e) {
+        e.stopPropagation();
+        const { profileId, idx } = rowContext($(this));
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile) return;
+
+        const choice = await chooseProfileExportAction();
+        if (choice === 'tree') {
+            if (isPromptBaseProfile(profile) || isPromptDeltaProfile(profile)) {
+                warnV1ExcludedFromTreeExport(meta);
+                download(buildTreeExportData(meta, profile.id), `${profile.name}-tree.json`, 'application/json');
+            } else {
+                download(buildProfileExportData(profile, meta), `${profile.name}.json`, 'application/json');
+            }
+        } else if (choice === 'profile') {
+            download(buildProfileExportData(profile, meta), `${profile.name}.json`, 'application/json');
+        }
+    });
+
+    // ---- Profiles: Import Configuration ----
+    ctx.dialog.on('click', '.preset_card_import_profile_btn', function (e) {
+        e.stopPropagation();
+        const { name, idx } = cardContext($(this));
+
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = async (event) => {
+            const file = (event.target as HTMLInputElement).files?.[0];
+            if (!file) return;
+            await importProfileFile(ctx, name, idx, file);
+        };
+        input.click();
+    });
+
+    // ---- Profiles: Edit Configuration (open profile editor popup) ----
+    ctx.dialog.on('click', '.preset_card_profile_edit', async function (e) {
+        e.stopPropagation();
+        const { profileId, name, idx } = rowContext($(this));
+
+        const preset = openai_settings[idx] as Preset;
+        const meta = readMeta(preset);
+        const profile = getProfile(meta, profileId);
+        if (!profile) return;
+        if (isArchiveProfile(profile as PromptBaseProfile) || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) {
+            toastr.warning(L('This profile type cannot be edited with switches'));
+            return;
+        }
+        await openProfileEditorPopup(
+            { sessionEdits: ctx.sessionEdits, pendingToggles: ctx.pendingToggles, refreshActivePresetUI, onGridRefresh: () => refreshGrid(ctx) },
+            name,
+            idx,
+            profileId,
+        );
+    });
+
+    // ---- Import button（触发 ST 原生导入）----
+    ctx.dialog.on('click', '#preset_cards_import_btn', function () {
+        $('#openai_preset_import_file').trigger('click');
+        ctx.dialog.closest('.popup').find('.popup-controls .menu_button').click();
+    });
+}

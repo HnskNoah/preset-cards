@@ -9,13 +9,11 @@ import {
     type PresetProfile,
     type PromptBaseProfile,
     type PromptDefaultSnapshotEntry,
-    type PromptDeltaChange,
     type PromptDeltaProfile,
-    type PromptFields,
-    type PromptSampling,
+    type PromptProfileEntry,
 } from './meta.js';
-import { promptFieldsEqual, resolveProfilePrompts, snapshotToChanges, PROMPT_FIELD_WHITELIST } from './promptToggle.js';
-import { convertV1ToBase } from './profileActions.js';
+import { promptFieldsEqual, resolveProfilePrompts, resolveParentStates, snapshotToDelta } from './promptToggle.js';
+import { buildArchiveBase, isArchiveProfile, makeBaseProfile, makeDeltaProfile } from './profileActions.js';
 
 // Two-button choice popup: update current profile, or create a new subprofile (delta).
 export function chooseProfileSaveTarget(): Promise<'update' | 'create' | null> {
@@ -75,48 +73,86 @@ export async function chooseFromOptions<T extends string>(title: string, options
     return promise;
 }
 
-// 单 profile 自包含导出（旧版格式）：base → prompt_base / delta → 附解析后完整状态快照 / v1 → settings。
-// 附带预设的 defaultSnapshot（出厂基线）与 locked 标记：导入后 reset 仍可还原出厂值（R：导入 base 无基线回归修复）。
+/** 判断导入的 profile 是否相对出厂基线有差异（无差异则不建 archive base）。 */
+function profileDiffersFromDefault(profile: PromptBaseProfile, meta: PresetMeta): boolean {
+    const snap = meta.defaultSnapshot ?? [];
+    const snapById = new Map<string, PromptDefaultSnapshotEntry>(snap.map((e) => [e.identifier, e]));
+
+    // 挂载态差异：mounted 集合或 enabled 不同
+    const profileMounted = new Set(profile.prompts.filter((e) => e.mounted).map((e) => e.identifier));
+    const snapMounted = new Set(snap.filter((e) => e.mounted).map((e) => e.identifier));
+    if (profileMounted.size !== snapMounted.size) return true;
+    for (const id of profileMounted) {
+        if (!snapMounted.has(id)) return true;
+    }
+    for (const entry of profile.prompts) {
+        if (!entry.mounted) continue;
+        const base = snapById.get(entry.identifier);
+        if (!base) return true;
+        if (base.enabled !== entry.enabled) return true;
+        if (!promptFieldsEqual(base.originalFields ?? {}, entry.fields ?? {})) return true;
+    }
+    // unusedIds 差异
+    const profileUnused = new Set(profile.unusedIds ?? []);
+    const snapUnused = new Set(snap.filter((e) => !e.mounted).map((e) => e.identifier));
+    if (profileUnused.size !== snapUnused.size) return true;
+    for (const id of profileUnused) {
+        if (!snapUnused.has(id)) return true;
+    }
+    // 采样差异
+    if (JSON.stringify(profile.sampling ?? null) !== JSON.stringify(meta.defaultSampling ?? null)) return true;
+    // extra 差异
+    if (JSON.stringify(profile.extra ?? null) !== JSON.stringify(meta.defaultExtra ?? null)) return true;
+    return false;
+}
+
+// 单 profile 自包含导出（fv3）：base → prompt_base（含 mounted/unused/order/sampling/extra）/ delta → 附解析后完整状态快照。
+// 附带预设的 defaultSnapshot + defaultSampling + defaultExtra（出厂基线）与 locked 标记：导入后 reset 仍可还原出厂值。
 export function buildProfileExportData(profile: PresetProfile, meta: PresetMeta): string {
     const base = (meta.defaultSnapshot && meta.defaultSnapshot.length > 0) ? meta.defaultSnapshot : undefined;
+    const baseline = {
+        ...(base ? { defaultSnapshot: base, defaultSnapshotLocked: meta.defaultSnapshotLocked === true } : {}),
+        ...(meta.defaultSampling ? { defaultSampling: meta.defaultSampling } : {}),
+        ...(meta.defaultExtra ? { defaultExtra: meta.defaultExtra } : {}),
+    };
     if (isPromptBaseProfile(profile)) {
         return JSON.stringify({
             kind: profile.kind,
             formatVersion: profile.formatVersion,
             prompts: profile.prompts,
+            ...(profile.unusedIds ? { unusedIds: profile.unusedIds } : {}),
             ...(profile.sampling ? { sampling: profile.sampling } : {}),
             ...(profile.extra ? { extra: profile.extra } : {}),
-            ...(base ? { defaultSnapshot: base, defaultSnapshotLocked: meta.defaultSnapshotLocked === true } : {}),
+            ...baseline,
         }, null, 4);
     }
     if (isPromptDeltaProfile(profile)) {
-        // 导出自包含：附上解析后的完整状态快照（delta 自身父链+差异，含值字段 fields），导入时可完整还原；
-        // changes 额外提供「相对文件基线」的版本，导入侧挂桥 base（bridgeBase）时原样可用（newId 语义见 mergeImportedProfiles）。
-        const resolvedState = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
-        const fileBaselineStates = defaultSnapshotStates(base);
-        const changesVsFileBaseline = fileBaselineStates.length ? changesRelativeToBaseline(resolvedState, fileBaselineStates) : profile.changes;
+        // 导出自包含：内嵌「父状态」（不含 delta 自身 changes），导入时 delta 的 changes 叠加其上 = 完整还原。
+        // 若内嵌完整状态（含 changes）作 base，导入再叠 changes 会双重应用。
+        const parentState = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
         return JSON.stringify({
             kind: profile.kind,
             formatVersion: profile.formatVersion,
             baseId: profile.baseId,
             base: {
                 name: 'Imported Parent',
-                prompts: resolvedState,
+                prompts: parentState,
             },
-            changes: changesVsFileBaseline,
+            changes: profile.changes,
+            ...(profile.order ? { order: profile.order } : {}),
             ...(profile.sampling ? { sampling: profile.sampling } : {}),
             ...(profile.extra ? { extra: profile.extra } : {}),
-            ...(base ? { defaultSnapshot: base, defaultSnapshotLocked: meta.defaultSnapshotLocked === true } : {}),
+            ...baseline,
         }, null, 4);
     }
     return JSON.stringify(profile.settings, null, 4);
 }
 
-// 导出完整分支树 prompt_tree：收集全部 base/delta，按 root→leaf（DFS）排序，
-// 保证每个 delta 的 baseId 祖先在其前，保留原始 id/baseId 以便导入还原。
-// targetId 记录用户点击导出时的 profile 原始 id（仅行级导出提供；头部整树导出不提供）。
+// 导出完整分支树 prompt_tree：收集全部非 archive 的 base/delta，按 root→leaf（DFS）排序。
+// archive 隐藏 base 不导出；其 delta 子节点作为孤立根收尾（baseId 指向未导出的 archive，再导入会断链告警，
+// 但保持「不导出隐藏 archive」的语义优先——archive 是导入坐标系锚点，不应泄露进导出文件）。
 export function buildTreeExportData(meta: PresetMeta, targetId?: string): string {
-    const profiles = meta.profiles.filter(p => isPromptBaseProfile(p) || isPromptDeltaProfile(p)) as (PromptBaseProfile | PromptDeltaProfile)[];
+    const profiles = meta.profiles.filter(p => (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) && !isArchiveProfile(p as PromptBaseProfile)) as (PromptBaseProfile | PromptDeltaProfile)[];
     const childrenByParent = new Map<string, PromptDeltaProfile[]>();
     for (const p of profiles) {
         if (isPromptDeltaProfile(p)) {
@@ -129,8 +165,14 @@ export function buildTreeExportData(meta: PresetMeta, targetId?: string): string
     const visited = new Set<string>();
     const visit = (p: PromptBaseProfile | PromptDeltaProfile): void => {
         if (visited.has(p.id)) return;
+        // 父链回溯时遇到 archive 隐藏 base：不访问它（不导出 archive），当前 delta 留作孤立收尾
         if (isPromptDeltaProfile(p)) {
             const parent = getProfile(meta, p.baseId);
+            if (parent && isArchiveProfile(parent as PromptBaseProfile)) {
+                visited.add(p.id);
+                ordered.push(p);
+                return;
+            }
             if (parent && (isPromptBaseProfile(parent) || isPromptDeltaProfile(parent))) visit(parent);
         }
         visited.add(p.id);
@@ -140,21 +182,33 @@ export function buildTreeExportData(meta: PresetMeta, targetId?: string): string
     for (const p of profiles) {
         if (isPromptBaseProfile(p)) visit(p);
     }
-    // 孤立 delta（baseId 无对应 base/delta）：随 root 树之后收尾
+    // 孤立 delta（baseId 无对应 base/delta 或被 archive 隐藏）：随 root 树之后收尾
     for (const p of profiles) {
         if (!visited.has(p.id)) visit(p);
     }
-    const exported = ordered.map(p => isPromptBaseProfile(p)
-        ? { kind: p.kind, id: p.id, name: p.name, prompts: p.prompts, ...(p.sampling ? { sampling: p.sampling } : {}), ...(p.extra ? { extra: p.extra } : {}) }
-        : { kind: p.kind, id: p.id, name: p.name, baseId: p.baseId, changes: p.changes, ...(p.sampling ? { sampling: p.sampling } : {}), ...(p.extra ? { extra: p.extra } : {}) });
+    // archive 的直接 delta 子节点：内嵌「父状态」（archive 的解析状态，不含 delta 自身 changes），
+    // 保证树导出→再导入不丢继承的父链条目，且不与 delta 的 changes 双重应用。
+    // 与单 delta 导出（buildProfileExportData）的 embedded base 格式对齐。
+    const exported = ordered.map((p) => {
+        if (isPromptDeltaProfile(p)) {
+            const parent = getProfile(meta, p.baseId);
+            if (parent && isArchiveProfile(parent as PromptBaseProfile)) {
+                const parentState = resolveProfilePrompts(parent as PromptBaseProfile | PromptDeltaProfile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
+                return { ...p, base: { name: 'Imported Parent', prompts: parentState } };
+            }
+        }
+        return p;
+    });
     const payload = {
         kind: 'prompt_tree' as const,
-        formatVersion: 2,
-        profiles: exported,
+        formatVersion: 3,
+        profiles: structuredClone(exported),
         // 附带预设 defaultSnapshot（出厂基线）与 locked 标记：导入后 reset 仍可还原出厂值
         ...((meta.defaultSnapshot && meta.defaultSnapshot.length > 0)
             ? { defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked === true }
             : {}),
+        ...(meta.defaultSampling ? { defaultSampling: meta.defaultSampling } : {}),
+        ...(meta.defaultExtra ? { defaultExtra: meta.defaultExtra } : {}),
         ...(targetId ? { targetId } : {}),
     };
     return JSON.stringify(payload, null, 4);
@@ -168,109 +222,25 @@ export function warnV1ExcludedFromTreeExport(meta: PresetMeta): void {
 }
 
 /**
- * 构建桥 base（bridgeBase，prompt_base）：为 enabled 已知的条目把本地基线变换到文件基线。
- * enabled 未知的条目不能进入 active-only base，由 changesRelativeToBaseline 在实际使用时展开。
- * - 文件基线（fileBaseline）= 导出方出厂基线；mounted 条目含 enabled，全部条目可含 originalFields。
- * - 本地基线（localBaseline）= 导入方 defaultSnapshot；不存在或条目缺失则视为空（该条目全量写文件基线值）。
- * - fields = 白名单字段中本地基线（localBaseline）与文件基线（fileBaseline）有差异的字段（值取文件基线）；
- *   本地基线无记录/无字段 → 全量写文件基线值，保证 本地基线+桥=文件基线。
- */
-function buildBridgeBase(
-    fileBaseline: PromptDefaultSnapshotEntry[],
-    localBaseline: PromptDefaultSnapshotEntry[] | undefined,
-    name: string,
-    id: string,
-): PromptBaseProfile {
-    const xById = new Map<string, PromptDefaultSnapshotEntry>();
-    if (localBaseline) {
-        for (const e of localBaseline) xById.set(e.identifier, e);
-    }
-    const prompts: PromptBaseProfile['prompts'] = fileBaseline.flatMap((e) => {
-        if (typeof e.enabled !== 'boolean') return [];
-        const entry: PromptBaseProfile['prompts'][number] = { identifier: e.identifier, enabled: e.enabled };
-        const bFields = e.originalFields ?? {};
-        const x = xById.get(e.identifier);
-        const diff: Record<string, any> = {};
-        let hasDiff = false;
-        if (x) {
-            const xFields = x.originalFields ?? {};
-            for (const key of PROMPT_FIELD_WHITELIST) {
-                if (bFields[key] !== undefined && bFields[key] !== xFields[key]) {
-                    diff[key] = bFields[key];
-                    hasDiff = true;
-                }
-            }
-        } else {
-            // 本地基线无此条目（或本地基线整体为空）：全量写文件基线值，确保 本地基线+桥=文件基线
-            for (const key of PROMPT_FIELD_WHITELIST) {
-                if (bFields[key] !== undefined) {
-                    diff[key] = bFields[key];
-                    hasDiff = true;
-                }
-            }
-        }
-        if (hasDiff) entry.fields = diff;
-        return [entry];
-    });
-    return { formatVersion: 2, kind: 'prompt_base', id, name, prompts };
-}
-
-function defaultSnapshotStates(
-    snapshot: PromptDefaultSnapshotEntry[] | undefined,
-): { identifier: string; enabled?: boolean; fields?: PromptFields }[] {
-    return (snapshot ?? []).map((entry) => ({
-        identifier: entry.identifier,
-        enabled: entry.enabled,
-        fields: entry.originalFields,
-    }));
-}
-
-function changesRelativeToBaseline(
-    entries: { identifier: string; enabled: boolean; fields?: PromptFields }[],
-    fileBaselineStates: { identifier: string; enabled?: boolean; fields?: PromptFields }[],
-): PromptDeltaChange[] {
-    const knownEnabledBaseline = fileBaselineStates.filter(
-        (entry): entry is { identifier: string; enabled: boolean; fields?: PromptFields } => typeof entry.enabled === 'boolean',
-    );
-    const changes = snapshotToChanges(entries, knownEnabledBaseline, []);
-    const baselineById = new Map(fileBaselineStates.map((entry) => [entry.identifier, entry]));
-    for (const entry of entries) {
-        const baseline = baselineById.get(entry.identifier);
-        if (typeof baseline?.enabled === 'boolean') continue;
-        const change: PromptDeltaChange = { identifier: entry.identifier, enabled: entry.enabled };
-        const fullFields = { ...(baseline?.fields ?? {}), ...(entry.fields ?? {}) };
-        if (Object.keys(fullFields).length > 0) {
-            change.fields = fullFields;
-        }
-        const existing = changes.find((c) => c.identifier === entry.identifier);
-        if (existing) {
-            existing.enabled = change.enabled;
-            if (change.fields) existing.fields = change.fields;
-        } else {
-            changes.push(change);
-        }
-    }
-    return changes;
-}
-
-/**
- * 解析导入的 profile 数据，返回并入导入条目后的新 profiles 数组与警告消息（idMap 去重 / base 复用 / freshId）。
- * 无 UI / 持久化副作用：不做文件读取 / 弹窗 / 持久化，不改动入参 existing；warning 由调用方 toast。
- * 注：经 L() 读 localStorage、newProfileId 含时间戳/随机数，非引用透明。
+ * 解析导入的 profile 数据，返回并入导入条目后的新 profiles 数组、警告消息、以及新建的 archive base id。
+ * 无 UI / 持久化副作用。warning 由调用方 toast。
  *
- * 导入坐标系迁移：由文件基线（fileBaseline）与本地基线（localBaseline）构建桥 base（bridgeBase，本地基线+桥=文件基线），
- * 导入的 profile 一律转 delta 挂桥下；本地基线 meta.defaultSnapshot 保持原样不变（不覆盖），
- * 文件基线仅用于算桥的 diff。
+ * 导入统一设计：
+ * - 任何导入文件，若其内容相对出厂 defaultSnapshot 有差异，先生成一个隐藏 archive base（作坐标系锚点）；
+ *   无差异则不建（且不删除 defaultSnapshot）。
+ * - v1 全量快照 → convertV1ToBase → archive base（隐藏）。archive 本身就是相对出厂基线的差异集。
+ * - fv3 base → 挂该次导入的 archive base 下，转成 delta（changes 相对 archive）。
+ * - fv3 delta → 挂该次导入的 archive base 下（保留自身变化）。
+ * - archive base 隐藏（不进树），最后一个可见子节点删除时由调用方级联删除。
  */
 export function mergeImportedProfiles(
     parsed: Record<string, any>,
     existing: PresetProfile[],
     profileName: string,
-    localDefaultSnapshot?: PromptDefaultSnapshotEntry[],
-): { profiles: PresetProfile[]; warnings: string[] } {
+    meta: PresetMeta,
+): { profiles: PresetProfile[]; warnings: string[]; archiveBaseId?: string } {
     const profiles = [...existing];
     const warnings: string[] = [];
-    // 同一毫秒内生成多个 id 可能重复：对既有 id 及本批已生成 id 去重
     const usedIds = new Set(profiles.map((p) => p.id));
     const freshId = (): string => {
         let id = newProfileId();
@@ -278,196 +248,151 @@ export function mergeImportedProfiles(
         usedIds.add(id);
         return id;
     };
-    const newId = freshId();
 
-    // 文件基线（导出方出厂基线）；形状合法才接受，缺失则无桥 base（bridgeBase），回退旧行为
-    const fileBaseline = (Array.isArray(parsed?.defaultSnapshot) && parsed.defaultSnapshot.every((d: any) =>
-        d && typeof d === 'object' && typeof d.identifier === 'string'
-        && (d.enabled === undefined || typeof d.enabled === 'boolean')
-        && (d.originalFields === undefined || d.originalFields === null || typeof d.originalFields === 'object')))
-        ? parsed.defaultSnapshot as PromptDefaultSnapshotEntry[]
-        : undefined;
-    // 文件基线状态（含 originalFields 作 fields）；enabled 未知的 unused 条目由 changesRelativeToBaseline 显式展开。
-    const fileBaselineStates = defaultSnapshotStates(fileBaseline);
+    // ---- v1 全量设置快照：含 prompts 数组且无 kind → 迁移为隐藏 archive base + 可见 delta 子节点 ----
+    if (parsed && typeof parsed === 'object' && parsed.kind === undefined && Array.isArray(parsed.prompts)) {
+        if (!profileDiffersFromDefault(buildArchiveBase({ id: freshId(), name: profileName, settings: parsed }), meta)) {
+            // 与出厂基线无差异：不建 archive base（不删除 defaultSnapshot）
+            return { profiles, warnings };
+        }
+        // 隐藏 archive base（坐标系锚点）+ 可见 delta 子节点（导入的 v1 配置，用户可加载/编辑派生）
+        const archive = buildArchiveBase({ id: freshId(), name: profileName, settings: parsed });
+        profiles.push(archive);
+        const visible = makeDeltaProfile({ id: freshId(), name: profileName, baseId: archive.id, changes: [] });
+        profiles.push(visible);
+        return { profiles, warnings, archiveBaseId: archive.id };
+    }
 
-    // 桥 base（bridgeBase）：本地基线 + 桥 = 文件基线。桥是导入 profile 的唯一父（base），本地基线不存在则视为空。
-    // 仅当文件基线非空才建桥；空（或缺失）不建，回退旧行为。
-    const bridgeBase = (fileBaseline && fileBaseline.length > 0)
-        ? buildBridgeBase(fileBaseline, localDefaultSnapshot, profileName, freshId())
-        : undefined;
-    if (bridgeBase) profiles.push(bridgeBase);
-
+    // ---- fv3 base / delta / prompt_tree ----
+    // 解析出的「用户可见 profile」集合（archive 除外）
+    const rawProfiles: (PromptBaseProfile | PromptDeltaProfile)[] = [];
+    /** 带内嵌父状态的 delta：delta 原 id → 父状态（树/单 delta 导出时为 archive 或父 base 的解析状态）。
+     * 用于多 archive 场景：每个带 base 的 delta 独立建 archive 锚定，避免全部挂到单个根 archive。 */
+    const deltaBaseMap = new Map<string, { prompts: PromptProfileEntry[] }>();
     if (parsed && parsed.kind === 'prompt_tree' && Array.isArray(parsed.profiles)) {
-        // 完整分支链导入：oldId → 实际 id 映射（base 与 delta 都记录，保证嵌套 delta 的 baseId 可解析），按 root→leaf 顺序重建。
-        // 有桥 base（bridgeBase）时 base 一律转 delta 挂桥下（changes 相对文件基线）；无桥回退旧行为（base 复用/新建）。
-        const idMap = new Map<string, string>();
-        const targetId = typeof parsed.targetId === 'string' ? parsed.targetId : undefined;
-        let unresolved = false;
         for (const entry of parsed.profiles) {
             if (!entry) continue;
             if (entry.kind === 'prompt_base' && Array.isArray(entry.prompts)) {
-                if (bridgeBase) {
-                    const baseNewId = freshId();
-                    if (entry.id !== undefined) idMap.set(String(entry.id), baseNewId);
-                    profiles.push({
-                        formatVersion: 2,
-                        kind: 'prompt_delta',
-                        id: baseNewId,
-                        name: entry.name || profileName,
-                        baseId: bridgeBase.id,
-                        changes: changesRelativeToBaseline(entry.prompts, fileBaselineStates),
-                        ...(entry.sampling ? { sampling: entry.sampling } : {}),
-                        ...(entry.extra ? { extra: entry.extra } : {}),
-                    });
-                } else {
-                    // 内容完全相同的现有 base 复用（含 fields 白名单、sampling、extra 均一致）；否则新建并保留导出名称
-                    const existing = profiles.find((b): b is PromptBaseProfile =>
-                        isPromptBaseProfile(b) && b.name === (entry.name || profileName)
-                        && b.prompts.length === entry.prompts.length
-                        && b.prompts.every((e, i) => e.identifier === entry.prompts[i].identifier
-                            && e.enabled === entry.prompts[i].enabled
-                            && promptFieldsEqual(e.fields ?? {}, entry.prompts[i].fields ?? {}))
-                        && JSON.stringify(b.sampling ?? null) === JSON.stringify(entry.sampling ?? null)
-                        && JSON.stringify(b.extra ?? null) === JSON.stringify(entry.extra ?? null));
-                    if (existing) {
-                        if (entry.id !== undefined) idMap.set(String(entry.id), existing.id);
-                    } else {
-                        const baseNewId = freshId();
-                        profiles.push({
-                            formatVersion: 2,
-                            kind: 'prompt_base',
-                            id: baseNewId,
-                            name: entry.name || profileName,
-                            prompts: entry.prompts,
-                            ...(entry.sampling ? { sampling: entry.sampling } : {}),
-                            ...(entry.extra ? { extra: entry.extra } : {}),
-                        });
-                        if (entry.id !== undefined) idMap.set(String(entry.id), baseNewId);
-                    }
-                }
+                rawProfiles.push(makeBaseProfile({ id: entry.id, name: entry.name, prompts: entry.prompts, ...(entry.unusedIds ? { unusedIds: entry.unusedIds } : {}), ...(entry.sampling ? { sampling: entry.sampling } : {}), ...(entry.extra ? { extra: entry.extra } : {}) }));
             } else if (entry.kind === 'prompt_delta' && Array.isArray(entry.changes)) {
-                // 目标 profile（原始 id 匹配 targetId）用弹窗输入名；无 targetId 时回退旧行为（DFS 末元素）；base 不消费弹窗名
-                const isTarget = targetId !== undefined
-                    ? entry.id !== undefined && String(entry.id) === targetId
-                    : entry === parsed.profiles[parsed.profiles.length - 1];
-                const rawBaseId = typeof entry.baseId === 'string' ? entry.baseId : '';
-                const resolvedBaseId = rawBaseId ? idMap.get(rawBaseId) : undefined;
-                if (rawBaseId && !resolvedBaseId) unresolved = true;
-                const deltaNewId = freshId();
-                if (entry.id !== undefined) idMap.set(String(entry.id), deltaNewId);
-                profiles.push({
-                    formatVersion: 2,
-                    kind: 'prompt_delta',
-                    id: deltaNewId,
-                    name: isTarget ? profileName : (entry.name || profileName),
-                    baseId: resolvedBaseId || rawBaseId,
-                    changes: entry.changes,
-                    ...(entry.sampling ? { sampling: entry.sampling } : {}),
-                    ...(entry.extra ? { extra: entry.extra } : {}),
-                });
+                if (Array.isArray(entry.base?.prompts) && entry.id !== undefined) {
+                    deltaBaseMap.set(String(entry.id), { prompts: entry.base.prompts });
+                }
+                rawProfiles.push(makeDeltaProfile({ id: entry.id, name: entry.name, baseId: entry.baseId, changes: entry.changes, ...(entry.order ? { order: entry.order } : {}), ...(entry.sampling ? { sampling: entry.sampling } : {}), ...(entry.extra ? { extra: entry.extra } : {}) }));
             }
-        }
-        if (unresolved) {
-            warnings.push(L('Base profile not found for this imported derived configuration'));
         }
     } else if (parsed && parsed.kind === 'prompt_base' && Array.isArray(parsed.prompts)) {
-        if (bridgeBase) {
-            // 桥 base：base 转 delta 挂桥下（changes 相对文件基线）
-            profiles.push({
-                formatVersion: 2,
-                kind: 'prompt_delta',
-                id: newId,
-                name: profileName,
-                baseId: bridgeBase.id,
-                changes: changesRelativeToBaseline(parsed.prompts, fileBaselineStates),
-                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
-                ...(parsed.extra ? { extra: parsed.extra } : {}),
-            });
-        } else {
-            profiles.push({
-                formatVersion: 2,
-                kind: 'prompt_base',
-                id: newId,
-                name: profileName,
-                prompts: parsed.prompts,
-                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
-                ...(parsed.extra ? { extra: parsed.extra } : {}),
-            });
-        }
+        rawProfiles.push(makeBaseProfile({ id: parsed.id, name: parsed.name, prompts: parsed.prompts, ...(parsed.unusedIds ? { unusedIds: parsed.unusedIds } : {}), ...(parsed.sampling ? { sampling: parsed.sampling } : {}), ...(parsed.extra ? { extra: parsed.extra } : {}) }));
     } else if (parsed && parsed.kind === 'prompt_delta' && Array.isArray(parsed.changes)) {
-        if (bridgeBase) {
-            // 桥 base：从 base 快照（= delta 完整解析状态）重算「相对文件基线」的 changes 挂桥下；
-            // 新旧格式均可（base.prompts 都是完整状态），无 base 快照时用文件 changes 尽力而为。
-            const baseStates = Array.isArray(parsed.base?.prompts)
-                ? parsed.base.prompts as { identifier: string; enabled: boolean; fields?: Record<string, any> }[]
-                : undefined;
-            const changesVsFileBaseline = baseStates ? changesRelativeToBaseline(baseStates, fileBaselineStates) : parsed.changes;
-            profiles.push({
-                formatVersion: 2,
-                kind: 'prompt_delta',
-                id: newId,
-                name: profileName,
-                baseId: bridgeBase.id,
-                changes: changesVsFileBaseline,
-                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
-                ...(parsed.extra ? { extra: parsed.extra } : {}),
-            });
-        } else {
-            // 无桥（bridgeBase）：若文件带 base 快照：先复用（内容相同）或新建 main，再挂 delta
-            let baseId = '';
-            const importedBase = parsed.base as { name?: string; prompts?: { identifier: string; enabled: boolean; fields?: Record<string, any> }[]; sampling?: PromptSampling; extra?: Record<string, unknown> } | undefined;
-            if (importedBase && Array.isArray(importedBase.prompts)) {
-                const existing = profiles.find((b): b is PromptBaseProfile =>
-                    isPromptBaseProfile(b) && b.name === (importedBase.name || profileName)
-                    && b.prompts.length === importedBase.prompts!.length
-                    && b.prompts.every((e, i) => e.identifier === importedBase.prompts![i].identifier
-                        && e.enabled === importedBase.prompts![i].enabled
-                        && promptFieldsEqual(e.fields ?? {}, importedBase.prompts![i].fields ?? {}))
-                    && JSON.stringify(b.sampling ?? null) === JSON.stringify(importedBase.sampling ?? null)
-                    && JSON.stringify(b.extra ?? null) === JSON.stringify(importedBase.extra ?? null));
-                if (existing) {
-                    baseId = existing.id;
-                } else {
-                    const baseIdNew = freshId();
-                    profiles.push({
-                        formatVersion: 2,
-                        kind: 'prompt_base',
-                        id: baseIdNew,
-                        name: importedBase.name || profileName,
-                        prompts: importedBase.prompts,
-                        ...(importedBase.sampling ? { sampling: importedBase.sampling } : {}),
-                        ...(importedBase.extra ? { extra: importedBase.extra } : {}),
-                    });
-                    baseId = baseIdNew;
-                }
-            } else {
-                baseId = typeof parsed.baseId === 'string' ? parsed.baseId : '';
-            }
-
-            profiles.push({
-                formatVersion: 2,
-                kind: 'prompt_delta',
-                id: newId,
-                name: profileName,
-                baseId: baseId,
-                changes: parsed.changes,
-                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
-                ...(parsed.extra ? { extra: parsed.extra } : {}),
-            });
-
-            const baseExists = profiles.some(b => isPromptBaseProfile(b) && b.id === baseId);
-            if (baseId && !baseExists) {
-                warnings.push(L('Base profile not found for this imported derived configuration'));
-            }
-        }
-    } else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.prompts)) {
-        // 非 prompt_tree / 单 base / 单 delta，但含 prompts 数组：视为旧版 v1 全量设置快照。
-        // 导入时自动迁移为 v2 base（删除原 v1 形态）：prompt 开关+值字段 + 采样参数（存在才写入）。
-        // prompts 数组守卫：排除角色卡等任意对象 JSON，避免把非预设对象迁移成垃圾 base。
-        profiles.push(convertV1ToBase({ id: newId, name: profileName, settings: parsed }));
+        rawProfiles.push(makeDeltaProfile({ id: parsed.id, name: parsed.name, baseId: parsed.baseId, changes: parsed.changes, ...(parsed.order ? { order: parsed.order } : {}), ...(parsed.sampling ? { sampling: parsed.sampling } : {}), ...(parsed.extra ? { extra: parsed.extra } : {}) }));
     } else {
         throw new Error('Imported configuration is not a valid preset snapshot (missing prompts array)');
     }
 
-    return { profiles, warnings };
+    if (rawProfiles.length === 0) {
+        throw new Error('Imported configuration is not a valid preset snapshot (missing prompts array)');
+    }
+
+    // 找根 base（首个 base，或 targetId 指向的 profile）
+    const targetId = typeof parsed.targetId === 'string' ? parsed.targetId : undefined;
+    const firstBase = rawProfiles.find(isPromptBaseProfile);
+    // 内嵌完整父状态（parsed.base.prompts）：单 delta 导出、或 tree 中 archive 的直接 delta 子节点（父不在文件内）
+    // 都带 base，作为根可完整还原。父已在文件内的 delta 用 rawProfiles 里的父，不取 embeddedBase。
+    const embeddedBaseRaw = (parsed && parsed.kind === 'prompt_delta' && Array.isArray(parsed.base?.prompts))
+        ? parsed.base
+        : (parsed && parsed.kind === 'prompt_tree' && Array.isArray(parsed.profiles))
+            ? parsed.profiles.find((e: any) => e && e.kind === 'prompt_delta' && Array.isArray(e.base?.prompts))?.base
+            : undefined;
+    const embeddedBase = embeddedBaseRaw && Array.isArray(embeddedBaseRaw.prompts)
+        ? makeBaseProfile({ id: parsed.baseId, name: embeddedBaseRaw.name ?? 'Imported Parent', prompts: embeddedBaseRaw.prompts })
+        : undefined;
+    // 根内容相对出厂基线是否有差异（决定是否建 archive）
+    const rootProfile: PromptBaseProfile | undefined = firstBase
+        ? firstBase
+        : (embeddedBase ?? resolveImportedRootDelta(rawProfiles));
+    // 建 archive 的时机：根内容与出厂基线有差异，或存在「父不在文件内」的 delta（embedded base / 孤立根）需要锚定。
+    // 后者即使内容 == 出厂基线也要建，否则 delta 的 baseId 落到不存在的源 id 上造成悬空。
+    const needArchive = rootProfile
+        ? (profileDiffersFromDefault(rootProfile, meta) || (rootProfile !== firstBase && rawProfiles.some((p) => isPromptDeltaProfile(p))))
+        : false;
+
+    // 建 archive base：
+    // - rootArchiveId：根 archive（对应 firstBase 或「根 delta」= 第一个带 base 的 delta 的父状态 / 孤立根），承载无 base 的孤立 delta 与 base 转 delta。
+    // - deltaOwnArchiveId：除根 delta 外，每个「带内嵌父状态」的 delta 独立建 archive 锚定（多 archive 场景，避免全部挂到根）。
+    // 根 archive 对应 firstBase，或「根 delta」= 第一个带内嵌 base 的 delta 的父状态（纯 delta 树时）。
+    // 纯 delta 树：根 delta 挂根 archive，其余带 base 的 delta 各建独立 archive。
+    // 有 firstBase：所有带 base 的 delta 各建独立 archive（其父是外部 archive，非文件内 base）。
+    const rootDeltaId = firstBase ? undefined : (deltaBaseMap.keys().next().value as string | undefined);
+    let rootArchiveId: string | undefined;
+    const deltaOwnArchiveId = new Map<string, string>();
+    if (needArchive) {
+        const rootArchive = buildArchiveBaseFromRoot(rootProfile as PromptBaseProfile);
+        profiles.push(rootArchive);
+        rootArchiveId = rootArchive.id;
+        for (const [deltaId, baseState] of deltaBaseMap) {
+            if (deltaId === rootDeltaId) continue;
+            const own = buildArchiveBaseFromRoot(makeBaseProfile({ id: 'tmp', name: 'Imported Archive', prompts: baseState.prompts }));
+            profiles.push(own);
+            deltaOwnArchiveId.set(deltaId, own.id);
+        }
+    }
+
+    // id 重映射（原 id → 新 id），挂 archive 下转 delta
+    const idMap = new Map<string, string>();
+    for (const raw of rawProfiles) {
+        if (raw.id !== undefined) idMap.set(String(raw.id), freshId());
+    }
+    const missingBaseIds: string[] = [];
+    for (const raw of rawProfiles) {
+        const id = idMap.get(String(raw.id)) ?? freshId();
+        const isTarget = targetId ? String(raw.id) === targetId : raw === rawProfiles[rawProfiles.length - 1];
+        const name = isTarget ? profileName : raw.name;
+
+        if (isPromptBaseProfile(raw)) {
+            // base 一律转 delta 挂 archive 下（archive 不存在时挂自身——表示无差异直接作为普通 base）
+            if (rootArchiveId) {
+                const resolved = resolveProfilePrompts(raw, rawProfiles);
+                const rootResolved = rootProfile ? resolveProfilePrompts(rootProfile, rawProfiles) : resolved;
+                const delta = snapshotToDelta(resolved, rootResolved, raw.unusedIds ?? []);
+                profiles.push(makeDeltaProfile({ id, name, baseId: rootArchiveId, changes: delta.changes, ...(delta.order ? { order: delta.order } : {}), ...(raw.sampling ? { sampling: raw.sampling } : {}), ...(raw.extra ? { extra: raw.extra } : {}) }));
+            } else {
+                // 无差异：base 直接作为普通可见 base（无需 archive 桥）
+                profiles.push({ ...raw, id, name });
+            }
+        } else {
+            const mappedBase = idMap.get(String(raw.baseId));
+            // 父解析优先级：文件内 idMap → 该 delta 自己的 archive → 根 archive → 原始 baseId。
+            // 带内嵌 base 的 delta 用自己 archive 锚定（多 archive 正确性）。
+            const ownArchive = deltaOwnArchiveId.get(String(raw.id));
+            const resolvedBaseId = ownArchive ?? mappedBase ?? (rootArchiveId ?? raw.baseId);
+            if (!mappedBase && !ownArchive && !rootArchiveId && !existing.some((p) => String(p.id) === String(raw.baseId))) {
+                missingBaseIds.push(String(raw.baseId));
+            }
+            profiles.push(makeDeltaProfile({ id, name, baseId: resolvedBaseId, changes: raw.changes, ...(raw.order ? { order: raw.order } : {}), ...(raw.sampling ? { sampling: raw.sampling } : {}), ...(raw.extra ? { extra: raw.extra } : {}) }));
+        }
+    }
+    if (missingBaseIds.length > 0) {
+        warnings.push(L('Base profile not found for this imported derived configuration'));
+    }
+
+    return { profiles, warnings, archiveBaseId: rootArchiveId };
+}
+
+/** 从导入的根 delta（无 base 时）构造根状态，用于差异检测。 */
+function resolveImportedRootDelta(
+    rawProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+): PromptBaseProfile | undefined {
+    // 找到「父不在本文件内」的 delta 作为根
+    const localIds = new Set(rawProfiles.map((p) => String(p.id)));
+    const root = rawProfiles.find((p) => isPromptDeltaProfile(p) && p.baseId && !localIds.has(String(p.baseId))) as PromptDeltaProfile | undefined;
+    if (!root) return undefined;
+    const resolved = resolveProfilePrompts(root, rawProfiles);
+    if (resolved.length === 0) return undefined;
+    return makeBaseProfile({ id: root.baseId || 'imported-root', name: root.name, prompts: resolved });
+}
+
+/** 从根状态构造 archive base（相对出厂基线的差异集）。 */
+function buildArchiveBaseFromRoot(root: PromptBaseProfile): PromptBaseProfile {
+    const prompts: PromptProfileEntry[] = root.prompts.map((e) => ({ ...e, fields: e.fields ? { ...e.fields } : undefined }));
+    return makeBaseProfile({ id: newProfileId(), name: 'Imported Archive', prompts, ...(root.sampling ? { sampling: root.sampling } : {}), ...(root.extra ? { extra: root.extra } : {}), archive: true });
 }

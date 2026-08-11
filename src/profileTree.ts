@@ -3,6 +3,7 @@
 // 对齐 importExport 的 childrenByParent + DFS 模式，额外用 visited 防环（损坏/导入成环不死循环）。
 
 import { isPromptBaseProfile, isPromptDeltaProfile, type PresetProfile } from './meta.js';
+import { isArchiveProfile } from './profileActions.js';
 
 export interface ProfileTreeNode {
     profile: PresetProfile;
@@ -10,20 +11,25 @@ export interface ProfileTreeNode {
 }
 
 /** 树序展平后的展示行。 */
-export interface FlattenedProfileRow {
-    profile: PresetProfile;
-    depth: number;
-}
+
 
 /**
  * 把平铺的 profiles 组织成派生关系森林。
  * 根 = base/v1 节点 + baseId 无对应 base/delta 父的孤立 delta；同层保持原数组相对顺序。
+ * archive 隐藏 base 不进树；但其 delta 子节点（导入的可见配置）提升为根，保证可见。
  */
 export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[] {
     const childrenByParent = new Map<string, ProfileTreeNode[]>();
     const nodeById = new Map<string, ProfileTreeNode>();
 
+    // archive 隐藏 base 不建立节点（不进树）；其 delta 子节点 baseId 指向它时按「无父」处理（提升为根）
+    const archiveIds = new Set<string>();
     for (const p of profiles) {
+        if (isPromptBaseProfile(p) && isArchiveProfile(p)) archiveIds.add(String(p.id));
+    }
+
+    for (const p of profiles) {
+        if (isPromptBaseProfile(p) && archiveIds.has(String(p.id))) continue;
         nodeById.set(String(p.id), { profile: p, children: [] });
     }
 
@@ -39,10 +45,12 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
         }
     }
 
-    // 根候选 = base/v1 节点 + baseId 无对应 base/delta 父的孤立 delta。
+    // 根候选 = base/v1 节点 + baseId 无对应 base/delta 父的孤立 delta（含 archive 的子节点）。
     // 按原数组顺序收集（同层保持原数组相对顺序）；成环簇（互相引用但无根祖先）随后收尾。
     const roots: ProfileTreeNode[] = [];
     for (const p of profiles) {
+        if (isPromptBaseProfile(p) && archiveIds.has(String(p.id))) continue;
+        if (!nodeById.has(String(p.id))) continue;
         if (isPromptBaseProfile(p) || !isPromptDeltaProfile(p)) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
             continue;
@@ -62,38 +70,14 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
     };
     for (const root of roots) mark(root);
     for (const p of profiles) {
+        if (archiveIds.has(String(p.id))) continue;
+        if (!nodeById.has(String(p.id))) continue;
         if (!reached.has(String(p.id))) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
             reached.add(String(p.id));
         }
     }
     return roots;
-}
-
-/**
- * DFS 根先序展平森林为展示行（父在子前），同层保持原数组相对顺序；visited 防环。
- */
-export function flattenProfileForest(forest: ProfileTreeNode[]): FlattenedProfileRow[] {
-    const result: FlattenedProfileRow[] = [];
-    const visited = new Set<string>();
-    const stack: { node: ProfileTreeNode; depth: number }[] = [];
-    for (let i = forest.length - 1; i >= 0; i--) {
-        stack.push({ node: forest[i], depth: 0 });
-    }
-    while (stack.length > 0) {
-        const { node, depth } = stack.pop() as { node: ProfileTreeNode; depth: number };
-        if (visited.has(String(node.profile.id))) continue;
-        visited.add(String(node.profile.id));
-        result.push({ profile: node.profile, depth });
-        const children = node.children;
-        for (let i = children.length - 1; i >= 0; i--) {
-            const child = children[i];
-            if (!visited.has(String(child.profile.id))) {
-                stack.push({ node: child, depth: depth + 1 });
-            }
-        }
-    }
-    return result;
 }
 
 /**
