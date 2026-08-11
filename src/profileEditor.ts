@@ -25,6 +25,7 @@ import {
     applyBaseProfile,
     buildPromptSnapshot,
     capturePromptFields,
+    captureSampling,
     filterFields,
     findOrderList,
     findPromptInPreset,
@@ -42,7 +43,7 @@ import {
     editedIdentifiersForName,
     type PromptEditBuffer,
 } from './presetBuffers.js';
-import { applyDefaultOriginalFields, defaultEnabledEntries, mergeBaseSnapshot, recordDefaultOriginalFields } from './presetSnapshot.js';
+import { applyDefaultExtra, applyDefaultOriginalFields, defaultEnabledEntries, mergeBaseSnapshot, recordDefaultOriginalFields } from './presetSnapshot.js';
 import { buildDerivedProfile } from './profileActions.js';
 import { chooseProfileSaveTarget } from './importExport.js';
 import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
@@ -241,6 +242,8 @@ export async function openProfileEditorPopup(
     let searchIndex = new Map<string, { name: string; content: string }>();
     let editTargetId: string | null = null;
     let mobileShowRight = false;
+    /** 会话级列表锁定：锁定后禁止编辑（进入编辑/clear）与拖拽排序，开关保持可用；关弹窗即重置。 */
+    let listLocked = false;
     /** 本会话拖拽重排过的条目（打脏标记，立即保存不进 diff；序号保持不更新）。 */
     const reorderedIds = new Set<string>();
     /** R1：本会话「清除值变更」缓冲（key = bufferKey(name, identifier)）；Commit 才删除 profile 快照 fields。 */
@@ -343,8 +346,10 @@ export async function openProfileEditorPopup(
             entries: ctx.entries,
             stagedCount: items.length,
             canCommit: items.length > 0,
+            listLocked,
             i18n: {
                 rename: L('Rename'),
+                lockList: listLocked ? L('Unlock list') : L('Lock list'),
                 viewStaged: L('View Staged'),
                 reset: L('Reset to parent'),
                 commit: L('Commit'),
@@ -363,6 +368,9 @@ export async function openProfileEditorPopup(
         // 模板根节点是 #preset_profile_editor：取其子节点填入 dialog，保持 dialog 元素身份稳定
         //（delegated 事件绑定不丢，id/样式仍作用于 dialog 本身）
         const children = newDialog.children().toArray();
+        // 重建前记录列表滚动位置，重建后还原（编辑/commit 后不跳回顶部）
+        const listEl = dialog.find('.pc-prompt-list');
+        const prevScrollTop = listEl.length ? listEl.scrollTop() ?? 0 : 0;
         dialog.empty().append(children);
 
         rebuildSearchIndex();
@@ -370,9 +378,26 @@ export async function openProfileEditorPopup(
         applySearch();
         // R4：commit 后 renderDialog 重建模板，输入框无 value——按闭包 searchQuery 回填，与过滤结果一致
         dialog.find('#pc-search-input').val(searchQuery);
+        applyLockVisual();
+        const newListEl = dialog.find('.pc-prompt-list');
+        if (newListEl.length) {
+            // 条目数变化（搜索过滤/commit）时 clamp，避免 scrollTop 超界漂移
+            const maxScroll = Math.max(0, (newListEl[0].scrollHeight ?? 0) - (newListEl[0].clientHeight ?? 0));
+            newListEl.scrollTop(Math.min(prevScrollTop, maxScroll));
+        }
         renderRightPane(ctx);
         setupSortable();
         refreshCounts(ctx);
+    }
+
+    // 重建后重应用锁定视觉（模板只传 label，类/图标/高亮由 JS 维护，跨 renderDialog 不丢）
+    function applyLockVisual(): void {
+        const btn = dialog.find('#pc-btn-lock');
+        btn.toggleClass('active', listLocked);
+        btn.attr('title', listLocked ? L('Unlock list') : L('Lock list'));
+        btn.find('.pc-btn-label').text(listLocked ? L('Unlock list') : L('Lock list'));
+        btn.find('i').attr('class', listLocked ? 'fa-solid fa-unlock' : 'fa-solid fa-lock');
+        dialog.find('.pc-prompt-list').toggleClass('pc-locked', listLocked);
     }
 
     // 把缓冲状态叠加到已渲染的条目列表（开关目标 / 编辑后的名字 / dirty 高亮）
@@ -451,6 +476,7 @@ export async function openProfileEditorPopup(
             .append($('<i class="fa-solid fa-rotate-left"></i>'))
             .append(' ' + L('Undo'));
         undo.on('click', () => {
+            if (listLocked) return;
             // clear 项独立 undo（仅撤销 pendingClears；profile 快照 fields 未动，恢复即自然）；
             // toggle/值编辑项仍按原语义整体撤销
             if (onlyClear) {
@@ -517,6 +543,7 @@ export async function openProfileEditorPopup(
             .append(' ' + L('Cancel'));
 
         saveBtn.on('click', () => {
+            if (listLocked) return;
             const editedFields = form.collectFields();
             if (editedFields) {
                 const key = bufferKey(name, identifier);
@@ -618,12 +645,12 @@ export async function openProfileEditorPopup(
         renderRightPane();
     }
 
-    // 拖拽排序：仅活动预设可拖；拖拽后立即落盘（不进 diff）
+    // 拖拽排序：仅活动预设可拖；拖拽后立即落盘（不进 diff）。锁定状态禁止排序。
     function setupSortable(): void {
         const listEl = dialog.find('.pc-prompt-list');
         if (!listEl.length) return;
         const isActive = oai_settings.preset_settings_openai === name;
-        const shouldSortable = isActive && !searchQuery;
+        const shouldSortable = isActive && !searchQuery && !listLocked;
         const isSortable = !!listEl.data('ui-sortable');
         // 幂等切换：避免每次按键 destroy/重建（搜索中本就禁用拖拽）
         if (isSortable && !shouldSortable) listEl.sortable('destroy');
@@ -641,6 +668,7 @@ export async function openProfileEditorPopup(
     }
 
     async function onReorder(listEl: JQuery<HTMLElement>): Promise<void> {
+        if (listLocked) return;
         const preset = openai_settings[idx] as Preset;
         const orderList = findOrderList(preset, resolvePromptOrderTarget());
         if (!orderList || !Array.isArray(orderList.order)) return;
@@ -691,6 +719,7 @@ export async function openProfileEditorPopup(
 
     // ---- 事件（delegated，重渲染 innerHTML 后仍然有效） ----
     dialog.on('click', '.pc-prompt-card', function (e) {
+        if (listLocked) return;
         if ($(e.target).closest('.pc-drag-handle, .pc-card-clear, .pc-btn-toggle, button').length) return;
         const identifier = String($(this).data('identifier'));
         const ctx = currentCtx();
@@ -731,6 +760,7 @@ export async function openProfileEditorPopup(
 
     dialog.on('click', '.pc-card-clear', function (e) {
         e.stopPropagation();
+        if (listLocked) return;
         const entry = $(this).closest('.pc-prompt-card');
         const identifier = String(entry.data('identifier'));
         const key = bufferKey(name, identifier);
@@ -853,12 +883,17 @@ export async function openProfileEditorPopup(
                     prompts: parentStates,
                 });
                 profile.changes = [];
+                // reset 回退到父链：采样快照一并清除，避免下次加载复活旧采样覆盖预设当前值
+                delete profile.sampling;
+                // 预设附加键还原到出厂基线；profile 自身 extra 为保留存档，reset 不改
+                applyDefaultExtra(preset, meta);
             } else {
                 if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
                     toastr.warning(L('No default baseline available'));
                     return;
                 }
                 applyDefaultOriginalFields(preset, meta);
+                applyDefaultExtra(preset, meta);
                 const defaultPrompts = defaultEnabledEntries(preset, meta);
                 applyBaseProfile(preset, {
                     formatVersion: 2,
@@ -868,6 +903,7 @@ export async function openProfileEditorPopup(
                     prompts: defaultPrompts,
                 });
                 profile.changes = [];
+                delete profile.sampling;
             }
             await saveMeta(name, idx, meta);
             toastr.success(L('Configuration reset'));
@@ -879,9 +915,11 @@ export async function openProfileEditorPopup(
                 return;
             }
             applyDefaultOriginalFields(preset, meta);
+            applyDefaultExtra(preset, meta);
             // 只回写开关；originalFields 是 reset 专用元数据，不随 profile 持久化
             const defaultPrompts = defaultEnabledEntries(preset, meta);
             profile.prompts = structuredClone(defaultPrompts);
+            delete profile.sampling;
             applyBaseProfile(preset, {
                 formatVersion: 2,
                 kind: 'prompt_base',
@@ -937,7 +975,7 @@ export async function openProfileEditorPopup(
             // previousChanges 传空：新建 delta 只存「相对父链解析状态」的净差异（本次快照 + 本次编辑），
             // 不冗余拷贝源 profile 已持久化的字段差异（否则数据膨胀/导出树冗余）。
             const changes = snapshotToChanges(snapshot, parentEntries, []);
-            profiles.push(buildDerivedProfile(ctx.profile, deltaName as string, changes));
+            profiles.push(buildDerivedProfile(ctx.profile, deltaName as string, changes, captureSampling(preset) ?? undefined));
             ctx.meta.profiles = profiles;
             recordDefaultOriginalFields(ctx.meta, name, sessionEdits);
             await saveMeta(name, idx, ctx.meta);
@@ -965,6 +1003,18 @@ export async function openProfileEditorPopup(
             clearBuffers();
         }
         popup.completeCancelled();
+    });
+
+    dialog.on('click', '#pc-btn-lock', function () {
+        listLocked = !listLocked;
+        applyLockVisual();
+        // 锁定时退出当前编辑视图（编辑表单 Save/Cancel 不再可用）并禁用拖拽
+        if (listLocked) {
+            editTargetId = null;
+            mobileShowRight = false;
+            renderRightPane();
+        }
+        setupSortable();
     });
 
     dialog.on('input', '#pc-search-input', function () {
