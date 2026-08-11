@@ -75,18 +75,13 @@ jobs:
           replace: ${{ steps.package_version.outputs.result }}
           regex: true
 
-      # build: dev-ts → debug (unminified), ts → release (minified)
+      # build: dev-ts / ts 均构建压缩版
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm ci
       - run: npm run typecheck
-      - run: |
-          if [[ "${{ github.ref_name }}" == "dev-ts" ]]; then
-            npm run build:dev
-          else
-            npm run build
-          fi
+      - run: npm run build
 
       # commit dist changes (no-op if unchanged)
       - uses: EndBug/add-and-commit@v9.1.3
