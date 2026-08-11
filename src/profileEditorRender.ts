@@ -81,7 +81,7 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
     for (const item of items) {
         if (item.toggle) {
             list.append($('<li class="pc-diff-item diff-toggle"></li>')
-                .append($('<span class="pc-diff-desc"></span>').text(`${L('Switch')}: ${item.toggle.original ? L('On') : L('Off')} → ${item.toggle.target ? L('On') : L('Off')}`))
+                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${L('Switch')} ${item.toggle.original ? L('On') : L('Off')} → ${item.toggle.target ? L('On') : L('Off')}`))
                 .append(buildUndoBtn(ctx, item.key, item.identifier)));
         }
         for (const f of item.fields) {

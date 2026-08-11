@@ -94,7 +94,16 @@ export function resolveProfilePrompts(
     seen.add(profile.id);
 
     if (isPromptBaseProfile(profile)) {
-        return arrangePromptEntries(structuredClone(profile.prompts), mountedOrder(profile.prompts));
+        const arranged = arrangePromptEntries(structuredClone(profile.prompts), mountedOrder(profile.prompts));
+        // 并入 unusedIds 为 mounted:false 条目（unused prompt 展示/diff 可见；加载时 replaceTargetPromptOrder 仍不挂载）
+        if (profile.unusedIds && profile.unusedIds.length > 0) {
+            const known = new Set(arranged.map((e) => e.identifier));
+            const unusedEntries: PromptProfileEntry[] = profile.unusedIds
+                .filter((id) => !known.has(id))
+                .map((id) => ({ identifier: id, mounted: false, enabled: false }));
+            return [...arranged, ...unusedEntries];
+        }
+        return arranged;
     }
 
     // 非 delta（如 v1 全量快照或未知类型）无父链可解析，安全返回空，绝不抛错
