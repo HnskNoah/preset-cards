@@ -169,7 +169,6 @@ jobs:
           cp -f "$ROOT/Preset-cards.md" "$REL/Preset-cards.md"
           cp -f "$ROOT/.gitignore" "$REL/.gitignore"
           cp -f "$ROOT/.gitattributes" "$REL/.gitattributes"
-          rm -rf "$TMP"
 
           git -C "$REL" add -A
           if ! git -C "$REL" diff --cached --quiet; then
@@ -178,3 +177,4 @@ jobs:
           else
             echo "no artifact changes for release repo"
           fi
+          rm -rf "$TMP"
