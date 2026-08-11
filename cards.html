@@ -94,21 +94,29 @@
                         </div>
                     </div>
                     <div class="preset_card_profiles_list">
-                        {{#each this.profiles}}
-                        <div class="preset_card_profile_row {{#if this.isActiveProfile}}active{{/if}}" data-profile-id="{{this.id}}" style="--pc-depth: {{this.depth}};">
-                            {{#if this.depth}}<span class="preset_card_profile_tree_line"></span>{{/if}}
-                            <div class="preset_card_profile_name_wrap">
-                                <i class="fa-solid fa-code-fork preset_card_profile_derive preset_card_profile_badge" title="{{../../i18n.derive}}"></i>
-                                <div class="preset_card_profile_name" title="{{../../i18n.loadConfig}}">{{this.name}}</div>
+                        {{#*inline "profileNode"}}
+                        <div class="preset_card_profile_group">
+                            <div class="preset_card_profile_row {{#if this.isActiveProfile}}active{{/if}}" data-profile-id="{{this.id}}">
+                                {{#if this.childCount}}<span class="preset_card_profile_toggle"><i class="fa-solid fa-caret-right"></i></span>{{/if}}
+                                <div class="preset_card_profile_name_wrap">
+                                    <i class="fa-solid fa-code-fork preset_card_profile_derive preset_card_profile_badge" title="{{@root.i18n.derive}}"></i>
+                                    <div class="preset_card_profile_name" title="{{@root.i18n.loadConfig}}">{{this.name}}</div>
+                                </div>
+                                <div class="preset_card_profile_actions">
+                                    {{#if this.isActiveProfile}}<i class="fa-solid fa-pencil preset_card_profile_edit" title="{{@root.i18n.edit}}"></i>{{/if}}
+                                    <i class="fa-solid fa-rotate-left preset_card_profile_reset" title="{{@root.i18n.resetProfile}}"></i>
+                                    <i class="fa-solid fa-file-export preset_card_profile_export" title="{{@root.i18n.exportConfig}}"></i>
+                                    <i class="fa-solid fa-trash-can preset_card_profile_delete" title="{{@root.i18n.delete}}"></i>
+                                </div>
                             </div>
-                            <div class="preset_card_profile_actions">
-                                {{#if this.isActiveProfile}}<i class="fa-solid fa-pencil preset_card_profile_edit" title="{{../../i18n.edit}}"></i>{{/if}}
-                                <i class="fa-solid fa-rotate-left preset_card_profile_reset" title="{{../../i18n.resetProfile}}"></i>
-                                <i class="fa-solid fa-file-export preset_card_profile_export" title="{{../../i18n.exportConfig}}"></i>
-                                <i class="fa-solid fa-trash-can preset_card_profile_delete" title="{{../../i18n.delete}}"></i>
+                            {{#if this.children.length}}
+                            <div class="preset_card_profile_children">
+                                {{#each this.children}}{{> profileNode}}{{/each}}
                             </div>
+                            {{/if}}
                         </div>
-                        {{/each}}
+                        {{/inline}}
+                        {{#each this.profiles}}{{> profileNode}}{{/each}}
                     </div>
                 </div>
             </div>

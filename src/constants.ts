@@ -43,6 +43,25 @@ export const MODEL_KEYS: Record<string, string> = {
 
 export const LOGO_BASE = `/scripts/extensions/${EXTENSION_NAME}/llm-logos/`;
 
+/** 纳入 v2 profile 采样快照的预设采样键（edit 弹窗同源）。 */
+export const SAMPLING_KEYS = [
+    'temperature',
+    'top_p',
+    'top_k',
+    'top_a',
+    'min_p',
+    'frequency_penalty',
+    'presence_penalty',
+    'repetition_penalty',
+    'seed',
+    'n',
+    'openai_max_context',
+    'openai_max_tokens',
+    'stream_openai',
+] as const;
+
+export type SamplingKey = (typeof SAMPLING_KEYS)[number];
+
 export const LOCAL_DICT: Record<string, string> = {
     'Configurations': '配置快照',
     'Rename': '重命名',
@@ -57,6 +76,10 @@ export const LOCAL_DICT: Record<string, string> = {
     'Applicable Models': '适用模型',
     'Add a short description for this preset...': '为该预设添加一段简短的描述...',
     'Description': '描述',
+    'Sampling': '采样参数',
+    'Context': '上下文',
+    'Tokens': '回复 Tokens',
+    'Streaming': '流式输出',
     'Search presets...': '搜索预设...',
     'presets': '个预设',
     'Multi-Select': '多选',
@@ -117,6 +140,8 @@ export const LOCAL_DICT: Record<string, string> = {
     'In Chat Absolute Depth': '对话内绝对深度',
     'Injection Depth': '注入深度',
     'View Staged': '暂存',
+    'Lock list': '锁定列表',
+    'Unlock list': '解锁列表',
     'Commit': '提交',
     'Close': '关闭',
     'Back': '返回',

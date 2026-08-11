@@ -1,7 +1,8 @@
-import { oai_settings, promptManager } from '@sillytavern/scripts/openai';
+import { oai_settings, promptManager, settingsToUpdate } from '@sillytavern/scripts/openai';
 import { L } from './i18n.js';
 import { isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
-import type { Preset, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaChange, PromptDeltaProfile, PromptFields } from './meta.js';
+import type { Preset, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaChange, PromptDeltaProfile, PromptFields, PromptSampling } from './meta.js';
+import { SAMPLING_KEYS } from './constants.js';
 
 /** 允许写入预设的值字段白名单；capture/apply 只处理这些键（R10 白名单兜底）。
  * injection_position / injection_depth 为用户可编辑字段，随 profile 捕获/应用
@@ -19,6 +20,59 @@ export const PROMPT_FIELD_WHITELIST: (keyof PromptFields)[] = [
 /** 两个 PromptFields 是否逐白名单字段一致（用于判断编辑是否有净变化）。 */
 export function promptFieldsEqual(a: PromptFields, b: PromptFields): boolean {
     return PROMPT_FIELD_WHITELIST.every((key) => a[key] === b[key]);
+}
+
+/** 采集预设当前的采样参数快照（SAMPLING_KEYS 全部键，值非 undefined 才写入）；无任何键时返回 null。
+ * 返回 null 而非空对象，便于调用点统一「非空才持久化 sampling」（避免落盘 sampling:{} 噪声）。 */
+export function captureSampling(preset: Preset): PromptSampling | null {
+    const sampling: PromptSampling = {};
+    for (const key of SAMPLING_KEYS) {
+        const value = (preset as Record<string, unknown>)[key];
+        if (value !== undefined) {
+            (sampling as Record<string, unknown>)[key] = value;
+        }
+    }
+    return Object.keys(sampling).length > 0 ? sampling : null;
+}
+
+/** 应用采样参数快照到预设：只写 sampling 中存在的键，缺失键保持预设当前值（不动）。 */
+export function applySampling(preset: Preset, sampling: PromptSampling): void {
+    const target = preset as Record<string, unknown>;
+    for (const key of SAMPLING_KEYS) {
+        const value = (sampling as Record<string, unknown>)[key];
+        if (value !== undefined) target[key] = value;
+    }
+}
+
+/** 采样键与忽略键之外、应排除出 extra 快照的键（prompt 主体在 prompts 数组/order 处理）。
+ * 连接/凭据键（ST settingsToUpdate 标记 is_connection=true：模型、来源、代理、endpoint 等）一律排除——
+ * 它们是「用户当前连接状态」而非 profile 快照内容，reset 不应把模型/凭据回退出厂。 */
+const EXTRA_EXCLUDED_KEYS = new Set([
+    'prompts',
+    'prompt_order',
+    'extensions',
+    'name',
+    ...Object.keys(settingsToUpdate).filter((key) => settingsToUpdate[key]?.[3] === true),
+]);
+
+/** 采集「v1 存了但 v2 无结构对应」的附加快照：settings 中除采样键、prompts/prompt_order/extensions/name、连接键外的其余键。
+ * 用于 v1→v2 迁移时保留旧版预设的附加 prompt 设置（impersonation_prompt、bias_preset_selected 等）。
+ * 空结果返回 null（调用点统一「非空才写」）。 */
+export function captureExtra(settings: Record<string, unknown>): Record<string, any> | null {
+    const extra: Record<string, any> = {};
+    for (const [key, value] of Object.entries(settings)) {
+        if (SAMPLING_KEYS.some((k) => k === key)) continue;
+        if (EXTRA_EXCLUDED_KEYS.has(key)) continue;
+        extra[key] = value;
+    }
+    return Object.keys(extra).length > 0 ? extra : null;
+}
+
+/** 应用附加快照到预设：Object.assign 还原（保留 extensions）；只写 extra 中存在的键。 */
+export function applyExtra(preset: Preset, extra: Record<string, any>): void {
+    const ext = preset.extensions;
+    Object.assign(preset, extra);
+    preset.extensions = ext;
 }
 
 /**
@@ -160,6 +214,13 @@ export function applyBaseProfile(preset: Preset, profile: PromptBaseProfile): vo
     if (orderEntries.length > 0) {
         syncPromptOrder(preset, orderEntries);
     }
+
+    if (profile.sampling) {
+        applySampling(preset, profile.sampling);
+    }
+    if (profile.extra) {
+        applyExtra(preset, profile.extra);
+    }
 }
 
 /**
@@ -273,6 +334,13 @@ export function applyDeltaProfile(
 
     if (orderEntries.length > 0) {
         syncPromptOrder(preset, orderEntries);
+    }
+
+    if (delta.sampling) {
+        applySampling(preset, delta.sampling);
+    }
+    if (delta.extra) {
+        applyExtra(preset, delta.extra);
     }
 
     return { matched, missing };

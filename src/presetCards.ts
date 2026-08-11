@@ -23,6 +23,7 @@ import {
     applyBaseProfile,
     applyProfileToPreset,
     buildBaseSnapshotDiff,
+    captureSampling,
     resolveParentStates,
 } from './promptToggle.js';
 import {
@@ -37,7 +38,7 @@ import { buildPresetList, getCardsTemplateContext } from './presetList.js';
 import { applyCachedBackgrounds, clearImageCache } from './cache.js';
 import { openEditModal } from './editModal.js';
 import { applyBufferedEdits, clearBufferedForName, type PromptEditBuffer } from './presetBuffers.js';
-import { applyDefaultOriginalFields, defaultEnabledEntries, lockDefaultSnapshot } from './presetSnapshot.js';
+import { applyDefaultExtra, applyDefaultOriginalFields, defaultEnabledEntries, lockDefaultSnapshot } from './presetSnapshot.js';
 import { buildDerivedProfile, collectDescendantProfileIds } from './profileActions.js';
 import { openProfileEditorPopup } from './profileEditor.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
@@ -95,6 +96,8 @@ export async function openPresetCards(): Promise<void> {
         if (opts?.applyBackgrounds !== false) applyCachedBackgrounds(dialog);
         if (query) dialog.find('#preset_cards_search').val(query);
         if (isConciseMode) dialog.find('#preset_cards_concise_btn').addClass('active');
+        // 默认折叠：自动展开当前激活 profile 的祖先链，保证其可见
+        dialog.find('.preset_card_profile_row.active').parents('.preset_card_profile_group').addClass('expanded');
         dialog.find('#preset_cards_search').trigger('input');
     }
 
@@ -340,6 +343,9 @@ export async function openPresetCards(): Promise<void> {
         const idx = $(this).data('preset-index') as number;
 
         openEditModal(name, idx, async () => {
+            // 采样参数等预设本体字段已改：同步活动预设运行态
+            refreshActivePresetUI(name);
+
             // Refresh the card in-place
             const preset = openai_settings[idx] as Preset;
             const meta = readMeta(preset);
@@ -395,6 +401,20 @@ export async function openPresetCards(): Promise<void> {
                 applyCachedBackgrounds(card);
             } else {
                 bgEl.remove();
+            }
+
+            // Refresh footer tags (T/P/K/Ctx/Tok/Stream)
+            const footerEl = card.find('.preset_card_footer');
+            if (footerEl.length > 0) {
+                footerEl.empty();
+                const tags: string[] = [];
+                if (preset['temperature'] != null) tags.push(`<span class="preset_card_tag" title="Temperature"><span class="tag_label">T</span><span class="tag_value">${preset['temperature']}</span></span>`);
+                if (preset['top_p'] != null) tags.push(`<span class="preset_card_tag" title="Top P"><span class="tag_label">P</span><span class="tag_value">${preset['top_p']}</span></span>`);
+                if (preset['top_k'] != null) tags.push(`<span class="preset_card_tag" title="Top K"><span class="tag_label">K</span><span class="tag_value">${preset['top_k']}</span></span>`);
+                if (preset['openai_max_context']) tags.push(`<span class="preset_card_tag" title="Context"><span class="tag_label">Ctx</span><span class="tag_value">${preset['openai_max_context']}</span></span>`);
+                if (preset['openai_max_tokens']) tags.push(`<span class="preset_card_tag" title="Max Tokens (Response)"><span class="tag_label">Tok</span><span class="tag_value">${preset['openai_max_tokens']}</span></span>`);
+                if (preset['stream_openai']) tags.push('<span class="preset_card_tag" title="Streaming"><span class="tag_value">Stream</span></span>');
+                footerEl.append(tags.join(''));
             }
         });
     });
@@ -551,12 +571,14 @@ export async function openPresetCards(): Promise<void> {
         }
 
         // 与锁定基线做差异：fields 只存与基线不同的字段（content 差异进 base，又避免全量 content 快照）
+        const sampling = captureSampling(preset);
         profiles.push({
             formatVersion: 2,
             kind: 'prompt_base',
             id: newProfileId(),
             name: profileName,
             prompts: buildBaseSnapshotDiff(preset, meta.defaultSnapshot),
+            ...(sampling ? { sampling } : {}),
         });
 
         meta.profiles = profiles;
@@ -581,6 +603,12 @@ export async function openPresetCards(): Promise<void> {
         const meta = readMeta(preset);
         warnV1ExcludedFromTreeExport(meta);
         download(buildTreeExportData(meta), `${name}-tree.json`, 'application/json');
+    });
+
+    // ---- Profiles: 分组折叠切换（点击箭头展开/收起子级 delta） ----
+    dialog.on('click', '.preset_card_profile_toggle', function (e) {
+        e.stopPropagation();
+        $(this).closest('.preset_card_profile_group').toggleClass('expanded');
     });
 
     // ---- Profiles: Load Configuration (click = apply only; edit via pencil button) ----
@@ -637,14 +665,15 @@ export async function openPresetCards(): Promise<void> {
         if (!deltaName) return;
 
         const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
-        profiles.push(buildDerivedProfile(parent, deltaName));
+        profiles.push(buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined));
 
         meta.profiles = profiles;
         await saveMeta(name, idx, meta);
         toastr.success(L('Derived profile created'));
 
-        // Refresh UI
+        // 新 delta 默认折叠不可见：展开父 profile 的祖先链，保证新节点可见
         await refreshGrid();
+        dialog.find(`.preset_card_profile_row[data-profile-id="${String(parent.id)}"]`).parents('.preset_card_profile_group').addClass('expanded');
     });
 
     // ---- Profiles: Reset to parent (delta -> base; base -> hidden default) ----
@@ -676,12 +705,17 @@ export async function openPresetCards(): Promise<void> {
                     prompts: parentStates,
                 });
                 profile.changes = [];
+                // reset 回退到父链：采样快照一并清除，避免下次加载复活旧采样覆盖预设当前值
+                delete profile.sampling;
+                // 预设附加键还原到出厂基线；profile 自身 extra 为保留存档，reset 不改
+                applyDefaultExtra(preset, meta);
             } else {
                 if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
                     toastr.warning(L('No default baseline available'));
                     return;
                 }
                 applyDefaultOriginalFields(preset, meta);
+                applyDefaultExtra(preset, meta);
                 const defaultPrompts = defaultEnabledEntries(preset, meta);
                 const tmp: PromptBaseProfile = {
                     formatVersion: 2,
@@ -692,6 +726,7 @@ export async function openPresetCards(): Promise<void> {
                 };
                 applyBaseProfile(preset, tmp);
                 profile.changes = [];
+                delete profile.sampling;
             }
             await saveMeta(name, idx, meta);
             toastr.success(L('Configuration reset'));
@@ -704,9 +739,11 @@ export async function openPresetCards(): Promise<void> {
                 return;
             }
             applyDefaultOriginalFields(preset, meta);
+            applyDefaultExtra(preset, meta);
             // 只回写开关；originalFields 是 reset 专用元数据，不随 profile 持久化
             const defaultPrompts = defaultEnabledEntries(preset, meta);
             profile.prompts = structuredClone(defaultPrompts);
+            delete profile.sampling;
             const tmp: PromptBaseProfile = {
                 formatVersion: 2,
                 kind: 'prompt_base',
@@ -825,17 +862,23 @@ export async function openPresetCards(): Promise<void> {
 
                 const preset = openai_settings[idx] as Preset;
                 const meta = readMeta(preset);
-                const existing = Array.isArray(meta.profiles) ? meta.profiles : [];
-                const { profiles, warnings } = mergeImportedProfiles(parsed, existing, profileName, meta.defaultSnapshot);
+                // 首次导入：先采集出厂基线（defaultSnapshot + defaultExtra），供 reset 还原
+                if (!meta.defaultSnapshotLocked) {
+                    await lockDefaultSnapshot(preset, name, idx);
+                }
+                const lockedMeta = readMeta(preset);
+                const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta.defaultSnapshot);
                 for (const warning of warnings) {
                     toastr.warning(warning);
                 }
 
-                meta.profiles = profiles;
-                await saveMeta(name, idx, meta);
+                lockedMeta.profiles = profiles;
+                await saveMeta(name, idx, lockedMeta);
                 toastr.success(L('Configuration saved'));
 
+                // 导入的整棵子树默认折叠不可见：展开该卡全部 profile 组，让导入树可见
                 await refreshGrid({ applyBackgrounds: true });
+                dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');
             } catch (err) {
                 console.error(err);
                 toastr.error(L('Failed to parse configuration file'));
@@ -883,6 +926,8 @@ export async function openPresetCards(): Promise<void> {
 
     updateCount(presets.length, presets.length);
     applyCachedBackgrounds(dialog);
+    // 默认折叠：自动展开当前激活 profile 的祖先链，保证其可见
+    dialog.find('.preset_card_profile_row.active').parents('.preset_card_profile_group').addClass('expanded');
 
     callGenericPopup(dialog, POPUP_TYPE.TEXT, '', {
         wide: true,

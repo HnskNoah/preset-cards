@@ -606,6 +606,59 @@
     min-height: 64px;
 }
 
+/* 采样参数区块：T/P/K/Context/Tokens/Stream 三列网格 */
+.preset_edit_section_title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.7;
+    margin: 12px 0 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.preset_edit_sampling_grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.preset_edit_sampling_grid .preset_edit_field input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    background: var(--SmartThemeBlurTintColor);
+    color: var(--SmartThemeBodyColor);
+    font-size: 13px;
+    outline: none;
+    box-sizing: border-box;
+    font-family: inherit;
+    transition: border-color 0.2s ease;
+}
+
+.preset_edit_sampling_grid .preset_edit_field input[type="number"]:focus {
+    border-color: var(--SmartThemeQuoteColor);
+}
+
+.preset_edit_sampling_grid .preset_edit_field input[type="number"]::placeholder {
+    opacity: 0.4;
+}
+
+.preset_edit_stream_wrap {
+    display: flex;
+    align-items: center;
+    height: 36px;
+}
+
+.preset_edit_stream_wrap input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--SmartThemeQuoteColor);
+    cursor: pointer;
+}
+
 /* Model selector in edit */
 .preset_edit_models_grid {
     display: flex;
@@ -722,12 +775,56 @@
     gap: 4px;
 }
 
+/* 分组折叠：每组 = 一行 + 可折叠子级容器。默认折叠（children 隐藏），点 toggle 展开。 */
+.preset_card_profile_group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.preset_card_profile_children {
+    display: none;
+    flex-direction: column;
+    gap: 2px;
+    margin-left: 14px;
+    border-left: 1px solid rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
+    padding-left: 6px;
+}
+
+.preset_card_profile_group.expanded > .preset_card_profile_children {
+    display: flex;
+}
+
+.preset_card_profile_toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.6;
+    transition: transform 0.2s ease, opacity 0.2s;
+    border-radius: 4px;
+    margin-right: 2px;
+}
+
+.preset_card_profile_toggle:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor);
+}
+
+.preset_card_profile_group.expanded > .preset_card_profile_row .preset_card_profile_toggle i {
+    transform: rotate(90deg);
+}
+
 .preset_card_profile_row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 6px 10px;
-    padding-left: calc(14px + var(--pc-depth, 0) * 8px);
     background: transparent;
     border-radius: 6px;
     font-size: 12px;
@@ -749,27 +846,7 @@
         0 2px 8px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
 }
 
-/* 派生关系树：左侧文件树式连接线（模板仅 depth>0 的 delta 行渲染该元素）。
-   垂直主干贯穿行高并对齐父列，水平短线从主干连向行内容；用背景渐变画线避免 border 圆角怪像。 */
-.preset_card_profile_tree_line {
-    position: absolute;
-    left: calc(4px + (var(--pc-depth, 0) - 1) * 8px);
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    pointer-events: none;
-    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-}
-
-.preset_card_profile_tree_line::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 0;
-    width: 18px;
-    height: 1px;
-    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.35);
-}
+/* 派生关系：分组折叠（base/delta 每级独立折叠）。旧树线样式已废弃删除。 */
 
 .preset_card_profile_name_wrap {
     display: flex;
@@ -1398,6 +1475,12 @@
     background: var(--SmartThemeButtonHoverColor, rgba(255,255,255,0.1));
 }
 
+.pc-btn-lock.active {
+    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.2);
+    border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
+    color: var(--SmartThemeQuoteColor);
+}
+
 .pc-btn-reset:hover {
     color: var(--SmartThemeQuoteColor);
     border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
@@ -1719,6 +1802,26 @@
 
 .pc-drag-handle:active {
     cursor: grabbing;
+}
+
+/* 列表锁定：隐藏拖拽把手、清除按钮禁用视觉，编辑入口不再响应 */
+.pc-prompt-list.pc-locked .pc-drag-handle {
+    opacity: 0.1;
+    cursor: not-allowed;
+}
+
+.pc-prompt-list.pc-locked .pc-card-clear {
+    opacity: 0.2;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.pc-prompt-list.pc-locked .pc-prompt-card {
+    cursor: default;
+}
+
+.pc-prompt-list.pc-locked .pc-prompt-card:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.05));
 }
 
 /* 清除按钮 */

@@ -95,3 +95,34 @@ export function flattenProfileForest(forest: ProfileTreeNode[]): FlattenedProfil
     }
     return result;
 }
+
+/**
+ * 把森林构造成嵌套树（供卡片分组折叠渲染）：每个节点携带自身 profile、相对根的 depth，
+ * children 为其直接 delta 后代（递归）。visited 防环（成环/自环节点整枝跳过，不重复渲染）。
+ */
+export interface NestedProfileNode {
+    profile: PresetProfile;
+    depth: number;
+    children: NestedProfileNode[];
+}
+
+export function buildProfileNested(forest: ProfileTreeNode[]): NestedProfileNode[] {
+    const build = (node: ProfileTreeNode, depth: number, visited: Set<string>): NestedProfileNode | null => {
+        const id = String(node.profile.id);
+        if (visited.has(id)) return null;
+        visited.add(id);
+        const children: NestedProfileNode[] = [];
+        for (const child of node.children) {
+            const built = build(child, depth + 1, visited);
+            if (built) children.push(built);
+        }
+        return { profile: node.profile, depth, children };
+    };
+    const visited = new Set<string>();
+    const roots: NestedProfileNode[] = [];
+    for (const root of forest) {
+        const built = build(root, 0, visited);
+        if (built) roots.push(built);
+    }
+    return roots;
+}

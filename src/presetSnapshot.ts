@@ -5,17 +5,17 @@ import type { Preset, PresetMeta, PromptBaseProfile, PromptFields } from './meta
 import { readMeta, saveMeta } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
-import { buildDefaultSnapshotLock, findOrderList, findPromptInPreset, filterFields, promptFieldsEqual, resolvePromptOrderTarget } from './promptToggle.js';
+import { buildDefaultSnapshotLock, captureExtra, findOrderList, findPromptInPreset, filterFields, promptFieldsEqual, resolvePromptOrderTarget } from './promptToggle.js';
 
-// 首次对该预设 add base 时全量锁定默认基线：全部 prompt 采集 originalFields，仅 mounted prompt 采集 enabled。
-// 写入 meta.defaultSnapshot 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
-// 取代旧 ensureDefaultSnapshots 的「仅开关快照 + 打开面板批量回填」——现在只在用户对该预设首次 add base 时锁定，
-// 提供 reset 的可靠出厂基线，也让 add base 能按「与基线的差异」存储（见 buildBaseSnapshotDiff）。
+// 首次对该预设 add base 时全量锁定默认基线：全部 prompt 采集 originalFields，仅 mounted prompt 采集 enabled；
+// 同时锁定出厂 extra 基线（captureExtra 采当前预设的非采样/非 prompts 键）。
+// 写入 meta.defaultSnapshot + defaultExtra 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
 export async function lockDefaultSnapshot(preset: Preset, name: string, idx: number): Promise<void> {
     const meta = readMeta(preset);
     if (meta.defaultSnapshotLocked) return;
     meta.defaultSnapshot = buildDefaultSnapshotLock(preset);
     meta.defaultSnapshotLocked = true;
+    meta.defaultExtra = captureExtra(preset as Record<string, unknown>) ?? undefined;
     await saveMeta(name, idx, meta);
 }
 
@@ -62,6 +62,15 @@ export function applyDefaultOriginalFields(preset: Preset, meta: PresetMeta): vo
         const prompt = findPromptInPreset(preset, d.identifier);
         if (prompt) Object.assign(prompt, filterFields(d.originalFields));
     }
+}
+
+// 把出厂 extra 基线应用回 preset（reset 到默认时还原首次 add base 前的附加键值，保留 extensions）。
+// profile 自身 extra 不在此改变——reset 仅还原预设，v1 导入 profile 的 extra 保留存档不变。
+export function applyDefaultExtra(preset: Preset, meta: PresetMeta): void {
+    if (!meta.defaultExtra) return;
+    const ext = preset.extensions;
+    Object.assign(preset, meta.defaultExtra);
+    preset.extensions = ext;
 }
 
 /** defaultSnapshot 中有明确开关、且当前仍 mounted 的条目；兼容旧快照为 unused 保存了布尔值的情况。 */
