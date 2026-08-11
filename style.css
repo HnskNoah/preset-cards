@@ -1153,13 +1153,6 @@
     text-align: left;
 }
 
-.preset_cards_prompt_edit_title {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--SmartThemeBodyColor);
-}
-
 .preset_cards_prompt_edit_marker_notice {
     font-size: 12px;
     color: #e6a23c;
@@ -2078,6 +2071,7 @@
        搜索栏行保留一个右侧返回按钮退回列表视图 */
     .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-search-input,
     .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane #pc-btn-view-staged-mobile,
+    .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane #pc-btn-view-staged-desktop,
     .pc-layout.pc-show-right:not(.pc-editing) .pc-left-pane .pc-prompt-list {
         display: none;
     }
