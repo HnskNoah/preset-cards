@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - dev-ts
+      - ts
   workflow_dispatch:
 
 concurrency:
@@ -18,18 +19,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # tag if [release...] is in the commit message subject
+      # release tag 仅 ts 分支发；dev-ts 发 debug 版
       - id: autotag_check
         shell: bash
         run: |-
           message=$(git log -n 1 --pretty=format:"%s")
-          if [[ $message == *"[release]"* || $message == *"[release patch]"* ]]; then
+          if [[ "${{ github.ref_name }}" == "ts" && ( $message == *"[release]"* || $message == *"[release patch]"* ) ]]; then
             echo "should_tag=true" >> "$GITHUB_OUTPUT"
             echo "bump=patch" >> "$GITHUB_OUTPUT"
-          elif [[ $message == *"[release minor]"* ]]; then
+          elif [[ "${{ github.ref_name }}" == "ts" && $message == *"[release minor]"* ]]; then
             echo "should_tag=true" >> "$GITHUB_OUTPUT"
             echo "bump=minor" >> "$GITHUB_OUTPUT"
-          elif [[ $message == *"[release major]"* ]]; then
+          elif [[ "${{ github.ref_name }}" == "ts" && $message == *"[release major]"* ]]; then
             echo "should_tag=true" >> "$GITHUB_OUTPUT"
             echo "bump=major" >> "$GITHUB_OUTPUT"
           else
@@ -70,13 +71,18 @@ jobs:
           replace: ${{ steps.package_version.outputs.result }}
           regex: true
 
-      # build after tag change
+      # build: dev-ts → debug (unminified), ts → release (minified)
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run build
+      - run: |
+          if [[ "${{ github.ref_name }}" == "dev-ts" ]]; then
+            npm run build:dev
+          else
+            npm run build
+          fi
 
       # commit dist changes (no-op if unchanged)
       - uses: EndBug/add-and-commit@v9.1.3
