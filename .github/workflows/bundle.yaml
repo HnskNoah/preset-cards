@@ -152,7 +152,10 @@ jobs:
           cp -f "$ROOT/profile-editor.html" "$TMP/profile-editor.html"
           cp -rf "$ROOT/llm-logos" "$TMP/llm-logos"
 
-          git clone --no-checkout "https://${RELEASE_REPO_TOKEN}@github.com/HnskNoah/preset-cards-release.git" "$TMP/repo"
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_ASKPASS=/bin/true
+          AUTH_URL="https://x-access-token:${RELEASE_REPO_TOKEN}@github.com/HnskNoah/preset-cards-release.git"
+          git clone --no-checkout "$AUTH_URL" "$TMP/repo"
           REL="$TMP/repo"
           git -C "$REL" checkout -B TS-sync origin/TS
           rm -rf "$REL/dist" "$REL/llm-logos"
@@ -173,7 +176,7 @@ jobs:
           git -C "$REL" add -A
           if ! git -C "$REL" diff --cached --quiet; then
             git -C "$REL" -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "[bot] Sync artifacts"
-            git -C "$REL" push origin HEAD:TS
+            git -C "$REL" push "$AUTH_URL" HEAD:TS
           else
             echo "no artifact changes for release repo"
           fi
