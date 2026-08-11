@@ -137,7 +137,6 @@ export function buildPromptEditForm(
     const depthVal = current?.injection_depth !== undefined ? current.injection_depth : (prompt.injection_depth ?? 4);
 
     const container = $('<div class="preset_cards_prompt_edit_form"></div>');
-    container.append($('<div class="preset_cards_prompt_edit_title"></div>').text(L('Edit prompt')));
 
     if (isMarker) {
         container.append($('<div class="preset_cards_prompt_edit_marker_notice"></div>')
