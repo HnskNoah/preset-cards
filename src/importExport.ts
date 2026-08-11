@@ -11,9 +11,11 @@ import {
     type PromptDefaultSnapshotEntry,
     type PromptDeltaChange,
     type PromptDeltaProfile,
+    type PromptFields,
+    type PromptSampling,
 } from './meta.js';
 import { promptFieldsEqual, resolveProfilePrompts, snapshotToChanges, PROMPT_FIELD_WHITELIST } from './promptToggle.js';
-import type { PromptFields } from './meta.js';
+import { convertV1ToBase } from './profileActions.js';
 
 // Two-button choice popup: update current profile, or create a new subprofile (delta).
 export function chooseProfileSaveTarget(): Promise<'update' | 'create' | null> {
@@ -82,6 +84,8 @@ export function buildProfileExportData(profile: PresetProfile, meta: PresetMeta)
             kind: profile.kind,
             formatVersion: profile.formatVersion,
             prompts: profile.prompts,
+            ...(profile.sampling ? { sampling: profile.sampling } : {}),
+            ...(profile.extra ? { extra: profile.extra } : {}),
             ...(base ? { defaultSnapshot: base, defaultSnapshotLocked: meta.defaultSnapshotLocked === true } : {}),
         }, null, 4);
     }
@@ -100,6 +104,8 @@ export function buildProfileExportData(profile: PresetProfile, meta: PresetMeta)
                 prompts: resolvedState,
             },
             changes: changesVsFileBaseline,
+            ...(profile.sampling ? { sampling: profile.sampling } : {}),
+            ...(profile.extra ? { extra: profile.extra } : {}),
             ...(base ? { defaultSnapshot: base, defaultSnapshotLocked: meta.defaultSnapshotLocked === true } : {}),
         }, null, 4);
     }
@@ -139,8 +145,8 @@ export function buildTreeExportData(meta: PresetMeta, targetId?: string): string
         if (!visited.has(p.id)) visit(p);
     }
     const exported = ordered.map(p => isPromptBaseProfile(p)
-        ? { kind: p.kind, id: p.id, name: p.name, prompts: p.prompts }
-        : { kind: p.kind, id: p.id, name: p.name, baseId: p.baseId, changes: p.changes });
+        ? { kind: p.kind, id: p.id, name: p.name, prompts: p.prompts, ...(p.sampling ? { sampling: p.sampling } : {}), ...(p.extra ? { extra: p.extra } : {}) }
+        : { kind: p.kind, id: p.id, name: p.name, baseId: p.baseId, changes: p.changes, ...(p.sampling ? { sampling: p.sampling } : {}), ...(p.extra ? { extra: p.extra } : {}) });
     const payload = {
         kind: 'prompt_tree' as const,
         formatVersion: 2,
@@ -310,15 +316,19 @@ export function mergeImportedProfiles(
                         name: entry.name || profileName,
                         baseId: bridgeBase.id,
                         changes: changesRelativeToBaseline(entry.prompts, fileBaselineStates),
+                        ...(entry.sampling ? { sampling: entry.sampling } : {}),
+                        ...(entry.extra ? { extra: entry.extra } : {}),
                     });
                 } else {
-                    // 内容完全相同的现有 base 复用（含 fields 白名单一致）；否则新建并保留导出名称
+                    // 内容完全相同的现有 base 复用（含 fields 白名单、sampling、extra 均一致）；否则新建并保留导出名称
                     const existing = profiles.find((b): b is PromptBaseProfile =>
                         isPromptBaseProfile(b) && b.name === (entry.name || profileName)
                         && b.prompts.length === entry.prompts.length
                         && b.prompts.every((e, i) => e.identifier === entry.prompts[i].identifier
                             && e.enabled === entry.prompts[i].enabled
-                            && promptFieldsEqual(e.fields ?? {}, entry.prompts[i].fields ?? {})));
+                            && promptFieldsEqual(e.fields ?? {}, entry.prompts[i].fields ?? {}))
+                        && JSON.stringify(b.sampling ?? null) === JSON.stringify(entry.sampling ?? null)
+                        && JSON.stringify(b.extra ?? null) === JSON.stringify(entry.extra ?? null));
                     if (existing) {
                         if (entry.id !== undefined) idMap.set(String(entry.id), existing.id);
                     } else {
@@ -329,6 +339,8 @@ export function mergeImportedProfiles(
                             id: baseNewId,
                             name: entry.name || profileName,
                             prompts: entry.prompts,
+                            ...(entry.sampling ? { sampling: entry.sampling } : {}),
+                            ...(entry.extra ? { extra: entry.extra } : {}),
                         });
                         if (entry.id !== undefined) idMap.set(String(entry.id), baseNewId);
                     }
@@ -350,6 +362,8 @@ export function mergeImportedProfiles(
                     name: isTarget ? profileName : (entry.name || profileName),
                     baseId: resolvedBaseId || rawBaseId,
                     changes: entry.changes,
+                    ...(entry.sampling ? { sampling: entry.sampling } : {}),
+                    ...(entry.extra ? { extra: entry.extra } : {}),
                 });
             }
         }
@@ -366,6 +380,8 @@ export function mergeImportedProfiles(
                 name: profileName,
                 baseId: bridgeBase.id,
                 changes: changesRelativeToBaseline(parsed.prompts, fileBaselineStates),
+                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
+                ...(parsed.extra ? { extra: parsed.extra } : {}),
             });
         } else {
             profiles.push({
@@ -374,6 +390,8 @@ export function mergeImportedProfiles(
                 id: newId,
                 name: profileName,
                 prompts: parsed.prompts,
+                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
+                ...(parsed.extra ? { extra: parsed.extra } : {}),
             });
         }
     } else if (parsed && parsed.kind === 'prompt_delta' && Array.isArray(parsed.changes)) {
@@ -391,18 +409,22 @@ export function mergeImportedProfiles(
                 name: profileName,
                 baseId: bridgeBase.id,
                 changes: changesVsFileBaseline,
+                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
+                ...(parsed.extra ? { extra: parsed.extra } : {}),
             });
         } else {
             // 无桥（bridgeBase）：若文件带 base 快照：先复用（内容相同）或新建 main，再挂 delta
             let baseId = '';
-            const importedBase = parsed.base as { name?: string; prompts?: { identifier: string; enabled: boolean; fields?: Record<string, any> }[] } | undefined;
+            const importedBase = parsed.base as { name?: string; prompts?: { identifier: string; enabled: boolean; fields?: Record<string, any> }[]; sampling?: PromptSampling; extra?: Record<string, unknown> } | undefined;
             if (importedBase && Array.isArray(importedBase.prompts)) {
                 const existing = profiles.find((b): b is PromptBaseProfile =>
                     isPromptBaseProfile(b) && b.name === (importedBase.name || profileName)
                     && b.prompts.length === importedBase.prompts!.length
                     && b.prompts.every((e, i) => e.identifier === importedBase.prompts![i].identifier
                         && e.enabled === importedBase.prompts![i].enabled
-                        && promptFieldsEqual(e.fields ?? {}, importedBase.prompts![i].fields ?? {})));
+                        && promptFieldsEqual(e.fields ?? {}, importedBase.prompts![i].fields ?? {}))
+                    && JSON.stringify(b.sampling ?? null) === JSON.stringify(importedBase.sampling ?? null)
+                    && JSON.stringify(b.extra ?? null) === JSON.stringify(importedBase.extra ?? null));
                 if (existing) {
                     baseId = existing.id;
                 } else {
@@ -413,6 +435,8 @@ export function mergeImportedProfiles(
                         id: baseIdNew,
                         name: importedBase.name || profileName,
                         prompts: importedBase.prompts,
+                        ...(importedBase.sampling ? { sampling: importedBase.sampling } : {}),
+                        ...(importedBase.extra ? { extra: importedBase.extra } : {}),
                     });
                     baseId = baseIdNew;
                 }
@@ -427,6 +451,8 @@ export function mergeImportedProfiles(
                 name: profileName,
                 baseId: baseId,
                 changes: parsed.changes,
+                ...(parsed.sampling ? { sampling: parsed.sampling } : {}),
+                ...(parsed.extra ? { extra: parsed.extra } : {}),
             });
 
             const baseExists = profiles.some(b => isPromptBaseProfile(b) && b.id === baseId);
@@ -434,12 +460,13 @@ export function mergeImportedProfiles(
                 warnings.push(L('Base profile not found for this imported derived configuration'));
             }
         }
+    } else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.prompts)) {
+        // 非 prompt_tree / 单 base / 单 delta，但含 prompts 数组：视为旧版 v1 全量设置快照。
+        // 导入时自动迁移为 v2 base（删除原 v1 形态）：prompt 开关+值字段 + 采样参数（存在才写入）。
+        // prompts 数组守卫：排除角色卡等任意对象 JSON，避免把非预设对象迁移成垃圾 base。
+        profiles.push(convertV1ToBase({ id: newId, name: profileName, settings: parsed }));
     } else {
-        profiles.push({
-            id: newId,
-            name: profileName,
-            settings: parsed
-        });
+        throw new Error('Imported configuration is not a valid preset snapshot (missing prompts array)');
     }
 
     return { profiles, warnings };

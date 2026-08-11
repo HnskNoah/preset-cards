@@ -23,6 +23,7 @@ import {
     applyBaseProfile,
     applyProfileToPreset,
     buildBaseSnapshotDiff,
+    captureSampling,
     resolveParentStates,
 } from './promptToggle.js';
 import {
@@ -37,7 +38,7 @@ import { buildPresetList, getCardsTemplateContext } from './presetList.js';
 import { applyCachedBackgrounds, clearImageCache } from './cache.js';
 import { openEditModal } from './editModal.js';
 import { applyBufferedEdits, clearBufferedForName, type PromptEditBuffer } from './presetBuffers.js';
-import { applyDefaultOriginalFields, defaultEnabledEntries, lockDefaultSnapshot } from './presetSnapshot.js';
+import { applyDefaultExtra, applyDefaultOriginalFields, defaultEnabledEntries, lockDefaultSnapshot } from './presetSnapshot.js';
 import { buildDerivedProfile, collectDescendantProfileIds } from './profileActions.js';
 import { openProfileEditorPopup } from './profileEditor.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
@@ -570,12 +571,14 @@ export async function openPresetCards(): Promise<void> {
         }
 
         // 与锁定基线做差异：fields 只存与基线不同的字段（content 差异进 base，又避免全量 content 快照）
+        const sampling = captureSampling(preset);
         profiles.push({
             formatVersion: 2,
             kind: 'prompt_base',
             id: newProfileId(),
             name: profileName,
             prompts: buildBaseSnapshotDiff(preset, meta.defaultSnapshot),
+            ...(sampling ? { sampling } : {}),
         });
 
         meta.profiles = profiles;
@@ -662,7 +665,7 @@ export async function openPresetCards(): Promise<void> {
         if (!deltaName) return;
 
         const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
-        profiles.push(buildDerivedProfile(parent, deltaName));
+        profiles.push(buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined));
 
         meta.profiles = profiles;
         await saveMeta(name, idx, meta);
@@ -702,12 +705,17 @@ export async function openPresetCards(): Promise<void> {
                     prompts: parentStates,
                 });
                 profile.changes = [];
+                // reset 回退到父链：采样快照一并清除，避免下次加载复活旧采样覆盖预设当前值
+                delete profile.sampling;
+                // 预设附加键还原到出厂基线；profile 自身 extra 为保留存档，reset 不改
+                applyDefaultExtra(preset, meta);
             } else {
                 if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
                     toastr.warning(L('No default baseline available'));
                     return;
                 }
                 applyDefaultOriginalFields(preset, meta);
+                applyDefaultExtra(preset, meta);
                 const defaultPrompts = defaultEnabledEntries(preset, meta);
                 const tmp: PromptBaseProfile = {
                     formatVersion: 2,
@@ -718,6 +726,7 @@ export async function openPresetCards(): Promise<void> {
                 };
                 applyBaseProfile(preset, tmp);
                 profile.changes = [];
+                delete profile.sampling;
             }
             await saveMeta(name, idx, meta);
             toastr.success(L('Configuration reset'));
@@ -730,9 +739,11 @@ export async function openPresetCards(): Promise<void> {
                 return;
             }
             applyDefaultOriginalFields(preset, meta);
+            applyDefaultExtra(preset, meta);
             // 只回写开关；originalFields 是 reset 专用元数据，不随 profile 持久化
             const defaultPrompts = defaultEnabledEntries(preset, meta);
             profile.prompts = structuredClone(defaultPrompts);
+            delete profile.sampling;
             const tmp: PromptBaseProfile = {
                 formatVersion: 2,
                 kind: 'prompt_base',
@@ -851,14 +862,18 @@ export async function openPresetCards(): Promise<void> {
 
                 const preset = openai_settings[idx] as Preset;
                 const meta = readMeta(preset);
-                const existing = Array.isArray(meta.profiles) ? meta.profiles : [];
-                const { profiles, warnings } = mergeImportedProfiles(parsed, existing, profileName, meta.defaultSnapshot);
+                // 首次导入：先采集出厂基线（defaultSnapshot + defaultExtra），供 reset 还原
+                if (!meta.defaultSnapshotLocked) {
+                    await lockDefaultSnapshot(preset, name, idx);
+                }
+                const lockedMeta = readMeta(preset);
+                const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta.defaultSnapshot);
                 for (const warning of warnings) {
                     toastr.warning(warning);
                 }
 
-                meta.profiles = profiles;
-                await saveMeta(name, idx, meta);
+                lockedMeta.profiles = profiles;
+                await saveMeta(name, idx, lockedMeta);
                 toastr.success(L('Configuration saved'));
 
                 // 导入的整棵子树默认折叠不可见：展开该卡全部 profile 组，让导入树可见
