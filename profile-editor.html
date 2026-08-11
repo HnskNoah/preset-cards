@@ -9,16 +9,18 @@
                 <div class="pc-header-breadcrumb-row">
                     <div class="pc-header-breadcrumb" title="{{breadcrumbTitle}}">
                         {{#each breadcrumb}}
-                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" title="{{this.name}}">{{this.name}}{{#if this.isCurrent}}<button id="pc-btn-rename" class="pc-btn-rename" title="{{../i18n.rename}}"><i class="fa-solid fa-pen"></i></button>{{/if}}</span>
+                        <span class="pc-breadcrumb-item {{#if this.isCurrent}}pc-breadcrumb-current{{/if}}" title="{{this.name}}">{{this.name}}{{#if this.isCurrent}}{{#unless ../readOnly}}<button id="pc-btn-rename" class="pc-btn-rename" title="{{../../i18n.rename}}"><i class="fa-solid fa-pen"></i></button>{{/unless}}{{/if}}</span>
                         {{#unless @last}}<span class="pc-breadcrumb-sep">▸</span>{{/unless}}
                         {{/each}}
                     </div>
                 </div>
                 <div class="pc-header-actions-row">
                     <div class="pc-header-actions-center">
+                        {{#unless readOnly}}
                         <button id="pc-btn-lock" class="pc-top-action-btn pc-btn-lock" title="{{i18n.lockList}}"><i class="fa-solid fa-lock"></i> <span class="pc-btn-label">{{i18n.lockList}}</span></button>
                         <button id="pc-btn-reset" class="pc-top-action-btn pc-btn-reset" title="{{i18n.reset}}"><i class="fa-solid fa-rotate-left"></i> <span class="pc-btn-label">{{i18n.reset}}</span></button>
                         <button id="pc-btn-commit" class="pc-top-action-btn pc-btn-commit" title="{{i18n.commit}}" {{#unless canCommit}}disabled{{/unless}}><i class="fa-solid fa-check"></i> <span class="pc-btn-label">{{i18n.commit}}</span></button>
+                        {{/unless}}
                     </div>
                 </div>
             </div>
@@ -41,16 +43,18 @@
                         <span class="pc-card-name" title="{{this.name}}">{{this.name}}</span>
                         <span class="pc-role-badge role-{{this.role}}">{{this.role}}</span>
                     </div>
+                    {{#unless ../readOnly}}
                     {{#if this.clearable}}
-                    <button class="pc-card-clear" title="{{../i18n.clearValueChange}}">
+                    <button class="pc-card-clear" title="{{../../i18n.clearValueChange}}">
                         <i class="fa-solid fa-eraser"></i>
                     </button>
                     {{/if}}
                     {{#if this.toggleable}}
-                    <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../i18n.toggleEntry}}">
+                    <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../../i18n.toggleEntry}}">
                         {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i>{{else}}<i class="fa-solid fa-toggle-off"></i>{{/if}}
                     </button>
                     {{/if}}
+                    {{/unless}}
                 </div>
                 {{/each}}
                 {{#unless entries.length}}

@@ -49,8 +49,10 @@ function migrateLegacyPresetFields(preset: Preset): void {
         const shouldMigrate = migration.oldValue instanceof RegExp
             ? migration.oldValue.test(String(preset[migration.oldKey]))
             : preset[migration.oldKey] === migration.oldValue;
-        if (shouldMigrate) preset[migration.newKey] = migration.newValue;
-        if (migration.oldKey !== migration.newKey) delete preset[migration.oldKey];
+        if (shouldMigrate) {
+            preset[migration.newKey] = migration.newValue;
+            if (migration.oldKey !== migration.newKey) delete preset[migration.oldKey];
+        }
     }
 }
 

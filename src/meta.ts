@@ -2,6 +2,7 @@ import { getRequestHeaders } from '@sillytavern/script';
 import { t } from '@sillytavern/scripts/i18n';
 import { openai_settings, oai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_KEY } from './constants.js';
+import { isV3BaseProfileData, isV3DeltaProfileData } from './profileSchema.js';
 
 /** 预设对象的最小结构;其余字段是 ST 的任意设置,保持宽松。 */
 export type Preset = Record<string, any> & {
@@ -15,14 +16,13 @@ export interface PresetProfileV1 {
     formatVersion?: 1;
 }
 
-/** prompt 值字段（全可选，向后兼容旧数据）。 */
+/** prompt 值字段（全可选，向后兼容旧数据）。白名单见 PROMPT_FIELD_WHITELIST。 */
 export interface PromptFields {
     content?: string;
     name?: string;
     role?: string;
     injection_position?: number;
     injection_depth?: number;
-    injection_order?: number;
 }
 
 /** 采样参数快照（全可选）：缺失的键在加载 profile 时保持预设当前值，不覆盖。
@@ -44,56 +44,87 @@ export interface PromptSampling {
     stream_openai?: boolean;
 }
 
-/** 主 profile：记录当前目标 prompt_order.order 中 prompts 的开关，可附带值字段（fields），不存扩展。 */
+/** v3 prompt 条目：挂载态（mounted）+ 开关 + 值字段差异。 */
+export interface PromptProfileEntry {
+    identifier: string;
+    mounted: boolean;
+    enabled: boolean;
+    lastActiveIndex?: number;
+    fields?: PromptFields;
+}
+
+/** v3 delta 的一条差异：挂载/开关/顺序/值字段差异。 */
+export interface PromptStateChange {
+    identifier: string;
+    mounted?: boolean;
+    enabled?: boolean;
+    lastActiveIndex?: number;
+    fields?: PromptFields;
+}
+
+/** 主 profile（formatVersion 3）：记录当前目标 prompt_order 的完整挂载状态 + 值字段。
+ * 是 v2（formatVersion 2）的超集：v2 数据仅记录 mounted 开关，v3 增补 unused/顺序。 */
 export interface PromptBaseProfile {
-    formatVersion: 2;
+    formatVersion: 3;
     kind: 'prompt_base';
     id: string;
     name: string;
-    prompts: { identifier: string; enabled: boolean; fields?: PromptFields }[];
-    /** 采样参数快照（可选）：加载时存在键覆盖预设对应值，缺失键不动。 */
+    prompts: PromptProfileEntry[];
+    /** 保存时未挂载（在 prompts 定义中但不在目标 prompt_order）的 identifier。只记 id，不存无意义字段。 */
+    unusedIds?: string[];
+    /** 导入存档 base 标记：只读、隐藏、作为 reset 相对基线。最后一个子节点删除时级联删除。 */
+    archive?: true;
+    /** 采样参数快照（可选）：仅存「相对出厂基线有差异」的键；加载时存在键覆盖，缺失键不动。 */
     sampling?: PromptSampling;
-    /** 附加快照（可选）：v1 迁移保留的、v2 无对应结构的预设键（如 impersonation_prompt、bias_preset_selected 等），
+    /** 附加快照（可选）：仅存「相对出厂基线有差异」的预设键（如 impersonation_prompt、bias_preset_selected 等）。
      * 加载时 Object.assign 还原到预设（保留 extensions）。缺失键不动。 */
     extra?: Record<string, any>;
 }
 
-/** 派生 profile 的一条差异：开关差异 + 值差异（content/role/name 等）。 */
+/** 派生 profile 的一条差异：挂载/开关/顺序/值字段差异（与 PromptStateChange 同构的兼容别名）。
+ * v3 下 delta 的 changes 实际为 PromptStateChange[]（含 mounted/lastActiveIndex），
+ * 此类型用于兼容既有 PromptDeltaChange[] 调用点。 */
 export interface PromptDeltaChange {
     identifier: string;
+    mounted?: boolean;
     enabled?: boolean;
+    lastActiveIndex?: number;
     fields?: Record<string, any>;
 }
 
-/** 派生 profile：相对主 profile 的差异，加载时「主 + 子」叠加应用。 */
+/** 派生 profile（formatVersion 3）：相对主 profile 的差异，加载时「主 + 子」叠加应用。 */
 export interface PromptDeltaProfile {
-    formatVersion: 2;
+    formatVersion: 3;
     kind: 'prompt_delta';
     id: string;
     name: string;
     baseId: string;
-    changes: PromptDeltaChange[];
-    /** 采样参数快照（可选）：加载时存在键覆盖预设对应值，缺失键不动。 */
+    changes: PromptStateChange[];
+    /** 完整的 mounted identifier 顺序；缺省表示继承父级顺序。 */
+    order?: string[];
+    /** 采样参数快照（可选）：仅存差异键；加载时存在键覆盖，缺失键不动。 */
     sampling?: PromptSampling;
-    /** 附加快照（可选）：同 PromptBaseProfile.extra，v1 迁移保留的预设键。 */
+    /** 附加快照（可选）：同 PromptBaseProfile.extra，仅存差异键。 */
     extra?: Record<string, any>;
 }
 
-/** defaultSnapshot 条目：仅 mounted prompt 保存开关；全部 prompt 可保存 reset 用原始字段。 */
+/** defaultSnapshot 条目：出厂基线（首次 add base 时锁定）。挂载态 + 开关 + 原始值字段。 */
 export interface PromptDefaultSnapshotEntry {
     identifier: string;
-    enabled?: boolean;
+    mounted: boolean;
+    enabled: boolean;
+    lastActiveIndex?: number;
     originalFields?: PromptFields;
 }
 
 export type PresetProfile = PresetProfileV1 | PromptBaseProfile | PromptDeltaProfile;
 
 export function isPromptBaseProfile(profile: PresetProfile): profile is PromptBaseProfile {
-    return (profile as { kind?: string }).kind === 'prompt_base';
+    return isV3BaseProfileData(profile);
 }
 
 export function isPromptDeltaProfile(profile: PresetProfile): profile is PromptDeltaProfile {
-    return (profile as { kind?: string }).kind === 'prompt_delta';
+    return isV3DeltaProfileData(profile);
 }
 
 export interface PresetMeta {
@@ -105,8 +136,12 @@ export interface PresetMeta {
     defaultSnapshot?: PromptDefaultSnapshotEntry[];
     /** 默认基准是否已全量锁定（区分旧版仅开关快照与新版含 originalFields 的全量基线）。 */
     defaultSnapshotLocked?: boolean;
+    /** 出厂采样基线：首次 add base 时与 defaultSnapshot 一起锁定；reset 时把预设采样键还原到出厂值。 */
+    defaultSampling?: PromptSampling;
     /** 出厂 extra 基线：首次 add base 时与 defaultSnapshot 一起锁定；reset 时把预设的 extra 键还原到出厂值。 */
     defaultExtra?: Record<string, any>;
+    /** 导入存档 base 的 id（只读隐藏 base）。该 base 的最后一个子节点删除时级联删除。 */
+    archiveBaseId?: string;
 }
 
 /** 按 id 查 profile（id 归一化为字符串，兼容数字/字符串来源）。 */
@@ -131,16 +166,33 @@ export function readMeta(preset: Preset | undefined): PresetMeta {
         bgImage: ext?.bgImage || '',
         defaultSnapshot: Array.isArray(ext?.defaultSnapshot) ? ext.defaultSnapshot : undefined,
         defaultSnapshotLocked: ext?.defaultSnapshotLocked === true,
+        defaultSampling: ext?.defaultSampling && typeof ext.defaultSampling === 'object' && !Array.isArray(ext.defaultSampling)
+            ? ext.defaultSampling
+            : undefined,
         defaultExtra: ext?.defaultExtra && typeof ext.defaultExtra === 'object' && !Array.isArray(ext.defaultExtra)
             ? ext.defaultExtra
             : undefined,
+        archiveBaseId: typeof ext?.archiveBaseId === 'string' ? ext.archiveBaseId : undefined,
     };
 }
 
+/** 模块级保存串行链：同一时刻仅一个 saveMeta 在飞，避免并发 POST 全量预设造成 last-write-wins 丢更新。 */
+let saveChain: Promise<void> = Promise.resolve();
+
 /**
  * Persist metadata into the preset's extensions field and save to disk.
+ * 串行执行：每次保存排队在前一次之后，网络失败时抛错（调用方决定回滚/提示）。
  */
-export async function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+    // 失败也继续链（reject 传给调用方，但链不阻塞后续保存）
+    saveChain = saveChain.then(
+        () => doSaveMeta(presetName, presetIndex, meta),
+        () => doSaveMeta(presetName, presetIndex, meta),
+    );
+    return saveChain;
+}
+
+async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
     const preset = openai_settings[presetIndex] as Preset | undefined;
     if (!preset) return;
 
@@ -153,7 +205,9 @@ export async function saveMeta(presetName: string, presetIndex: number, meta: Pr
         bgImage: meta.bgImage || '',
         defaultSnapshot: meta.defaultSnapshot,
         defaultSnapshotLocked: meta.defaultSnapshotLocked === true,
+        defaultSampling: meta.defaultSampling,
         defaultExtra: meta.defaultExtra,
+        archiveBaseId: meta.archiveBaseId,
     };
 
     // Also update oai_settings if this is the current preset
