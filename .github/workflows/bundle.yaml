@@ -5,6 +5,8 @@ on:
     branches:
       - dev-ts
       - ts
+    paths-ignore:
+      - 'dist/**'
   workflow_dispatch:
 
 concurrency:
