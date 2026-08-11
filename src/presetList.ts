@@ -16,6 +16,8 @@ export interface ProfileEntryView {
     identifier: string;
     name: string;
     enabled: boolean;
+    /** 挂载态：false = unused（在 prompts 定义但未挂载），收进折叠区。 */
+    mounted: boolean;
     /** 该条目的角色（profile 覆盖值优先，否则预设原值，缺省 system），仅展示用。 */
     role?: string;
     /** 顺序序号（1-based，两位显示），仅活动预设且条目在目标 prompt_order 中时有值。 */
@@ -156,6 +158,7 @@ export function buildProfileEntries(
             index: orderIdx !== undefined ? String(orderIdx + 1).padStart(2, '0') : undefined,
             content: e.fields?.content ?? prompt?.content,
             enabled: e.enabled,
+            mounted: e.mounted,
             hasFields,
             // hasFields 基于 resolveProfilePrompts（递归合并父链）→ 含继承自父 profile 的 fields；
             // hasPersistentDiff 仅本 profile 自身差异：base 取自身 prompts[].fields（= hasFields），

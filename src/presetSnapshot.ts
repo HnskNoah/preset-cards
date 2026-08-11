@@ -9,6 +9,56 @@ import { bufferKey, bufferPrefix } from './presetBuffers.js';
 import { buildDefaultSnapshotLock, captureExtra, captureSampling, findPromptInPreset, filterFields, promptFieldsEqual, resolveParentStates, snapshotToChanges, snapshotToDelta } from './promptToggle.js';
 import { entriesFromDefaultSnapshot } from './promptState.js';
 
+/** 迁移 v2（formatVersion 2）profile 到 v3：识别并转换该预设的全部 v2 base/delta。
+ * 返回是否发生了迁移（调用方据此决定是否落盘）。
+ * - v2 base：prompts[].mounted 补 true、lastActiveIndex 按数组序（v2 顺序即挂载顺序），formatVersion → 3；
+ *   采样/extra 保留。
+ * - v2 delta：changes 保留（mounted 继承父链，不冗余补），formatVersion → 3；采样/extra 保留。
+ * v2 无独立 order 字段（顺序隐含在数组序），delta 的顺序信息 v2 本就没有，迁移不虚构。 */
+export function migrateLegacyV2Profiles(meta: PresetMeta): boolean {
+    if (!Array.isArray(meta.profiles)) return false;
+    let changed = false;
+    meta.profiles = meta.profiles.map((p) => {
+        const raw = p as Record<string, any>;
+        if (raw.formatVersion !== 2) return p;
+        if (raw.kind === 'prompt_base' && Array.isArray(raw.prompts)) {
+            changed = true;
+            const base: PromptBaseProfile = {
+                formatVersion: 3,
+                kind: 'prompt_base',
+                id: raw.id,
+                name: raw.name,
+                prompts: raw.prompts.map((entry: any, i: number) => ({
+                    identifier: entry.identifier,
+                    mounted: true,
+                    enabled: entry.enabled,
+                    ...(i > 0 || raw.prompts.length > 1 ? { lastActiveIndex: i } : {}),
+                    ...(entry.fields ? { fields: { ...entry.fields } } : {}),
+                })),
+                ...(raw.sampling ? { sampling: raw.sampling } : {}),
+                ...(raw.extra ? { extra: raw.extra } : {}),
+            };
+            return base;
+        }
+        if (raw.kind === 'prompt_delta' && Array.isArray(raw.changes)) {
+            changed = true;
+            const delta: PromptDeltaProfile = {
+                formatVersion: 3,
+                kind: 'prompt_delta',
+                id: raw.id,
+                name: raw.name,
+                baseId: raw.baseId,
+                changes: raw.changes as PromptDeltaChange[],
+                ...(raw.sampling ? { sampling: raw.sampling } : {}),
+                ...(raw.extra ? { extra: raw.extra } : {}),
+            };
+            return delta;
+        }
+        return p;
+    });
+    return changed;
+}
+
 // 首次对该预设 add base 时全量锁定默认基线：全部 prompt 采集挂载态 + 原始值字段；
 // 同时锁定出厂采样基线（defaultSampling）与出厂 extra 基线（defaultExtra）。
 // 写入 meta.defaultSnapshot + defaultSampling + defaultExtra 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
@@ -94,11 +144,19 @@ export function applyDefaultExtra(preset: Preset, meta: PresetMeta): void {
     preset.extensions = ext;
 }
 
-/** defaultSnapshot 中出厂挂载的完整 v3 条目（reset 到默认时还原出厂挂载态+顺序+原始值）。
- * 不按当前 order 过滤：reset 语义是「回出厂挂载态」，用户/导入造成的挂载差异一律被出厂态覆盖。 */
+/** defaultSnapshot 中出厂挂载的 v3 条目（reset 到默认时还原出厂挂载态+顺序）。
+ * 不按当前 order 过滤：reset 语义是「回出厂挂载态」，用户/导入造成的挂载差异一律被出厂态覆盖。
+ * 不带 fields：出厂值由 applyDefaultOriginalFields 还原到预设，base.prompts 只记挂载态/开关/顺序，
+ * 避免 reset 后所有条目被标成「有值差异」（fields 是相对基线的差异，回出厂应无差异）。 */
 export function defaultEnabledEntries(meta: PresetMeta): PromptProfileEntry[] {
     if (!Array.isArray(meta.defaultSnapshot)) return [];
-    return entriesFromDefaultSnapshot(meta.defaultSnapshot).filter((e) => e.mounted);
+    return entriesFromDefaultSnapshot(meta.defaultSnapshot)
+        .filter((e) => e.mounted)
+        .map((e) => {
+            const entry: PromptProfileEntry = { identifier: e.identifier, mounted: true, enabled: e.enabled };
+            if (e.lastActiveIndex !== undefined) entry.lastActiveIndex = e.lastActiveIndex;
+            return entry;
+        });
 }
 
 /** 「保存→更新」与「覆盖」共用的 base/delta 提交：按类型合并缓冲后的快照 → 持久化 → 成功提示。

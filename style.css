@@ -1906,6 +1906,43 @@
     opacity: 0.6;
 }
 
+/* 未使用 prompt 折叠区 */
+.pc-unused-group {
+    margin-top: 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    padding-top: 6px;
+}
+
+.pc-unused-toggle {
+    background: transparent;
+    border: none;
+    color: var(--SmartThemeBodyColor, inherit);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    opacity: 0.6;
+}
+
+.pc-unused-toggle:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor, inherit);
+}
+
+.pc-unused-group.expanded .pc-unused-toggle i {
+    transform: rotate(90deg);
+}
+
+.pc-unused-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+
 /* 空提示 */
 .pc-prompt-empty {
     font-size: 12px;

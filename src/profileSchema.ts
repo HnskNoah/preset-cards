@@ -45,7 +45,10 @@ export function isV3BaseProfileData(value: unknown): boolean {
     const profile = value as Record<string, unknown>;
     return profile.formatVersion === 3 && profile.kind === 'prompt_base'
         && typeof profile.id === 'string' && typeof profile.name === 'string'
-        && Array.isArray(profile.prompts) && profile.prompts.every(isV3PromptEntry);
+        && Array.isArray(profile.prompts) && profile.prompts.every(isV3PromptEntry)
+        && (profile.unusedIds === undefined
+            ? true
+            : Array.isArray(profile.unusedIds) && profile.unusedIds.every((id) => typeof id === 'string'));
 }
 
 export function isV3DeltaProfileData(value: unknown): boolean {
@@ -76,7 +79,9 @@ export function assertV3ImportPayload(parsed: Record<string, unknown>): void {
     }
     if (!isV3BaseProfileData(parsed) && !isV3DeltaProfileData(parsed)) throw new LegacyProfileFormatError();
     const deltaBase = parsed.base;
-    if (isV3DeltaProfileData(parsed) && deltaBase !== undefined && !isV3BaseProfileData(deltaBase)) {
+    // 内嵌父状态（delta 导出自带）：形状为 { name, prompts }（非完整 base），仅校验 prompts 数组即可。
+    if (isV3DeltaProfileData(parsed) && deltaBase !== undefined
+        && (typeof deltaBase !== 'object' || deltaBase === null || Array.isArray(deltaBase) || !Array.isArray((deltaBase as Record<string, unknown>).prompts))) {
         throw new LegacyProfileFormatError();
     }
 }

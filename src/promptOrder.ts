@@ -95,11 +95,12 @@ export function resolveProfilePrompts(
 
     if (isPromptBaseProfile(profile)) {
         const arranged = arrangePromptEntries(structuredClone(profile.prompts), mountedOrder(profile.prompts));
-        // 并入 unusedIds 为 mounted:false 条目（unused prompt 展示/diff 可见；加载时 replaceTargetPromptOrder 仍不挂载）
-        if (profile.unusedIds && profile.unusedIds.length > 0) {
+        // 并入 unusedIds 为 mounted:false 条目（unused prompt 展示/diff 可见；加载时 replaceTargetPromptOrder 仍不挂载）。
+        // Array.isArray 守卫防御畸形数据（unusedIds 非数组时静默跳过，不崩溃）。
+        if (Array.isArray(profile.unusedIds) && profile.unusedIds.length > 0) {
             const known = new Set(arranged.map((e) => e.identifier));
             const unusedEntries: PromptProfileEntry[] = profile.unusedIds
-                .filter((id) => !known.has(id))
+                .filter((id) => typeof id === 'string' && !known.has(id))
                 .map((id) => ({ identifier: id, mounted: false, enabled: false }));
             return [...arranged, ...unusedEntries];
         }

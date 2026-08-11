@@ -253,12 +253,16 @@ export async function renderDialog(ctx: EditorContext): Promise<void> {
     if (!snapshot) return;
     const items = stagedItems(ctx, snapshot);
     const { items: breadcrumb, title: breadcrumbTitle } = buildBreadcrumb(snapshot.profile, snapshot.meta);
+    // 挂载/未挂载分组：unused 收进折叠区（模板各渲染一段）
+    const entries = snapshot.entries.filter((e) => e.mounted);
+    const unusedEntries = snapshot.entries.filter((e) => !e.mounted);
 
     const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'profile-editor', {
         presetName: ctx.name,
         breadcrumb,
         breadcrumbTitle,
-        entries: snapshot.entries,
+        entries,
+        unusedEntries,
         stagedCount: items.length,
         canCommit: items.length > 0,
         listLocked: ctx.listLocked,
@@ -277,6 +281,7 @@ export async function renderDialog(ctx: EditorContext): Promise<void> {
             toggleEntry: L('Toggle entry'),
             noEntries: L('No entries'),
             noSearchResults: L('No prompts found'),
+            unusedPrompts: L('Unused prompts'),
         },
     });
 

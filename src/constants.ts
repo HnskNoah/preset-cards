@@ -158,6 +158,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'Uncommitted changes discarded': '未提交的更改已丢弃',
     'Save': '保存',
     'No prompts found': '未找到匹配的 prompt',
+    'Unused prompts': '未使用的 prompt',
 };
 
 export interface ModelDef {

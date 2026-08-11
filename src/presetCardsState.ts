@@ -73,11 +73,18 @@ export async function deletePresetByName(
     if (value === undefined) return false;
 
     // 先等服务器确认删除成功，再动本地状态（避免删失败时本地已切走活动预设/清索引而无法回滚）。
-    const response = await fetch('/api/presets/delete', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({ apiId: 'openai', name: nameToDelete }),
-    });
+    let response: Response;
+    try {
+        response = await fetch('/api/presets/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ apiId: 'openai', name: nameToDelete }),
+        });
+    } catch (err) {
+        console.error('Delete preset request failed', err);
+        toastr.error(L('Failed to delete preset from server'));
+        return false;
+    }
 
     if (!response.ok) return false;
 

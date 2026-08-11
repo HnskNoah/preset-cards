@@ -224,4 +224,13 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         applySearch(ctx);
         setupSortable(ctx); // 搜索中禁用拖拽
     });
+
+    // 未使用 prompt 折叠区：点击标题展开/收起
+    ctx.dialog.on('click', '.pc-unused-toggle', function () {
+        const group = $(this).closest('.pc-unused-group');
+        const list = group.find('.pc-unused-list');
+        const expanded = group.hasClass('expanded');
+        group.toggleClass('expanded', !expanded);
+        list.toggle(!expanded);
+    });
 }

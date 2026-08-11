@@ -57,6 +57,35 @@
                     {{/unless}}
                 </div>
                 {{/each}}
+                {{#if unusedEntries.length}}
+                <div class="pc-unused-group">
+                    <button type="button" class="pc-unused-toggle" title="{{i18n.unusedPrompts}}">
+                        <i class="fa-solid fa-caret-right"></i> {{i18n.unusedPrompts}} ({{unusedEntries.length}})
+                    </button>
+                    <div class="pc-unused-list" style="display:none;">
+                        {{#each unusedEntries}}
+                        <div class="pc-prompt-card {{#if this.hasPersistentDiff}}persistent{{/if}} {{#unless this.enabled}}disabled{{/unless}}" data-identifier="{{this.identifier}}">
+                            <div class="pc-card-title">
+                                <span class="pc-card-name" title="{{this.name}}">{{this.name}}</span>
+                                <span class="pc-role-badge role-{{this.role}}">{{this.role}}</span>
+                            </div>
+                            {{#unless ../readOnly}}
+                            {{#if this.clearable}}
+                            <button class="pc-card-clear" title="{{../../i18n.clearValueChange}}">
+                                <i class="fa-solid fa-eraser"></i>
+                            </button>
+                            {{/if}}
+                            {{#if this.toggleable}}
+                            <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../../i18n.toggleEntry}}">
+                                {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i>{{else}}<i class="fa-solid fa-toggle-off"></i>{{/if}}
+                            </button>
+                            {{/if}}
+                            {{/unless}}
+                        </div>
+                        {{/each}}
+                    </div>
+                </div>
+                {{/if}}
                 {{#unless entries.length}}
                 <div class="pc-prompt-empty">{{i18n.noEntries}}</div>
                 {{/unless}}
