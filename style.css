@@ -1475,6 +1475,12 @@
     background: var(--SmartThemeButtonHoverColor, rgba(255,255,255,0.1));
 }
 
+.pc-btn-lock.active {
+    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.2);
+    border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
+    color: var(--SmartThemeQuoteColor);
+}
+
 .pc-btn-reset:hover {
     color: var(--SmartThemeQuoteColor);
     border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
@@ -1796,6 +1802,26 @@
 
 .pc-drag-handle:active {
     cursor: grabbing;
+}
+
+/* 列表锁定：隐藏拖拽把手、清除按钮禁用视觉，编辑入口不再响应 */
+.pc-prompt-list.pc-locked .pc-drag-handle {
+    opacity: 0.1;
+    cursor: not-allowed;
+}
+
+.pc-prompt-list.pc-locked .pc-card-clear {
+    opacity: 0.2;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.pc-prompt-list.pc-locked .pc-prompt-card {
+    cursor: default;
+}
+
+.pc-prompt-list.pc-locked .pc-prompt-card:hover {
+    background: var(--SmartThemeBlurTintColor, rgba(255, 255, 255, 0.05));
 }
 
 /* 清除按钮 */

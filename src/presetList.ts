@@ -136,7 +136,16 @@ export function buildProfileEntries(
     }
 
     const resolved = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
-    return resolved.map((e) => {
+    // 按 prompt_order 的 orderIndex 排序展示（active 预设 orderCtx 已建）：已知序排前，未知 identifier 保持原相对顺序排后
+    const sorted = [...resolved].sort((a, b) => {
+        const ia = orderCtx.orderIndex.get(a.identifier);
+        const ib = orderCtx.orderIndex.get(b.identifier);
+        if (ia !== undefined && ib !== undefined) return ia - ib;
+        if (ia !== undefined) return -1;
+        if (ib !== undefined) return 1;
+        return 0;
+    });
+    return sorted.map((e) => {
         const prompt = promptLookup.get(e.identifier);
         const hasFields = !!e.fields && Object.keys(e.fields).length > 0;
         const orderIdx = orderCtx.orderIndex.get(e.identifier);
