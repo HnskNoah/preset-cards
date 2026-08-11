@@ -154,7 +154,7 @@ jobs:
 
           export GIT_TERMINAL_PROMPT=0
           export GIT_ASKPASS=/bin/true
-          AUTH_URL="https://x-access-token:${RELEASE_REPO_TOKEN}@github.com/HnskNoah/preset-cards-release.git"
+          AUTH_URL="https://HnskNoah:${RELEASE_REPO_TOKEN}@github.com/HnskNoah/preset-cards-release.git"
           git clone --no-checkout "$AUTH_URL" "$TMP/repo"
           REL="$TMP/repo"
           git -C "$REL" checkout -B TS-sync origin/TS
