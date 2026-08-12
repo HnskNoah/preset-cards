@@ -14,7 +14,8 @@ function cssEscape(s: string): string {
     return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/** 重建后重应用锁定视觉（模板只传 label，类/图标/高亮由 JS 维护，跨 renderDialog 不丢）。 */
+/** 重建后重应用锁定视觉（模板只传 label，类/图标/高亮由 JS 维护，跨 renderDialog 不丢）。
+ * 锁定时只读：可查看 prompt、可返回，隐藏重置/提交（保存键）。 */
 export function applyLockVisual(ctx: EditorContext): void {
     const btn = ctx.dialog.find('#pc-btn-lock');
     btn.toggleClass('active', ctx.listLocked);
@@ -22,6 +23,8 @@ export function applyLockVisual(ctx: EditorContext): void {
     btn.find('.pc-btn-label').text(ctx.listLocked ? L('Unlock list') : L('Lock list'));
     btn.find('i').attr('class', ctx.listLocked ? 'fa-solid fa-unlock' : 'fa-solid fa-lock');
     ctx.dialog.find('.pc-prompt-list').toggleClass('pc-locked', ctx.listLocked);
+    ctx.dialog.find('#pc-btn-reset').toggle(!ctx.listLocked);
+    ctx.dialog.find('#pc-btn-commit').toggle(!ctx.listLocked);
 }
 
 /** 把缓冲状态叠加到已渲染的条目列表（开关目标 / 编辑后的名字 / dirty 高亮）。 */
@@ -197,14 +200,17 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
 
     const prevSession = ctx.sessionEdits.get(bufferKey(ctx.name, identifier));
     const current = prevSession ? { ...capturePromptFields(prompt), ...prevSession.edited } : undefined;
-    const form = buildPromptEditForm(preset, identifier, current);
+    // 锁定时只读查看：表单控件禁用，不显示保存
+    const form = buildPromptEditForm(preset, identifier, current, ctx.listLocked);
 
     const saveBtn = $('<button class="pc-btn-icon pc-btn-icon-primary" title="' + L('Save') + '"></button>')
         .append($('<i class="fa-solid fa-save"></i>'))
         .append(' ' + L('Save'));
-    const cancelBtn = $('<button class="pc-btn-icon" title="' + L('Cancel') + '"></button>')
+    const cancelBtn = $('<button class="pc-btn-icon" title="' + (ctx.listLocked ? L('Back') : L('Cancel')) + '"></button>')
         .append($('<i class="fa-solid fa-times"></i>'))
-        .append(' ' + L('Cancel'));
+        .append(' ' + (ctx.listLocked ? L('Back') : L('Cancel')));
+
+    if (ctx.listLocked) saveBtn.hide();
 
     saveBtn.on('click', () => {
         if (ctx.listLocked) return;

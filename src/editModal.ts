@@ -124,6 +124,7 @@ export function buildPromptEditForm(
     preset: Preset,
     identifier: string,
     current?: PromptFields,
+    readonly?: boolean,
 ): PromptEditForm {
     const prompt = findPromptInPreset(preset, identifier);
     if (!prompt) {
@@ -203,6 +204,12 @@ export function buildPromptEditForm(
     container.append(rowWrap);
     container.append(depthWrap);
     container.append(contentWrap);
+
+    // 只读查看（锁定态）：禁用全部控件
+    if (readonly) {
+        container.find('input, select, textarea').prop('disabled', true);
+        container.addClass('preset_cards_prompt_edit_readonly');
+    }
 
     // 只返回与当前值不同的字段，避免把默认值写进 profile
     const collectFields = (): PromptFields | null => {

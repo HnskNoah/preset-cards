@@ -43,7 +43,7 @@ async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true,
 /** 绑定全部事件 handler（逻辑全部下沉 state/render 纯函数，本文件仅做 DOM 绑定）。 */
 export function bindEditorHandlers(ctx: EditorContext): void {
     ctx.dialog.on('click', '.pc-prompt-card', function (e) {
-        if (ctx.listLocked) return;
+        // 锁定下仍可进入只读查看（表单禁用、无保存），修改类交互由各 handler 的 listLocked 守卫阻止
         const snapshot = resolveEditorSnapshot(ctx);
         if (snapshot?.readOnly) return;
         if ($(e.target).closest('.pc-drag-handle, .pc-card-clear, .pc-btn-toggle, button').length) return;
