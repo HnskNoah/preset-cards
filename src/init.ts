@@ -3,6 +3,7 @@ import { SlashCommand } from '@sillytavern/scripts/slash-commands/SlashCommand';
 import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCommandParser';
 import { openPresetCards } from './presetCards.js';
 import { initActiveProfile } from './activeProfile.js';
+import { applyProfileToPresetByName } from './presetCardsState.js';
 
 export function refresh(): void {
     location.reload();
@@ -10,6 +11,11 @@ export function refresh(): void {
 
 export function init(): void {
     initActiveProfile();
+
+    // 对外入口：供其它扩展（如 ST-Quicker-Api 便捷方案）加载 preset-cards 的 profile
+    (globalThis as Record<string, any>).presetCards = {
+        loadProfile: applyProfileToPresetByName,
+    };
 
     const buttonHtml = `
         <div id="preset_cards_button" class="list-group-item flex-container flexGap5">

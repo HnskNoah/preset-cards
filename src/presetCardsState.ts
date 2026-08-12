@@ -129,6 +129,30 @@ export async function deletePresetByName(
     return true;
 }
 
+/** 按预设名 + profile id 应用 profile 到预设并持久化（不依赖卡片 UI ctx）。
+ * 供卡片行 / concise 弹窗 / 外部扩展（如 ST-Quicker-Api 便捷方案）共用。成功返回 true。 */
+export async function applyProfileToPresetByName(
+    name: string,
+    profileId: string,
+): Promise<boolean> {
+    const idx = openai_setting_names[name];
+    if (idx === undefined) return false;
+    const preset = openai_settings[idx] as Preset;
+    const meta = readMeta(preset);
+    const profile = getProfile(meta, profileId);
+    if (!profile) return false;
+    applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
+    setActiveProfile({ presetName: name, profileId: String(profileId) });
+    try {
+        await saveMeta(name, idx, meta);
+    } catch (err) {
+        console.error('Load profile failed', err);
+        toastr.error(L('Failed to save preset metadata'));
+        return false;
+    }
+    return true;
+}
+
 /** 加载 profile 到 preset（卡片行与 concise 弹窗共用）。
  * opts.closePopup：加载后关闭 concise 弹窗（仅弹窗内行点击传入）。 */
 export async function loadProfile(
@@ -138,20 +162,7 @@ export async function loadProfile(
     profileId: string,
     opts?: { closePopup?: boolean },
 ): Promise<void> {
-    const preset = openai_settings[idx] as Preset;
-    const meta = readMeta(preset);
-    const profile = getProfile(meta, profileId);
-    if (!profile) return;
-
-    applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
-    setActiveProfile({ presetName: name, profileId: String(profileId) });
-    try {
-        await saveMeta(name, idx, meta);
-    } catch (err) {
-        console.error('Load profile failed', err);
-        toastr.error(L('Failed to save preset metadata'));
-        return;
-    }
+    if (!await applyProfileToPresetByName(name, profileId)) return;
     toastr.success(L('Configuration loaded'));
     activatePreset(ctx, name, idx);
     clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
