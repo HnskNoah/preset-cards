@@ -67,6 +67,39 @@ npm run build      # 生产构建，输出 dist/index.js（sourcemap 已禁用�
 
 源码入口为 `src/index.ts`（重导出 `src/init.ts` 的 `init` 钩子），核心逻辑见 `src/presetCards.ts`（卡片页 handler）、`src/profileEditor.ts`（profile 编辑器弹窗）、`src/promptToggle.ts`（profile 应用 / prompt_order 同步）、`src/meta.ts`（元数据读写）、`src/presetList.ts`（卡片与弹窗共用的条目视图）；会话缓冲与派生构造见 `src/presetBuffers.ts`、`src/presetSnapshot.ts`、`src/profileActions.ts`，导入导出见 `src/importExport.ts`，编辑表单见 `src/editModal.ts`，中英词典见 `src/constants.ts`。仓库根有 **`AGENTS.md`**，固化开发约定与**审查结论复核流程**——任何 review/audit 结论须先由独立 verify 判定 `REAL` / `MARGINAL` / `FALSE`（附 file:line 证据）方可执行。`docs/` 目录有意加入 `.gitignore`，设计文档不随仓库跟踪。
 
+## 第三方集成（对外 API）
+
+preset-cards 通过 `window.presetCards` 向其它 SillyTavern 扩展暴露集成接口，便于在自定义场景（便捷方案、快捷回复、宏等）中加载/查询 profile。类型声明见 `src/presetCardsApi.d.ts`（`interface Window { presetCards: PresetCardsApi }`），第三方 TypeScript 扩展可直接引用该声明获得类型校验。
+
+```ts
+interface PresetCardsApi {
+    /** 加载并持久化指定预设下的 profile，成功返回 true。 */
+    loadProfile(presetName: string, profileId: string): Promise<boolean>;
+    /** 枚举指定预设下的 profile（id + name）。 */
+    getProfiles(presetName: string): { id: string; name: string }[];
+    /** 列出所有含 profile 的预设名。 */
+    listPresets(): string[];
+    /** 当前激活的 profile（presetName + profileId）。 */
+    getActiveProfile(): { presetName: string; profileId: string } | undefined;
+    /** 订阅 profile 加载事件（loadProfile 成功后触发）。 */
+    onProfileChanged(listener: (ref: { presetName: string; profileId: string }) => void): void;
+}
+```
+
+使用示例：
+
+```js
+// 加载 profile
+await window.presetCards.loadProfile('我的预设', 'profile-id');
+
+// 订阅加载事件
+window.presetCards.onProfileChanged(({ presetName, profileId }) => {
+    console.log('profile 已加载', presetName, profileId);
+});
+```
+
+> 加载顺序由调用方负责：如需先切预设再加载 profile，请先切换 ST 预设，再调用 `loadProfile`（Quicker-Api 便捷方案即按此顺序执行）。
+
 ## 最近变更（分支 `feature/profile-editor`，9c95aa1→77a743b）
 
 - **Profile 编辑器弹窗**（7dc8c0b→77a743b）：点击 profile 名加载后自动打开 pcmanager 式左右栏编辑器（`src/profileEditor.ts` + `profile-editor.html`）。左栏 prompt 列表（1-based 序号、角色徽章、隐藏 identifier、开关、清除值变更、拖拽把手），右栏默认「暂存更改」diff（开关/值变更逐条 Undo），点条目或「查看暂存」进入内联编辑表单；顶部 **Commit** 统一落盘（更新当前配置 / 新建为子配置），关弹窗有未提交改动时弹「丢弃」确认，确认后缓冲清除（重新加载会整体覆盖 preset，无续编路径）。手机端（≤768px）右栏默认隐藏，点条目后右栏全宽覆盖列表。
