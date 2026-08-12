@@ -156,9 +156,17 @@ export const LOCAL_DICT: Record<string, string> = {
     'You have uncommitted changes': '您还有未提交的更改',
     'You have uncommitted changes. Discard them?': '您还有未提交的更改，要丢弃吗？',
     'Uncommitted changes discarded': '未提交的更改已丢弃',
+    'Uncommitted changes will be discarded': '未提交的更改将被丢弃',
+    'items reordered': '项顺序调整',
     'Save': '保存',
     'No prompts found': '未找到匹配的 prompt',
     'Unused prompts': '未使用的 prompt',
+    'Activate prompt': '激活 prompt',
+    'Mount': '挂载',
+    'Unmount': '卸载',
+    'Mount this system prompt / marker?': '挂载此系统 prompt / 标记？',
+    'Unmount this system prompt / marker?': '卸载此系统 prompt / 标记？',
+    'Failed to save preset metadata': '保存预设元数据失败',
 };
 
 export interface ModelDef {

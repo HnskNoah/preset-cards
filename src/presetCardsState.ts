@@ -215,9 +215,11 @@ export async function addBaseProfile(
             toastr.warning(`${L('Missing prompts skipped')}: ${missing.join(', ')}`);
         }
 
-        profiles.push(buildNewBaseProfile(preset, meta.defaultSnapshot, profileName));
-        meta.profiles = profiles;
-        await saveMeta(name, idx, meta);
+        // 副本模式：saveMeta 持久化含新 base 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 base）
+        const nextProfiles = [...profiles, buildNewBaseProfile(preset, meta.defaultSnapshot, profileName)];
+        const nextMeta = { ...meta, profiles: nextProfiles };
+        await saveMeta(name, idx, nextMeta);
+        meta.profiles = nextProfiles;
     } catch (err) {
         console.error('Add base failed', err);
         toastr.error(L('Failed to save preset metadata'));
@@ -312,9 +314,12 @@ export async function importProfileFile(ctx: CardsContext, name: string, idx: nu
         const lockedMeta = readMeta(preset);
         const { profiles, warnings, archiveBaseId } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
         for (const warning of warnings) toastr.warning(warning);
+        // 副本模式：saveMeta 持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
+        const nextMeta = { ...lockedMeta, profiles };
+        if (archiveBaseId) nextMeta.archiveBaseId = archiveBaseId;
+        await saveMeta(name, idx, nextMeta);
         lockedMeta.profiles = profiles;
         if (archiveBaseId) lockedMeta.archiveBaseId = archiveBaseId;
-        await saveMeta(name, idx, lockedMeta);
         toastr.success(L('Configuration saved'));
         await refreshGrid(ctx, { applyBackgrounds: true });
         ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');

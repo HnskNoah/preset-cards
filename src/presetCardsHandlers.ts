@@ -273,15 +273,17 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const deltaName = await Popup.show.input(L('Derived profile name:'), '');
         if (!deltaName) return;
         const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
-        profiles.push(buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined));
-        meta.profiles = profiles;
+        const nextProfiles = [...profiles, buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined)];
+        // 副本模式：saveMeta 持久化含新 delta 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 delta）
+        const nextMeta = { ...meta, profiles: nextProfiles };
         try {
-            await saveMeta(name, idx, meta);
+            await saveMeta(name, idx, nextMeta);
         } catch (err) {
             console.error('Derive failed', err);
             toastr.error(L('Failed to save preset metadata'));
             return;
         }
+        meta.profiles = nextProfiles;
         toastr.success(L('Derived profile created'));
         await refreshGrid(ctx);
         ctx.dialog.find(`.preset_card_profile_row[data-profile-id="${String(parent.id)}"]`).parents('.preset_card_profile_group').addClass('expanded');
@@ -341,29 +343,33 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         if (!confirm) return;
 
         const deleteIds = new Set([String(profileId), ...descendantIds]);
-        meta.profiles = (meta.profiles || []).filter(p => !deleteIds.has(String(p.id)));
+        // 副本模式：删除/级联结果先在 nextMeta 上计算，saveMeta 成功后才写回活 meta 并清 activeProfile
+        // （失败时内存与磁盘保持一致，不残留"已删但未落盘"的中间态）
+        let nextProfiles = (meta.profiles || []).filter(p => !deleteIds.has(String(p.id)));
         // 级联：遍历全部 archive 隐藏 base——最后一个可见子节点被删则移除 archive。
-        const remainingArchives = (meta.profiles || []).filter((p) => isPromptBaseProfile(p) && isArchiveProfile(p as PromptBaseProfile));
+        const remainingArchives = nextProfiles.filter((p) => isPromptBaseProfile(p) && isArchiveProfile(p as PromptBaseProfile));
         for (const archive of remainingArchives) {
-            const stillReferenced = (meta.profiles || []).some(p =>
+            const stillReferenced = nextProfiles.some(p =>
                 isPromptDeltaProfile(p) && String(p.baseId) === String(archive.id));
             if (!stillReferenced) {
-                meta.profiles = (meta.profiles || []).filter(p => String(p.id) !== String(archive.id));
+                nextProfiles = nextProfiles.filter(p => String(p.id) !== String(archive.id));
             }
         }
-        if (meta.archiveBaseId && !(meta.profiles || []).some(p => String(p.id) === meta.archiveBaseId)) {
-            delete meta.archiveBaseId;
-        }
-        const active = getActiveProfile();
-        if (active && active.presetName === name && deleteIds.has(active.profileId)) {
-            setActiveProfile(undefined);
+        const nextMeta = { ...meta, profiles: nextProfiles };
+        if (nextMeta.archiveBaseId && !nextProfiles.some(p => String(p.id) === nextMeta.archiveBaseId)) {
+            delete nextMeta.archiveBaseId;
         }
         try {
-            await saveMeta(name, idx, meta);
+            await saveMeta(name, idx, nextMeta);
         } catch (err) {
             console.error('Delete profile failed', err);
             toastr.error(L('Failed to save preset metadata'));
             return;
+        }
+        meta.profiles = nextProfiles;
+        const active = getActiveProfile();
+        if (active && active.presetName === name && deleteIds.has(active.profileId)) {
+            setActiveProfile(undefined);
         }
         await refreshGrid(ctx);
     });

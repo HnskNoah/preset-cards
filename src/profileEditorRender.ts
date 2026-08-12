@@ -2,13 +2,12 @@ import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { EXTENSION_NAME } from './constants.js';
 import { L } from './i18n.js';
-import { readMeta, saveMeta } from './meta.js';
 import type { Preset } from './meta.js';
 import { bufferKey } from './presetBuffers.js';
 import { capturePromptFields, filterFields, findOrderList, findPromptInPreset, promptFieldsEqual, resolvePromptOrderTarget } from './promptToggle.js';
 import { buildPromptEditForm } from './editModal.js';
 import { buildBreadcrumb } from './profileEditorContext.js';
-import { applyUndoState, computeReorder, stagedItems } from './profileEditorState.js';
+import { applyUndoState, computeReorder, undoMount, undoReorderItem, stagedItems } from './profileEditorState.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
 
 function cssEscape(s: string): string {
@@ -34,7 +33,7 @@ export function applyBufferOverlay(ctx: EditorContext): void {
         const toggleTarget = ctx.pendingToggles.get(key);
         const session = ctx.sessionEdits.get(key);
 
-        const toggle = entry.find('.pc-btn-toggle');
+        const toggle = entry.find('.pc-btn-toggle:not(.mount)');
         if (toggle.length && toggleTarget !== undefined) {
             toggle.toggleClass('on', toggleTarget).toggleClass('off', !toggleTarget);
             toggle.html(toggleTarget
@@ -47,7 +46,7 @@ export function applyBufferOverlay(ctx: EditorContext): void {
             const idx = ctx.searchIndex.get(identifier);
             if (idx) idx.name = session.edited.name.toLowerCase();
         }
-        if (ctx.sessionEdits.has(key) || ctx.pendingToggles.has(key) || ctx.pendingClears.has(key) || ctx.reorderedIds.has(identifier)) {
+        if (ctx.sessionEdits.has(key) || ctx.pendingToggles.has(key) || ctx.pendingClears.has(key) || ctx.pendingMounts.has(key) || ctx.reorderedIds.has(identifier)) {
             entry.addClass('dirty');
         }
     });
@@ -79,6 +78,16 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
     diffArea.append($('<h3 class="pc-diff-title"></h3>').text(L('Staged Changes')));
     const list = $('<ul class="pc-diff-list"></ul>');
     for (const item of items) {
+        if (item.reorder) {
+            list.append($('<li class="pc-diff-item diff-reorder"></li>')
+                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${item.reorder.from + 1} → ${item.reorder.to + 1}`))
+                .append(buildUndoBtn(ctx, item.key, item.identifier, false, false, true)));
+        }
+        if (item.mount) {
+            list.append($('<li class="pc-diff-item diff-mount"></li>')
+                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${item.mount.target ? L('Mount') : L('Unmount')}`))
+                .append(buildUndoBtn(ctx, item.key, item.identifier, false, true)));
+        }
         if (item.toggle) {
             list.append($('<li class="pc-diff-item diff-toggle"></li>')
                 .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${L('Switch')} ${item.toggle.original ? L('On') : L('Off')} → ${item.toggle.target ? L('On') : L('Off')}`))
@@ -98,15 +107,31 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
     diffArea.append(list);
 }
 
-/** 构建 Undo 按钮（clear 项独立 undo；toggle/值编辑项整体撤销）。 */
-export function buildUndoBtn(ctx: EditorContext, key: string, identifier: string, onlyClear = false): JQuery<HTMLElement> {
+/** 构建 Undo 按钮（clear 项独立 undo；mount 项撤销挂载；toggle/值编辑项整体撤销）。
+ * forMount：true 时明确走 undoMount（撤销挂载态），避免与同条目 toggle 的 Undo 混淆。
+ * forReorder：true 时走 undoReorderItem（还原单条目位置）。 */
+export function buildUndoBtn(ctx: EditorContext, key: string, identifier: string, onlyClear = false, forMount = false, forReorder = false): JQuery<HTMLElement> {
     const undo = $('<button class="pc-btn-undo"></button>')
         .append($('<i class="fa-solid fa-rotate-left"></i>'))
         .append(' ' + L('Undo'));
-    undo.on('click', () => {
+    undo.on('click', async () => {
         if (ctx.listLocked) return;
         if (onlyClear) {
             ctx.pendingClears.delete(key);
+        } else if (forMount) {
+            // 撤销挂载态：精确还原该条目的挂载（不整表还原），重渲染分组
+            undoMount(ctx, key, identifier);
+            await renderDialog(ctx);
+            refreshCounts(ctx);
+            renderRightPane(ctx);
+            return;
+        } else if (forReorder) {
+            // 撤销单条目 reorder：移回打开时位置
+            undoReorderItem(ctx, identifier);
+            await renderDialog(ctx);
+            refreshCounts(ctx);
+            renderRightPane(ctx);
+            return;
         } else {
             applyUndoState(ctx, key, identifier);
         }
@@ -216,7 +241,7 @@ export function refreshEntryRow(ctx: EditorContext, identifier: string, snapshot
     const idx = ctx.searchIndex.get(identifier);
     if (idx) idx.name = displayName.toLowerCase();
 
-    const toggle = row.find('.pc-btn-toggle');
+    const toggle = row.find('.pc-btn-toggle:not(.mount)');
     if (toggle.length) {
         toggle.toggleClass('on', enabled).toggleClass('off', !enabled);
         toggle.html(enabled ? '<i class="fa-solid fa-toggle-on"></i>' : '<i class="fa-solid fa-toggle-off"></i>');
@@ -226,7 +251,7 @@ export function refreshEntryRow(ctx: EditorContext, identifier: string, snapshot
     const shouldHaveClear = !!view?.clearable;
     if (shouldHaveClear && clearBtn.length === 0) {
         const btn = $('<button class="pc-card-clear" title="' + L('Clear value changes') + '"><i class="fa-solid fa-eraser"></i></button>');
-        const toggleEl = row.find('.pc-btn-toggle');
+        const toggleEl = row.find('.pc-btn-toggle:not(.mount)');
         if (toggleEl.length) btn.insertBefore(toggleEl);
         else row.append(btn);
     } else if (!shouldHaveClear) {
@@ -234,7 +259,7 @@ export function refreshEntryRow(ctx: EditorContext, identifier: string, snapshot
     }
 
     row.toggleClass('disabled', !enabled);
-    row.toggleClass('dirty', ctx.sessionEdits.has(key) || ctx.pendingToggles.has(key) || ctx.pendingClears.has(key) || ctx.reorderedIds.has(identifier));
+    row.toggleClass('dirty', ctx.sessionEdits.has(key) || ctx.pendingToggles.has(key) || ctx.pendingClears.has(key) || ctx.pendingMounts.has(key) || ctx.reorderedIds.has(identifier));
     row.toggleClass('persistent', !!view?.hasPersistentDiff);
 }
 
@@ -282,6 +307,7 @@ export async function renderDialog(ctx: EditorContext): Promise<void> {
             noEntries: L('No entries'),
             noSearchResults: L('No prompts found'),
             unusedPrompts: L('Unused prompts'),
+            activatePrompt: L('Activate prompt'),
         },
     });
 
@@ -340,7 +366,7 @@ export function setupSortable(ctx: EditorContext): void {
     }
 }
 
-/** 拖拽重排：读 DOM 顺序 → 纯计算 → 更新脏标记 + 落盘。 */
+/** 拖拽重排：读 DOM 顺序 → 纯计算 → 更新内存 order + reorderedIds（进 diff，Commit 才落盘）。 */
 export async function onReorder(ctx: EditorContext, listEl: JQuery<HTMLElement>): Promise<void> {
     if (ctx.listLocked) return;
     if (resolveEditorSnapshot(ctx)?.readOnly) return;
@@ -361,12 +387,17 @@ export async function onReorder(ctx: EditorContext, listEl: JQuery<HTMLElement>)
     const orderList = findOrderList(preset, resolvePromptOrderTarget());
     if (!orderList) return;
     orderList.order = result.order;
-    try {
-        await saveMeta(ctx.name, ctx.idx, readMeta(preset));
-    } catch (err) {
-        console.error('Reorder save failed', err);
-        toastr.error(L('Failed to save preset metadata'));
-        return;
-    }
-    ctx.refreshActivePresetUI(ctx.name);
+    // reorder 进 diff：只改内存 order + reorderedIds 缓冲，Commit 才落盘（profile.order 权威，load 时重建 prompt_order）。
+    // 不再即时 saveMeta——避免「reorder 已落盘 vs 挂载仅缓冲」的不对称分歧（C/N 根因）。
+    refreshCardIndexes(listEl, result.order);
+}
+
+/** 拖拽落盘后按新顺序重写各卡片序号（01/02/…），避免等下次全量重渲染才刷新。 */
+function refreshCardIndexes(listEl: JQuery<HTMLElement>, order: { identifier: string }[]): void {
+    const idxById = new Map(order.map((o, i) => [o.identifier, i]));
+    listEl.find('.pc-prompt-card').each(function () {
+        const idx = idxById.get(String($(this).data('identifier')));
+        const span = $(this).find('.pc-card-index > span');
+        if (idx !== undefined && span.length) span.text(String(idx + 1).padStart(2, '0'));
+    });
 }

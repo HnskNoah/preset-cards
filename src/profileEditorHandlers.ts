@@ -1,18 +1,39 @@
-import { openai_settings } from '@sillytavern/scripts/openai';
+import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { L } from './i18n.js';
 import { isPromptBaseProfile, isPromptDeltaProfile, saveMeta } from './meta.js';
 import type { Preset } from './meta.js';
-import { bufferKey } from './presetBuffers.js';
+import { applyBufferedEdits, bufferKey } from './presetBuffers.js';
+import { findOrderList, findPromptInPreset, resolvePromptOrderTarget } from './promptToggle.js';
+import { buildProfileOrderCtx } from './presetList.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
+import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, resolveToggleNet, resetProfileToParent, restoreOrderIfUncommitted, stagedItems } from './profileEditorState.js';
 import { applyLockVisual, applySearch, refreshCounts, refreshEntryRow, renderDialog, renderRightPane, setupSortable } from './profileEditorRender.js';
 import { resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
 
 /** 提交/reset 后的会话收尾：清缓冲、退出编辑视图、重渲染弹窗 + 刷新卡片网格。 */
-async function finalizeEditorSession(ctx: EditorContext): Promise<void> {
+/** 提交/reset 后的会话收尾：清缓冲、退出编辑视图、重渲染 + 刷新。
+ * advanceBaseline=true（默认）：把基线推进到当前运行时态（此后净零检测/插回/discard 以最近 commit 为基线）。
+ * advanceBaseline=false：仅当源 profile 持久态未变化（如 create-delta，挂载只进新 delta）时使用，基线维持打开时快照。
+ * restoreRuntime：清缓冲前先把运行时 order 还原到基线（create-delta 专用——挂载改动只进新 delta，
+ *   源 profile 未持久化，运行时残留会随后续 saveMeta 静默落盘）。 */
+async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true, restoreRuntime = false): Promise<void> {
+    if (restoreRuntime) {
+        restoreOrderIfUncommitted(ctx);
+    }
     clearSessionBuffers(ctx);
     ctx.reorderedIds.clear();
+    if (advanceBaseline) {
+        // 基线推进：commit 后以当前运行时 order 作为新 initialOrder（净零检测、insertAtInitialPosition、restoreOrderIfUncommitted 共用）
+        const preset = openai_settings[ctx.idx] as Preset;
+        const list = findOrderList(preset, resolvePromptOrderTarget());
+        ctx.initialOrder = Array.isArray(list?.order)
+            ? list.order
+                .filter((o: any) => o && typeof o.identifier === 'string')
+                .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
+            : [];
+        ctx.initialOrderIndex = buildProfileOrderCtx(preset, oai_settings.preset_settings_openai === ctx.name).orderIndex;
+    }
     ctx.editTargetId = null;
     ctx.mobileShowRight = false;
     await renderDialog(ctx);
@@ -34,8 +55,63 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         renderRightPane(ctx, snapshot);
     });
 
+    // 挂载态开关：激活（挂载）/卸载 unused 条目。改内存 prompt_order + 标记 pendingMounts，Commit 才写 profile。
+    ctx.dialog.on('click', '.pc-btn-toggle.mount', async function (e) {
+        e.stopPropagation();
+        if (ctx.listLocked) return;
+        const snapshot = resolveEditorSnapshot(ctx);
+        if (snapshot?.readOnly) return;
+        const identifier = String($(this).closest('.pc-prompt-card').data('identifier'));
+        const on = $(this).hasClass('on');
+        const target = !on; // true = 挂载；false = 卸载
+
+        const preset = openai_settings[ctx.idx] as Preset;
+        const targetId = resolvePromptOrderTarget();
+        let list = findOrderList(preset, targetId);
+        if (!list) {
+            if (!Array.isArray(preset.prompt_order)) preset.prompt_order = [];
+            list = { character_id: targetId, order: [] };
+            preset.prompt_order.push(list);
+        }
+        if (!Array.isArray(list.order)) list.order = [];
+
+        // system_prompt / marker 条目操作前必须确认（AGENTS.md 约定）
+        const prompt = findPromptInPreset(preset, identifier);
+        if (prompt?.system_prompt || prompt?.marker) {
+            const confirmText = target
+                ? L('Mount this system prompt / marker?')
+                : L('Unmount this system prompt / marker?');
+            const ok = await callGenericPopup(confirmText, POPUP_TYPE.CONFIRM);
+            if (!ok) return;
+        }
+
+        if (target) {
+            // 挂载：若 order 里无此条目则按弹窗打开时的相对位置插回（enabled 用 initialOrder 快照值）
+            if (!list.order.some((o: any) => o?.identifier === identifier)) {
+                insertAtInitialPosition(ctx, list, identifier, prompt?.enabled ?? true);
+            }
+        } else {
+            // 卸载：记录原位置（undo 撤销卸载时插回原位，reorder 可能已改动位置），再从 order 移除
+            const idx = list.order.findIndex((o: any) => o?.identifier === identifier);
+            ctx.unmountPositions.set(bufferKey(ctx.name, identifier), idx);
+            list.order = list.order.filter((o: any) => o?.identifier !== identifier);
+        }
+        // 净零检测：目标 = 弹窗打开时快照的挂载态 → 删缓冲（无净变化）；否则记录
+        const initialMounted = ctx.initialOrder.some((o) => o.identifier === identifier);
+        if (target === initialMounted) {
+            ctx.pendingMounts.delete(bufferKey(ctx.name, identifier));
+        } else {
+            ctx.pendingMounts.set(bufferKey(ctx.name, identifier), target);
+        }
+
+        await renderDialog(ctx);
+        refreshCounts(ctx);
+    });
+
     ctx.dialog.on('click', '.pc-btn-toggle', function (e) {
         e.stopPropagation();
+        if (ctx.listLocked) return; // 锁定列表时禁止切换（与 mount 开关一致）
+        if ($(this).hasClass('mount')) return;
         const snapshot = resolveEditorSnapshot(ctx);
         if (snapshot?.readOnly) return;
         const toggle = $(this);
@@ -115,13 +191,19 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             const newName = key === 'Escape' ? currentName : (input.val() as string).trim() || currentName;
 
             if (newName !== currentName && key !== 'Escape') {
+                const oldName = currentName; // 回滚用旧名（shared profile 对象，改名直接作用到 preset 内存）
                 snapshot.profile.name = newName;
                 const meta = resolveEditorSnapshot(ctx)?.meta ?? snapshot.meta;
                 try {
+                    // POST 前先改 name → 保存内容含新名（doSaveMeta 引用同一 profiles 数组）
                     await saveMeta(ctx.name, ctx.idx, meta);
                 } catch (err) {
+                    // 失败回滚内存 name，避免内存/磁盘分裂；UI 重建为旧名
+                    snapshot.profile.name = oldName;
                     console.error('Rename failed', err);
                     toastr.error(L('Failed to save preset metadata'));
+                    await renderDialog(ctx);
+                    return; // 不误报成功
                 }
                 toastr.success(`${L('Rename')}: ${newName}`);
                 await renderDialog(ctx);
@@ -142,7 +224,11 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             return;
         }
 
-        const confirm = await callGenericPopup(L('Reset this configuration to its parent?'), POPUP_TYPE.CONFIRM);
+        let confirmText = L('Reset this configuration to its parent?');
+        if (stagedItems(ctx).length > 0) {
+            confirmText += `\n${L('Uncommitted changes will be discarded')}`;
+        }
+        const confirm = await callGenericPopup(confirmText, POPUP_TYPE.CONFIRM);
         if (!confirm) return;
 
         try {
@@ -183,18 +269,31 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             let ok = true;
             if (choice === 'update') {
                 ok = await commitUpdate(ctx, snapshotData);
+                if (ok) {
+                    // 副作用后置：update 持久化成功后，才把缓冲写进运行时（此时=已提交态，天然一致）
+                    applyBufferedEdits(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles);
+                }
             } else {
                 await commitCreateDelta(ctx, deltaName as string, snapshotData);
+                // create-delta：编辑属于新 delta，源 profile 运行时不写（无 prompts 残留）；挂载/顺序残留由 finalizeEditorSession 还原
             }
             if (!ok) return;
         } catch (err) {
             console.error('Commit failed', err);
             toastr.error(L('Failed to save preset metadata'));
-            return; // 保留缓冲，用户可重试
+            return; // 缓冲保留可重试；运行时从未被写（纯函数快照），无污染
         }
 
-        ctx.refreshActivePresetUI(ctx.name);
-        await finalizeEditorSession(ctx);
+        // update：源 profile 已持久化 → 推进基线、不还原运行时（副作用已写入=已提交态），随后刷新活动态（克隆已提交 order）。
+        // create-delta：源 profile 未变 → 先还原运行时 order（挂载/顺序残留）到基线，再刷新活动态，
+        //   否则 refreshActivePresetUI 会把含残留挂载的 order 克隆进 oai_settings（#1，活动面板/落盘被污染）。
+        if (choice === 'update') {
+            ctx.refreshActivePresetUI(ctx.name);
+            await finalizeEditorSession(ctx, true, false);
+        } else {
+            await finalizeEditorSession(ctx, false, true);
+            ctx.refreshActivePresetUI(ctx.name);
+        }
     });
 
     ctx.dialog.on('click', '#pc-btn-close', async function () {
@@ -202,6 +301,8 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             const discard = await callGenericPopup(L('You have uncommitted changes. Discard them?'), POPUP_TYPE.CONFIRM);
             if (!discard) return;
             toastr.info(L('Uncommitted changes discarded'));
+            // 未提交的挂载/顺序改动：还原内存 prompt_order 到弹窗打开时
+            restoreOrderIfUncommitted(ctx);
             clearSessionBuffers(ctx);
         }
         ctx.popup?.completeCancelled();

@@ -163,7 +163,9 @@ export function defaultEnabledEntries(meta: PresetMeta): PromptProfileEntry[] {
  * missingParent 为 delta 父链缺失时的分歧路径：
  *   'full-changes'（保存→更新）：全量写成差异（含值字段）继续提交；
  *   'abort'（覆盖）：toast 提示并返回 false，调用方中止后续。
- * 仅处理 base/delta；成功时返回 true。 */
+ * 仅处理 base/delta；成功时返回 true。
+ * 副作用后置：merge 作用到 profile 深副本，saveMeta 成功后才写回 meta.profiles 原槽位——
+ * 失败时源 profile 内存不被污染（与「缓冲保留可重试」语义一致）。 */
 export async function commitBufferedEditsToProfile(
     profile: PromptBaseProfile | PromptDeltaProfile,
     snapshot: { entries: PromptProfileEntry[]; unusedIds: string[] },
@@ -173,42 +175,51 @@ export async function commitBufferedEditsToProfile(
     sessionEdits: Map<string, PromptEditBuffer>,
     missingParent: 'full-changes' | 'abort',
 ): Promise<boolean> {
-    if (isPromptBaseProfile(profile)) {
+    // 传入 profile 即为副本（调用方 commitUpdate 已 structuredClone + 应用 clears）；成功持久化后才替换原 profile
+    const nextProfile = profile;
+    if (isPromptBaseProfile(nextProfile)) {
         // enabled 合并当前目标 order 中的条目；fields 仅对本次编辑的条目（与编辑初值无净变化时清除），
         // 其余条目保留既有 fields（见 mergeBaseSnapshot）
-        mergeBaseSnapshot(profile, snapshot, name, sessionEdits);
-        recordDefaultOriginalFields(meta, name, sessionEdits);
+        mergeBaseSnapshot(nextProfile, snapshot, name, sessionEdits);
     } else {
         // 基线用父链解析状态（不含本 delta 自身 changes），否则未编辑的已存差异与基线相等而被 diff 掉
-        const parentEntries = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
+        const parentEntries = resolveParentStates(nextProfile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
         if (parentEntries.length > 0) {
             // 挂载/卸载差异全走 changes（含 unmount 的 mounted:false），顺序差异走 order（纯顺序）
             const deltaState = snapshotToDelta(snapshot.entries, parentEntries, snapshot.unusedIds);
-            profile.changes = snapshotToChanges(snapshot.entries, parentEntries, profile.changes, snapshot.unusedIds);
-            if (deltaState.order) profile.order = deltaState.order;
-            else delete profile.order;
+            nextProfile.changes = snapshotToChanges(snapshot.entries, parentEntries, nextProfile.changes, snapshot.unusedIds);
+            if (deltaState.order) nextProfile.order = deltaState.order;
+            else delete nextProfile.order;
         } else if (missingParent === 'full-changes') {
             // 父链缺失：全量写成差异（含挂载态+值字段）；空 fields（clear 条目）不写入（F3）。
             // mounted 必须显式：父缺失时 applyPromptDelta 对无 mounted 的 change 默认 unused → 全部卸载。
             // unusedIds 中的条目标记为 mounted:false，其余挂载。
             const unusedSet = new Set(snapshot.unusedIds);
-            profile.changes = snapshot.entries.map((s) => {
+            nextProfile.changes = snapshot.entries.map((s) => {
                 const change: PromptDeltaChange = { identifier: s.identifier, mounted: !unusedSet.has(s.identifier), enabled: s.enabled };
                 if (s.fields && Object.keys(s.fields).length > 0) change.fields = s.fields;
                 return change;
             });
             // 同步清空/设置 order：以快照 mounted 顺序为准
             const currentOrder = snapshot.entries.filter((s) => !unusedSet.has(s.identifier)).map((s) => s.identifier);
-            if (currentOrder.length > 0) profile.order = currentOrder;
-            else delete profile.order;
+            if (currentOrder.length > 0) nextProfile.order = currentOrder;
+            else delete nextProfile.order;
         } else {
             toastr.warning(L('Base profile not found, cannot update derived configuration'));
             return false;
         }
-        recordDefaultOriginalFields(meta, name, sessionEdits);
     }
-
-    await saveMeta(name, idx, meta);
+    // 把副本替换进 meta.profiles 对应槽位，持久化含新 profile 的 meta
+    const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
+    const slot = profiles.findIndex((p: any) => String(p?.id) === String(profile.id));
+    const nextProfiles = slot >= 0
+        ? profiles.map((p: any, i: number) => (i === slot ? nextProfile : p))
+        : [...profiles, nextProfile];
+    const nextMeta = { ...meta, profiles: nextProfiles };
+    recordDefaultOriginalFields(nextMeta, name, sessionEdits);
+    await saveMeta(name, idx, nextMeta);
+    // 成功：同步内存，源 profile 槽位替换为副本
+    meta.profiles = nextProfiles;
     toastr.success(L('Configuration updated'));
     return true;
 }

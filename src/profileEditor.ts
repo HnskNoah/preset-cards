@@ -3,7 +3,7 @@ import { L } from './i18n.js';
 import { createEditorContext, type ProfileEditorDeps } from './profileEditorContext.js';
 import { bindEditorHandlers } from './profileEditorHandlers.js';
 import { renderDialog } from './profileEditorRender.js';
-import { clearSessionBuffers, stagedItems } from './profileEditorState.js';
+import { clearSessionBuffers, restoreOrderIfUncommitted, stagedItems } from './profileEditorState.js';
 
 export type { ProfileEditorDeps };
 
@@ -41,6 +41,7 @@ export async function openProfileEditorPopup(
         const discard = await callGenericPopup(L('You have uncommitted changes. Discard them?'), POPUP_TYPE.CONFIRM);
         if (discard) {
             toastr.info(L('Uncommitted changes discarded'));
+            restoreOrderIfUncommitted(ctx);
             clearSessionBuffers(ctx);
         }
     }

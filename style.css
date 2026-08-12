@@ -791,9 +791,9 @@
     padding-left: 6px;
 }
 
-/* 子节点连接线：每个子 profile 左侧的 L 形箭头，指向该行垂直中线。
-   竖线(border-left)在 14px；折叠图标左移对齐到该竖线；
-   横线从竖线连到子行中线。 */
+/* 子节点连接线：children 竖线(border-left)贯穿该层；每个子行中线画横线连到该竖线。
+   最后子行内「横线下方」的竖线段（贯穿线多余部分）用背景色盖住 → 最后子呈 └ 形，中间子呈 ├ 形。
+   遮盖色与卡片背景一致（竖线 alpha 0.25 很浅，残留可忽略）。 */
 .preset_card_profile_children > .preset_card_profile_group > .preset_card_profile_row::before {
     content: '';
     position: absolute;
@@ -803,6 +803,19 @@
     height: 1px;
     background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.25);
     transform: translateY(-50%);
+    pointer-events: none;
+}
+
+/* 最后一个子节点：横线下方不再画竖线（└ 形）。遮盖相对该 row（position:relative），
+   只作用于行内横线下半段，不碰子级区域。 */
+.preset_card_profile_children > .preset_card_profile_group:last-child > .preset_card_profile_row::after {
+    content: '';
+    position: absolute;
+    left: -6px;
+    top: 50%;
+    bottom: 0;
+    width: 1px;
+    background: var(--SmartThemeBlurTintColor);
     pointer-events: none;
 }
 
@@ -1488,6 +1501,33 @@
     background: rgba(255, 255, 255, 0.1);
 }
 
+/* 已挂载条目的开关组：enabled + mounted 上下排列（像 = ） */
+.pc-card-switches {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+/* 挂载态开关：红色（激活态 on / 未激活 off） */
+.pc-btn-toggle.mount {
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.5);
+    width: 32px;
+    height: 22px;
+    font-size: 13px;
+}
+
+.pc-btn-toggle.mount.on {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.6);
+}
+
+.pc-btn-toggle.mount.off {
+    color: rgba(239, 68, 68, 0.6);
+}
+
 .pc-top-action-btn {
     background: var(--SmartThemeButtonDisplayColor, rgba(255,255,255,0.05));
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
@@ -1572,6 +1612,7 @@
 
 .pc-diff-item.diff-reorder { border-left-color: var(--SmartThemeQuoteColor, #3b82f6); }
 .pc-diff-item.diff-toggle { border-left-color: #f59e0b; }
+.pc-diff-item.diff-mount { border-left-color: #ef4444; }
 .pc-diff-item.diff-modify { border-left-color: #8b5cf6; }
 .pc-diff-item.diff-delete { border-left-color: #ef4444; }
 .pc-diff-item.diff-added { border-left-color: #10b981; }

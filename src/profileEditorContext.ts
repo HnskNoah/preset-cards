@@ -2,7 +2,8 @@ import { Popup } from '@sillytavern/scripts/popup';
 import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
-import { bufferPrefix, type PromptEditBuffer } from './presetBuffers.js';
+import { bufferKey, bufferPrefix, type PromptEditBuffer } from './presetBuffers.js';
+import { findOrderList, resolvePromptOrderTarget } from './promptToggle.js';
 import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
 import { isArchiveProfile } from './profileActions.js';
 
@@ -48,7 +49,13 @@ export interface EditorContext {
     listLocked: boolean;
     reorderedIds: Set<string>;
     pendingClears: Map<string, true>;
+    /** 本会话挂载态变更缓冲：identifier → 目标 mounted 态（true=挂载 / false=卸载）。Commit 才写 profile。 */
+    pendingMounts: Map<string, boolean>;
+    /** 本会话卸载条目在 order 中的原位置（卸载时记录，undo 撤销卸载时插回原位；reorder 可能已改动位置）。 */
+    unmountPositions: Map<string, number>;
     initialOrderIndex: Map<string, number>;
+    /** 弹窗打开时目标 prompt_order 完整快照：不 Commit 关弹窗时还原。 */
+    initialOrder: { identifier: string; enabled: boolean }[];
 }
 
 /** 创建弹窗上下文：完成全部状态初始化（含打开时 prompt_order 快照）。 */
@@ -58,10 +65,18 @@ export function createEditorContext(
     idx: number,
     profileId: string,
 ): EditorContext {
+    const preset = openai_settings[idx] as Preset;
     const initialOrderIndex = buildProfileOrderCtx(
-        openai_settings[idx] as Preset,
+        preset,
         oai_settings.preset_settings_openai === name,
     ).orderIndex;
+    // 弹窗打开时目标 prompt_order 完整快照（还原用）
+    const list = findOrderList(preset, resolvePromptOrderTarget());
+    const initialOrder = Array.isArray(list?.order)
+        ? list.order
+            .filter((o: any) => o && typeof o.identifier === 'string')
+            .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
+        : [];
     return {
         ...deps,
         name,
@@ -76,11 +91,15 @@ export function createEditorContext(
         listLocked: false,
         reorderedIds: new Set<string>(),
         pendingClears: new Map<string, true>(),
+        pendingMounts: new Map<string, boolean>(),
+        unmountPositions: new Map<string, number>(),
         initialOrderIndex,
+        initialOrder,
     };
 }
 
-/** 读取当前预设/元数据/profile 解析后的展示条目（每次调用取最新内存态）。 */
+/** 读取当前预设/元数据/profile 解析后的展示条目（每次调用取最新内存态）。
+ * mounted 态叠加会话挂载缓冲（pendingMounts）：激活/卸载即时反映在展示分组。 */
 export function resolveEditorSnapshot(ctx: EditorContext): EditorSnapshot | undefined {
     const preset = openai_settings[ctx.idx] as Preset;
     const meta = readMeta(preset);
@@ -88,11 +107,25 @@ export function resolveEditorSnapshot(ctx: EditorContext): EditorSnapshot | unde
     if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return undefined;
     const isActive = oai_settings.preset_settings_openai === ctx.name;
     const orderCtx = buildProfileOrderCtx(preset, isActive);
+    const entries = buildProfileEntries(profile, meta, preset, orderCtx).map((e) => {
+        const mountTarget = ctx.pendingMounts.get(bufferKey(ctx.name, e.identifier));
+        if (mountTarget !== undefined) {
+            e.mounted = mountTarget;
+            // 挂载后 enabled 取定义层（与 insertAtInitialPosition 落盘一致），否则刚挂载条目仍显示 Off
+            if (mountTarget) {
+                const prompt = Array.isArray(preset.prompts)
+                    ? preset.prompts.find((p: any) => p?.identifier === e.identifier)
+                    : undefined;
+                if (prompt) e.enabled = prompt.enabled === true;
+            }
+        }
+        return e;
+    });
     return {
         preset,
         meta,
         profile,
-        entries: buildProfileEntries(profile, meta, preset, orderCtx),
+        entries,
         orderCtx,
         readOnly: isArchiveProfile(profile as PromptBaseProfile),
     };

@@ -37,13 +37,14 @@ jobs:
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # 构建（先于版本递增，避免 npm ci 与 package-lock 校验冲突）
+      # 构建：release 完整构建；debug 不 build（本地构建），但 typecheck 保留（直推也做类型检查）
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+        if: steps.version_check.outputs.is_release == 'true'
 
       # 版本处理：debug → patch 递增并写回 manifest/package.json；release → 保持当前版本不变
       - id: bump_version

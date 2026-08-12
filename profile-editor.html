@@ -49,11 +49,16 @@
                         <i class="fa-solid fa-eraser"></i>
                     </button>
                     {{/if}}
-                    {{#if this.toggleable}}
-                    <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../../i18n.toggleEntry}}">
-                        {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i>{{else}}<i class="fa-solid fa-toggle-off"></i>{{/if}}
-                    </button>
-                    {{/if}}
+                    <div class="pc-card-switches">
+                        {{#if this.toggleable}}
+                        <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../../i18n.toggleEntry}}">
+                            {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i>{{else}}<i class="fa-solid fa-toggle-off"></i>{{/if}}
+                        </button>
+                        {{/if}}
+                        <button class="pc-btn-toggle mount on" title="{{../../i18n.activatePrompt}}">
+                            <i class="fa-solid fa-bolt"></i>
+                        </button>
+                    </div>
                     {{/unless}}
                 </div>
                 {{/each}}
@@ -70,16 +75,9 @@
                                 <span class="pc-role-badge role-{{this.role}}">{{this.role}}</span>
                             </div>
                             {{#unless ../readOnly}}
-                            {{#if this.clearable}}
-                            <button class="pc-card-clear" title="{{../../i18n.clearValueChange}}">
-                                <i class="fa-solid fa-eraser"></i>
+                            <button class="pc-btn-toggle mount off" title="{{../../i18n.activatePrompt}}">
+                                <i class="fa-solid fa-bolt"></i>
                             </button>
-                            {{/if}}
-                            {{#if this.toggleable}}
-                            <button class="pc-btn-toggle {{#if this.enabled}}on{{else}}off{{/if}}" title="{{../../i18n.toggleEntry}}">
-                                {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i>{{else}}<i class="fa-solid fa-toggle-off"></i>{{/if}}
-                            </button>
-                            {{/if}}
                             {{/unless}}
                         </div>
                         {{/each}}
