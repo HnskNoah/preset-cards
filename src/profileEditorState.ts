@@ -22,42 +22,20 @@ import { buildDerivedProfile } from './profileActions.js';
 import { resetProfileCore } from './profileMutators.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
 
-/** 右栏 staged diff 的一条字段变更。 */
-export interface StagedFieldChange {
-    label: string;
-    from: string;
-    to: string;
-}
-
 /** 右栏 staged diff 的一条记录。 */
 export interface StagedItem {
     identifier: string;
     key: string;
     label: string;
-    /** 条目在 prompt_order 中的序号（两位，同主列表显示），有则展示。 */
-    index?: string;
     /** 主列表条目的完整展示数据（复用主列表卡片渲染）。 */
     entry?: ProfileEntryView;
     toggle?: { original: boolean; target: boolean };
     /** 挂载态变化：original 为 profile 当前挂载态，target 为目标挂载态（true=挂载 / false=卸载）。 */
     mount?: { original: boolean; target: boolean };
-    fields: StagedFieldChange[];
     /** R1：本条目存在「清除值变更」待提交（commit 时删除 profile 快照 fields）。 */
     clear?: boolean;
     /** 顺序变化（reorder）：from=打开时 index，to=当前 index。位置改变统一由 index 比较判定，进 diff。 */
     reorder?: { from: number; to: number };
-}
-
-const FIELD_LABELS: Record<string, string> = {
-    content: L('Content'),
-    name: L('Name'),
-    role: L('Role'),
-    injection_position: L('Position'),
-    injection_depth: L('Injection Depth'),
-};
-
-export function fmtValue(v: unknown): string {
-    return v === undefined || v === null ? '' : String(v);
 }
 
 /** 采集当前缓冲（开关/值编辑）叠加后的快照——纯函数，不写运行时。
@@ -202,7 +180,7 @@ export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): Stag
     for (const key of keys) {
         const identifier = key.slice(ctx.prefix.length);
         const entry = entryById.get(identifier);
-        const item: StagedItem = { identifier, key, label: nameById.get(identifier) ?? identifier, index: entry?.index, entry, fields: [] };
+        const item: StagedItem = { identifier, key, label: nameById.get(identifier) ?? identifier, entry };
         const rd = reorderDiff.get(identifier);
         if (rd) item.reorder = rd;
         const mountTarget = ctx.pendingMounts.get(key);
@@ -215,20 +193,8 @@ export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): Stag
         if (toggleTarget !== undefined) {
             item.toggle = { original: enabledById.get(identifier) ?? true, target: toggleTarget };
         }
-        const session = ctx.sessionEdits.get(key);
-        if (session) {
-            for (const field of PROMPT_FIELD_WHITELIST) {
-                if (session.initial[field] !== session.edited[field]) {
-                    item.fields.push({
-                        label: FIELD_LABELS[field] ?? field,
-                        from: fmtValue(session.initial[field]),
-                        to: fmtValue(session.edited[field]),
-                    });
-                }
-            }
-        }
         // F2：clear 后重新编辑（session 存在）视为清除被覆盖，不渲染 clear 项
-        if (ctx.pendingClears.has(key) && !session) {
+        if (ctx.pendingClears.has(key) && !ctx.sessionEdits.has(key)) {
             item.clear = true;
         }
         items.push(item);
