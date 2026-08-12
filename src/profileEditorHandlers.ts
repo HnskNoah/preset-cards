@@ -67,6 +67,24 @@ export function bindEditorHandlers(ctx: EditorContext): void {
 
         const preset = openai_settings[ctx.idx] as Preset;
         const targetId = resolvePromptOrderTarget();
+
+        // 激活（挂载）前警告：unused prompt 可能并非设计为可激活项，激活后可用性不作保证。
+        // system_prompt / marker 用专门确认文案（AGENTS 约定）；按钮「激活 / 取消」。
+        const prompt = findPromptInPreset(preset, identifier);
+        if (target) {
+            const isSpecial = !!(prompt?.system_prompt || prompt?.marker);
+            const confirmText = isSpecial
+                ? L('Mount this system prompt / marker?')
+                : `${L('Activate this unused prompt?')}\n${L('This prompt is in the unused list. It may not be intended for activation and its usability after activation is not guaranteed.')}`;
+            const ok = await callGenericPopup(confirmText, POPUP_TYPE.CONFIRM, '', { okButton: L('Activate'), cancelButton: L('Cancel') });
+            if (!ok) return;
+        } else if (prompt?.system_prompt || prompt?.marker) {
+            // 卸载 system_prompt / marker 仍需确认（AGENTS 约定）
+            const ok = await callGenericPopup(L('Unmount this system prompt / marker?'), POPUP_TYPE.CONFIRM);
+            if (!ok) return;
+        }
+
+        // 确认通过后才创建/确保目标 order 列表（取消时不得残留空列表）
         let list = findOrderList(preset, targetId);
         if (!list) {
             if (!Array.isArray(preset.prompt_order)) preset.prompt_order = [];
@@ -75,18 +93,8 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         }
         if (!Array.isArray(list.order)) list.order = [];
 
-        // system_prompt / marker 条目操作前必须确认（AGENTS.md 约定）
-        const prompt = findPromptInPreset(preset, identifier);
-        if (prompt?.system_prompt || prompt?.marker) {
-            const confirmText = target
-                ? L('Mount this system prompt / marker?')
-                : L('Unmount this system prompt / marker?');
-            const ok = await callGenericPopup(confirmText, POPUP_TYPE.CONFIRM);
-            if (!ok) return;
-        }
-
         if (target) {
-            // 挂载：若 order 里无此条目则按弹窗打开时的相对位置插回（enabled 用 initialOrder 快照值）
+            // 挂载：若 order 里无此条目则按弹窗打开时的相对位置插回（enabled 保持该 prompt 定义层值，mount 不改 enable）
             if (!list.order.some((o: any) => o?.identifier === identifier)) {
                 insertAtInitialPosition(ctx, list, identifier, prompt?.enabled ?? true);
             }

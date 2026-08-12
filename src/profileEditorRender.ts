@@ -78,31 +78,47 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
     diffArea.append($('<h3 class="pc-diff-title"></h3>').text(L('Staged Changes')));
     const list = $('<ul class="pc-diff-list"></ul>');
     for (const item of items) {
-        if (item.reorder) {
-            list.append($('<li class="pc-diff-item diff-reorder"></li>')
-                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${item.reorder.from + 1} → ${item.reorder.to + 1}`))
-                .append(buildUndoBtn(ctx, item.key, item.identifier, false, false, true)));
+        // 每个条目：复用主列表的 prompt 卡片（序号/名称/角色/开关），只加一个 Undo 按钮
+        let cls = 'diff-modify';
+        if (item.reorder) cls = 'diff-reorder';
+        else if (item.mount) cls = 'diff-mount';
+        else if (item.toggle) cls = 'diff-toggle';
+        else if (item.clear) cls = 'diff-clear';
+        const li = $('<li class="pc-diff-item"></li>').addClass(cls);
+        const enabledNow = ctx.pendingToggles.get(item.key) ?? item.entry?.enabled ?? true;
+        const card = $('<div class="pc-prompt-card"></div>')
+            .attr('data-identifier', item.identifier)
+            .toggleClass('disabled', enabledNow === false);
+        if (item.entry?.index !== undefined) {
+            card.append($('<div class="pc-card-index"><span>' + item.entry.index + '</span></div>'));
         }
+        const title = $('<div class="pc-card-title"></div>')
+            .append($('<span class="pc-card-name" title="' + cssEscape(item.label) + '"></span>').text(item.label));
+        if (item.entry?.role) {
+            title.append($('<span class="pc-role-badge role-' + cssEscape(item.entry.role) + '">' + item.entry.role + '</span>'));
+        }
+        card.append(title);
+        // 开关：enable 开关（叠加 pendingToggles 缓冲）+ 本会话刚挂载的闪电按钮，与主列表一致；staged 页同样可交互（复用 dialog 级 handler）
+        const switches = $('<div class="pc-card-switches"></div>');
+        if (item.entry?.toggleable) {
+            switches.append($('<button class="pc-btn-toggle ' + (enabledNow ? 'on' : 'off') + '"><i class="fa-solid ' + (enabledNow ? 'fa-toggle-on' : 'fa-toggle-off') + '"></i></button>'));
+        }
+        if (ctx.pendingMounts.get(item.key) === true) {
+            switches.append($('<button class="pc-btn-toggle mount on"><i class="fa-solid fa-bolt"></i></button>'));
+        }
+        card.append(switches);
+        li.append(card);
         if (item.mount) {
-            list.append($('<li class="pc-diff-item diff-mount"></li>')
-                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${item.mount.target ? L('Mount') : L('Unmount')}`))
-                .append(buildUndoBtn(ctx, item.key, item.identifier, false, true)));
+            li.append(buildUndoBtn(ctx, item.key, item.identifier, false, true));
+        } else if (item.reorder) {
+            li.append(buildUndoBtn(ctx, item.key, item.identifier, false, false, true));
+        } else if (item.clear) {
+            // clear 项撤销：仅删 pendingClears（恢复被清除的值）
+            li.append(buildUndoBtn(ctx, item.key, item.identifier, true));
+        } else {
+            li.append(buildUndoBtn(ctx, item.key, item.identifier));
         }
-        if (item.toggle) {
-            list.append($('<li class="pc-diff-item diff-toggle"></li>')
-                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${L('Switch')} ${item.toggle.original ? L('On') : L('Off')} → ${item.toggle.target ? L('On') : L('Off')}`))
-                .append(buildUndoBtn(ctx, item.key, item.identifier)));
-        }
-        for (const f of item.fields) {
-            list.append($('<li class="pc-diff-item diff-modify"></li>')
-                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${f.from || '∅'} → ${f.to || '∅'}`))
-                .append(buildUndoBtn(ctx, item.key, item.identifier)));
-        }
-        if (item.clear) {
-            list.append($('<li class="pc-diff-item diff-clear"></li>')
-                .append($('<span class="pc-diff-desc"></span>').text(`${item.label}: ${L('Clear value changes')}`))
-                .append(buildUndoBtn(ctx, item.key, item.identifier, true)));
-        }
+        list.append(li);
     }
     diffArea.append(list);
 }
@@ -267,6 +283,8 @@ export function refreshEntryRow(ctx: EditorContext, identifier: string, snapshot
 export function refreshCounts(ctx: EditorContext, snapshot?: EditorSnapshot): void {
     const n = stagedItems(ctx, snapshot).length;
     ctx.dialog.find('.pc-btn-view-staged .pc-staged-count').text(`(${n})`);
+    // 有 staged diff 时 View Staged 按钮高亮提示（可提交）
+    ctx.dialog.find('.pc-btn-view-staged').toggleClass('has-staged', n > 0);
     const commitBtn = ctx.dialog.find('#pc-btn-commit');
     commitBtn.prop('disabled', n === 0);
     commitBtn.toggleClass('disabled', n === 0);
@@ -278,8 +296,16 @@ export async function renderDialog(ctx: EditorContext): Promise<void> {
     if (!snapshot) return;
     const items = stagedItems(ctx, snapshot);
     const { items: breadcrumb, title: breadcrumbTitle } = buildBreadcrumb(snapshot.profile, snapshot.meta);
-    // 挂载/未挂载分组：unused 收进折叠区（模板各渲染一段）
-    const entries = snapshot.entries.filter((e) => e.mounted);
+    // 挂载/未挂载分组：unused 收进折叠区（模板各渲染一段）。
+    // mountedPending：本会话刚从 unmounted 激活的条目（pendingMounts 目标=挂载）——这类条目闪电按钮 + 开关并存，
+    // 普通已挂载 prompt 只有开关（无闪电按钮，见 profile-editor.html 条件渲染）。
+    const pendingMountedIds = new Set<string>();
+    for (const [k, target] of ctx.pendingMounts) {
+        if (k.startsWith(ctx.prefix) && target === true) pendingMountedIds.add(k.slice(ctx.prefix.length));
+    }
+    const entries = snapshot.entries
+        .filter((e) => e.mounted)
+        .map((e) => ({ ...e, mountedPending: pendingMountedIds.has(e.identifier) }));
     const unusedEntries = snapshot.entries.filter((e) => !e.mounted);
 
     const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'profile-editor', {
@@ -390,6 +416,9 @@ export async function onReorder(ctx: EditorContext, listEl: JQuery<HTMLElement>)
     // reorder 进 diff：只改内存 order + reorderedIds 缓冲，Commit 才落盘（profile.order 权威，load 时重建 prompt_order）。
     // 不再即时 saveMeta——避免「reorder 已落盘 vs 挂载仅缓冲」的不对称分歧（C/N 根因）。
     refreshCardIndexes(listEl, result.order);
+    // 刷新 staged 计数与 commit 按钮（reorder 计入 diff）
+    refreshCounts(ctx);
+    renderRightPane(ctx);
 }
 
 /** 拖拽落盘后按新顺序重写各卡片序号（01/02/…），避免等下次全量重渲染才刷新。 */

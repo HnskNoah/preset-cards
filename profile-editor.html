@@ -55,9 +55,11 @@
                             {{#if this.enabled}}<i class="fa-solid fa-toggle-on"></i>{{else}}<i class="fa-solid fa-toggle-off"></i>{{/if}}
                         </button>
                         {{/if}}
+                        {{#if this.mountedPending}}
                         <button class="pc-btn-toggle mount on" title="{{../../i18n.activatePrompt}}">
                             <i class="fa-solid fa-bolt"></i>
                         </button>
+                        {{/if}}
                     </div>
                     {{/unless}}
                 </div>

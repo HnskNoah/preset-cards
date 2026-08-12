@@ -4,6 +4,7 @@ import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
 import { bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
+import type { ProfileEntryView } from './presetList.js';
 import {
     PROMPT_FIELD_WHITELIST,
     buildPromptSnapshot,
@@ -33,6 +34,10 @@ export interface StagedItem {
     identifier: string;
     key: string;
     label: string;
+    /** 条目在 prompt_order 中的序号（两位，同主列表显示），有则展示。 */
+    index?: string;
+    /** 主列表条目的完整展示数据（复用主列表卡片渲染）。 */
+    entry?: ProfileEntryView;
     toggle?: { original: boolean; target: boolean };
     /** 挂载态变化：original 为 profile 当前挂载态，target 为目标挂载态（true=挂载 / false=卸载）。 */
     mount?: { original: boolean; target: boolean };
@@ -193,9 +198,11 @@ export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): Stag
     }
 
     const items: StagedItem[] = [];
+    const entryById = new Map(resolved.entries.map((e) => [e.identifier, e]));
     for (const key of keys) {
         const identifier = key.slice(ctx.prefix.length);
-        const item: StagedItem = { identifier, key, label: nameById.get(identifier) ?? identifier, fields: [] };
+        const entry = entryById.get(identifier);
+        const item: StagedItem = { identifier, key, label: nameById.get(identifier) ?? identifier, index: entry?.index, entry, fields: [] };
         const rd = reorderDiff.get(identifier);
         if (rd) item.reorder = rd;
         const mountTarget = ctx.pendingMounts.get(key);
