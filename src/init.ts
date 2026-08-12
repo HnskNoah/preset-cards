@@ -4,7 +4,7 @@ import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCom
 import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
 import { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
-import type { PresetCardsApi } from './presetCardsApi.js';
+import type { PresetCardsApi } from './types/presetCardsApi.js';
 
 export function refresh(): void {
     location.reload();

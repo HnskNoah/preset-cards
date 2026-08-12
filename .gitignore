@@ -2,7 +2,7 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
-dist/*.map
+dist/
 docs/
 AGENTS.md
 CODING_GUIDELINES.md

@@ -37,14 +37,25 @@ jobs:
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # 构建：release 完整构建；debug 不 build（本地构建），但 typecheck 保留（直推也做类型检查）
+      # 检测源代码是否变更（仅影响 JS 构建的源文件）
+      - id: code_changed
+        shell: bash
+        run: |-
+          changed=$(git diff --name-only "${{ github.event.before }}..HEAD" -- src/ vite.config.ts tsconfig.json package.json package-lock.json manifest.json)
+          if [ -n "$changed" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm ci
       - run: npm run typecheck
+      # release 始终构建；debug 仅源代码变更时构建
       - run: npm run build
-        if: steps.version_check.outputs.is_release == 'true'
+        if: steps.version_check.outputs.is_release == 'true' || steps.code_changed.outputs.changed == 'true'
 
       # 版本处理：debug → patch 递增并写回 manifest/package.json；release → 保持当前版本不变
       - id: bump_version
@@ -66,7 +77,7 @@ jobs:
         with:
           default_author: github_actions
           message: '[bot] Bundle v${{ steps.bump_version.outputs.new_version }}'
-          add: 'dist manifest.json package.json'
+          add: 'manifest.json package.json'
 
       # 打 tag：release → vX.Y.Z；debug → vX.Y.Z-Debug
       - id: tag
@@ -132,7 +143,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
 
-      # 从 tag 指向的 commit 同步产物到 ts
+      # 构建（dist 不跟踪，tag 从源码构建）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+
+      # 从构建产物同步到 ts
       - name: Sync artifacts to ts
         shell: bash
         run: |-
