@@ -3,14 +3,8 @@ import { SlashCommand } from '@sillytavern/scripts/slash-commands/SlashCommand';
 import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCommandParser';
 import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
-import { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, offProfileChanged, onProfileChanged } from './presetCardsState.js';
+import { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
 import type { PresetCardsApi } from './presetCardsApi.js';
-
-/** 对外 API 的接口版本（接口有破坏性变更时递增；插件版本见 getInfo().version）。 */
-export const API_VERSION = 1;
-
-/** 对外 API 的插件版本（构建时由 vite 从 package.json 注入）。 */
-declare const __PRESET_CARDS_VERSION__: string;
 
 export function refresh(): void {
     location.reload();
@@ -24,12 +18,6 @@ export function exposePresetCardsApi(): PresetCardsApi {
         listPresets: listPresetsWithProfiles,
         getActiveProfile: () => getActiveProfile(),
         onProfileChanged,
-        offProfileChanged,
-        getInfo: () => ({
-            name: 'preset-cards',
-            version: typeof __PRESET_CARDS_VERSION__ !== 'undefined' ? __PRESET_CARDS_VERSION__ : 'dev',
-            apiVersion: API_VERSION,
-        }),
     };
 }
 

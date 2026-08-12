@@ -83,10 +83,6 @@ interface PresetCardsApi {
     getActiveProfile(): { presetName: string; profileId: string } | undefined;
     /** 订阅 profile 加载事件（任何加载路径成功后触发），返回退订函数。 */
     onProfileChanged(listener: (ref: { presetName: string; profileId: string }) => void): () => void;
-    /** 退订 profile 加载事件。 */
-    offProfileChanged(listener: (ref: { presetName: string; profileId: string }) => void): void;
-    /** 插件与接口版本信息（第三方据此判断能力与兼容性）。 */
-    getInfo(): { name: string; version: string; apiVersion: number };
 }
 ```
 
@@ -101,10 +97,7 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
     console.log('profile 已加载', presetName, profileId);
 });
 // 不再需要时退订
-unsubscribe(); // 或 window.presetCards.offProfileChanged(listener)
-
-// 查询版本，确认接口兼容
-const { name, version, apiVersion } = window.presetCards.getInfo();
+unsubscribe();
 ```
 
 > `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。加载顺序由调用方负责：如需先切预设再加载 profile，请先切换 ST 预设，再调用 `loadProfile`（Quicker-Api 便捷方案即按此顺序执行）。

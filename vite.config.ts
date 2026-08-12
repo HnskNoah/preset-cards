@@ -1,9 +1,5 @@
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
-
-// 构建时注入插件版本（对外 API 的 getInfo 用），发版随 package.json 同步
-const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')) as { version: string };
 
 // ST 模块在浏览器里通过服务器根绝对路径加载(不受插件安装目录影响),
 // 源码用 @sillytavern/* 惯例写法,vite 在 resolveId 阶段重写为绝对路径并标记 external,
@@ -25,9 +21,6 @@ function stResolver(): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-    define: {
-        __PRESET_CARDS_VERSION__: JSON.stringify(pkg.version),
-    },
     plugins: [stResolver()],
     build: {
         rollupOptions: {

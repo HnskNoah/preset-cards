@@ -33,11 +33,6 @@ export function onProfileChanged(listener: ProfileChangedListener): () => void {
     return () => { profileChangedListeners.delete(listener); };
 }
 
-/** 退订 profile 加载事件。 */
-export function offProfileChanged(listener: ProfileChangedListener): void {
-    profileChangedListeners.delete(listener);
-}
-
 function notifyProfileChanged(ref: { presetName: string; profileId: string }): void {
     for (const listener of [...profileChangedListeners]) {
         try {
@@ -156,13 +151,14 @@ export async function deletePresetByName(
     return true;
 }
 
-/** 枚举指定预设下的 preset-cards profile（供外部扩展查询）。返回 { id, name } 列表。 */
+/** 枚举指定预设下的 preset-cards profile（供外部扩展查询）。返回 { id, name } 列表。
+ * 排除 archive（隐藏 base，与 UI 树一致）。 */
 export function getPresetProfiles(name: string): { id: string; name: string }[] {
     const idx = openai_setting_names[name];
     if (idx === undefined) return [];
     const meta = readMeta(openai_settings[idx] as Preset);
     return (meta.profiles || [])
-        .filter((p) => isPromptBaseProfile(p) || isPromptDeltaProfile(p))
+        .filter((p) => (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) && !(isPromptBaseProfile(p) && isArchiveProfile(p)))
         .map((p) => ({ id: String(p.id), name: p.name || String(p.id) }));
 }
 
@@ -183,6 +179,8 @@ export async function applyProfileToPresetByName(
     const meta = readMeta(preset);
     const profile = getProfile(meta, profileId);
     if (!profile) return false;
+    // 与 UI 一致：archive（隐藏 base）不可通过此入口加载
+    if (isPromptBaseProfile(profile) && isArchiveProfile(profile)) return false;
     applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
     setActiveProfile({ presetName: name, profileId: String(profileId) });
     try {

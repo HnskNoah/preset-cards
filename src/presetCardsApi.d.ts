@@ -1,4 +1,4 @@
-import type { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, onProfileChanged, offProfileChanged, ProfileChangedListener } from './presetCardsState.js';
+import type { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
 import type { getActiveProfile } from './activeProfile.js';
 
 /** preset-cards 对外暴露的集成 API（挂载于 window.presetCards）。 */
@@ -13,20 +13,7 @@ export interface PresetCardsApi {
     getActiveProfile: () => ReturnType<typeof getActiveProfile>;
     /** 订阅 profile 加载事件（任何加载路径成功后触发），返回退订函数。 */
     onProfileChanged: typeof onProfileChanged;
-    /** 退订 profile 加载事件。 */
-    offProfileChanged: typeof offProfileChanged;
-    /** 插件与接口版本信息，供第三方判断能力与兼容性。 */
-    getInfo: () => {
-        /** 扩展名，恒为 'preset-cards'。 */
-        name: string;
-        /** 插件版本（来自 package.json）。 */
-        version: string;
-        /** 接口版本：接口有破坏性变更时递增。 */
-        apiVersion: number;
-    };
 }
-
-export type { ProfileChangedListener } from './presetCardsState.js';
 
 declare global {
     interface Window {
