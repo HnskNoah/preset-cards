@@ -3,8 +3,14 @@ import { SlashCommand } from '@sillytavern/scripts/slash-commands/SlashCommand';
 import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCommandParser';
 import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
-import { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles } from './presetCardsState.js';
-import type { PresetCardsApi, PresetCardsProfileChangedListener } from './presetCardsApi.js';
+import { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, offProfileChanged, onProfileChanged } from './presetCardsState.js';
+import type { PresetCardsApi } from './presetCardsApi.js';
+
+/** 对外 API 的接口版本（接口有破坏性变更时递增；插件版本见 getInfo().version）。 */
+export const API_VERSION = 1;
+
+/** 对外 API 的插件版本（构建时由 vite 从 package.json 注入）。 */
+declare const __PRESET_CARDS_VERSION__: string;
 
 export function refresh(): void {
     location.reload();
@@ -12,21 +18,18 @@ export function refresh(): void {
 
 /** 外部扩展集成入口（挂 window.presetCards）：供 ST-Quicker-Api 等便捷方案加载/查询 profile。 */
 export function exposePresetCardsApi(): PresetCardsApi {
-    const listeners = new Set<PresetCardsProfileChangedListener>();
-    const loadProfile = async (name: string, profileId: string) => {
-        const ok = await applyProfileToPresetByName(name, profileId);
-        if (ok) {
-            const ref = { presetName: name, profileId };
-            for (const listener of listeners) listener(ref);
-        }
-        return ok;
-    };
     return {
-        loadProfile,
+        loadProfile: applyProfileToPresetByName,
         getProfiles: getPresetProfiles,
         listPresets: listPresetsWithProfiles,
         getActiveProfile: () => getActiveProfile(),
-        onProfileChanged: (listener) => { listeners.add(listener); },
+        onProfileChanged,
+        offProfileChanged,
+        getInfo: () => ({
+            name: 'preset-cards',
+            version: typeof __PRESET_CARDS_VERSION__ !== 'undefined' ? __PRESET_CARDS_VERSION__ : 'dev',
+            apiVersion: API_VERSION,
+        }),
     };
 }
 

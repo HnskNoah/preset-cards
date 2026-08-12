@@ -21,6 +21,33 @@ import { getCardsTemplateContext } from './presetList.js';
 import type { CardsContext } from './presetCardsContext.js';
 import { clearImageCache, applyCachedBackgrounds } from './cache.js';
 
+/** profile 加载事件订阅回调。 */
+export type ProfileChangedListener = (ref: { presetName: string; profileId: string }) => void;
+
+/** 模块级 profile 加载监听器集合：所有加载路径（卡片行 / concise / window.presetCards.loadProfile）统一在此触发。 */
+const profileChangedListeners = new Set<ProfileChangedListener>();
+
+/** 订阅 profile 加载事件，返回退订函数。 */
+export function onProfileChanged(listener: ProfileChangedListener): () => void {
+    profileChangedListeners.add(listener);
+    return () => { profileChangedListeners.delete(listener); };
+}
+
+/** 退订 profile 加载事件。 */
+export function offProfileChanged(listener: ProfileChangedListener): void {
+    profileChangedListeners.delete(listener);
+}
+
+function notifyProfileChanged(ref: { presetName: string; profileId: string }): void {
+    for (const listener of [...profileChangedListeners]) {
+        try {
+            listener(ref);
+        } catch (err) {
+            console.error('preset-cards: profile changed listener failed', err);
+        }
+    }
+}
+
 /** 刷新当前活动预设的运行态：从内存 openai_settings 重载已保存状态（profile 编辑/重置后调用），
  * 走快路径 fastApplyPreset（内部含 render），不再触发原生 change 慢路径。 */
 export function refreshActivePresetUI(presetName: string): void {
@@ -165,6 +192,7 @@ export async function applyProfileToPresetByName(
         toastr.error(L('Failed to save preset metadata'));
         return false;
     }
+    notifyProfileChanged({ presetName: name, profileId: String(profileId) });
     return true;
 }
 

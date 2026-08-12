@@ -73,7 +73,7 @@ preset-cards 通过 `window.presetCards` 向其它 SillyTavern 扩展暴露集�
 
 ```ts
 interface PresetCardsApi {
-    /** 加载并持久化指定预设下的 profile，成功返回 true。 */
+    /** 加载并持久化指定预设下的 profile，成功返回 true（成功时触发 onProfileChanged）。 */
     loadProfile(presetName: string, profileId: string): Promise<boolean>;
     /** 枚举指定预设下的 profile（id + name）。 */
     getProfiles(presetName: string): { id: string; name: string }[];
@@ -81,24 +81,33 @@ interface PresetCardsApi {
     listPresets(): string[];
     /** 当前激活的 profile（presetName + profileId）。 */
     getActiveProfile(): { presetName: string; profileId: string } | undefined;
-    /** 订阅 profile 加载事件（loadProfile 成功后触发）。 */
-    onProfileChanged(listener: (ref: { presetName: string; profileId: string }) => void): void;
+    /** 订阅 profile 加载事件（任何加载路径成功后触发），返回退订函数。 */
+    onProfileChanged(listener: (ref: { presetName: string; profileId: string }) => void): () => void;
+    /** 退订 profile 加载事件。 */
+    offProfileChanged(listener: (ref: { presetName: string; profileId: string }) => void): void;
+    /** 插件与接口版本信息（第三方据此判断能力与兼容性）。 */
+    getInfo(): { name: string; version: string; apiVersion: number };
 }
 ```
 
 使用示例：
 
 ```js
-// 加载 profile
+// 加载 profile（成功会触发 onProfileChanged 订阅）
 await window.presetCards.loadProfile('我的预设', 'profile-id');
 
-// 订阅加载事件
-window.presetCards.onProfileChanged(({ presetName, profileId }) => {
+// 订阅加载事件（返回退订函数；卡片页/concise 正常加载同样会触发）
+const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId }) => {
     console.log('profile 已加载', presetName, profileId);
 });
+// 不再需要时退订
+unsubscribe(); // 或 window.presetCards.offProfileChanged(listener)
+
+// 查询版本，确认接口兼容
+const { name, version, apiVersion } = window.presetCards.getInfo();
 ```
 
-> 加载顺序由调用方负责：如需先切预设再加载 profile，请先切换 ST 预设，再调用 `loadProfile`（Quicker-Api 便捷方案即按此顺序执行）。
+> `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。加载顺序由调用方负责：如需先切预设再加载 profile，请先切换 ST 预设，再调用 `loadProfile`（Quicker-Api 便捷方案即按此顺序执行）。
 
 ## 最近变更（分支 `feature/profile-editor`，9c95aa1→77a743b）
 
