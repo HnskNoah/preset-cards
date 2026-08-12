@@ -26,7 +26,7 @@ export function applyLockVisual(ctx: EditorContext): void {
 
 /** 把缓冲状态叠加到已渲染的条目列表（开关目标 / 编辑后的名字 / dirty 高亮）。 */
 export function applyBufferOverlay(ctx: EditorContext): void {
-    ctx.dialog.find('.pc-prompt-card').each(function () {
+    ctx.dialog.find('#pc-prompt-list .pc-prompt-card').each(function () {
         const entry = $(this);
         const identifier = String(entry.data('identifier'));
         const key = bufferKey(ctx.name, identifier);
@@ -53,10 +53,11 @@ export function applyBufferOverlay(ctx: EditorContext): void {
 }
 
 /** 按搜索词过滤卡片。 */
+/** 按搜索词过滤主列表卡片（staged 卡片在 diff 区，不参与搜索遍历）。 */
 export function applySearch(ctx: EditorContext): void {
     const q = ctx.searchQuery.toLowerCase().trim();
     let visible = 0;
-    ctx.dialog.find('.pc-prompt-card').each(function () {
+    ctx.dialog.find('#pc-prompt-list .pc-prompt-card').each(function () {
         const identifier = String($(this).data('identifier'));
         const idx = ctx.searchIndex.get(identifier);
         const match = !q || !!(idx && (idx.name.includes(q) || idx.content.includes(q) || identifier.toLowerCase().includes(q)));
@@ -98,8 +99,18 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
             title.append($('<span class="pc-role-badge role-' + cssEscape(item.entry.role) + '">' + item.entry.role + '</span>'));
         }
         card.append(title);
-        // 开关：enable 开关（叠加 pendingToggles 缓冲）+ 本会话刚挂载的闪电按钮，与主列表一致；staged 页同样可交互（复用 dialog 级 handler）
+        // 开关组：Undo 在最前（撤销该条目），其后 enable 开关 / 闪电按钮（与主列表一致，staged 可交互）
         const switches = $('<div class="pc-card-switches"></div>');
+        if (item.mount) {
+            switches.append(buildUndoBtn(ctx, item.key, item.identifier, false, true));
+        } else if (item.reorder) {
+            switches.append(buildUndoBtn(ctx, item.key, item.identifier, false, false, true));
+        } else if (item.clear) {
+            // clear 项撤销：仅删 pendingClears（恢复被清除的值）
+            switches.append(buildUndoBtn(ctx, item.key, item.identifier, true));
+        } else {
+            switches.append(buildUndoBtn(ctx, item.key, item.identifier));
+        }
         if (item.entry?.toggleable) {
             switches.append($('<button class="pc-btn-toggle ' + (enabledNow ? 'on' : 'off') + '"><i class="fa-solid ' + (enabledNow ? 'fa-toggle-on' : 'fa-toggle-off') + '"></i></button>'));
         }
@@ -108,28 +119,17 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
         }
         card.append(switches);
         li.append(card);
-        if (item.mount) {
-            li.append(buildUndoBtn(ctx, item.key, item.identifier, false, true));
-        } else if (item.reorder) {
-            li.append(buildUndoBtn(ctx, item.key, item.identifier, false, false, true));
-        } else if (item.clear) {
-            // clear 项撤销：仅删 pendingClears（恢复被清除的值）
-            li.append(buildUndoBtn(ctx, item.key, item.identifier, true));
-        } else {
-            li.append(buildUndoBtn(ctx, item.key, item.identifier));
-        }
         list.append(li);
     }
     diffArea.append(list);
 }
 
-/** 构建 Undo 按钮（clear 项独立 undo；mount 项撤销挂载；toggle/值编辑项整体撤销）。
+/** 构建 Undo 图标按钮（clear 项独立 undo；mount 项撤销挂载；toggle/值编辑项整体撤销）。
  * forMount：true 时明确走 undoMount（撤销挂载态），避免与同条目 toggle 的 Undo 混淆。
  * forReorder：true 时走 undoReorderItem（还原单条目位置）。 */
 export function buildUndoBtn(ctx: EditorContext, key: string, identifier: string, onlyClear = false, forMount = false, forReorder = false): JQuery<HTMLElement> {
-    const undo = $('<button class="pc-btn-undo"></button>')
-        .append($('<i class="fa-solid fa-rotate-left"></i>'))
-        .append(' ' + L('Undo'));
+    const undo = $('<button class="pc-btn-undo" title="' + cssEscape(L('Undo')) + '"></button>')
+        .append($('<i class="fa-solid fa-rotate-left"></i>'));
     undo.on('click', async () => {
         if (ctx.listLocked) return;
         if (onlyClear) {
@@ -243,7 +243,7 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
 
 /** 局部刷新单条 entry（名字/开关/dirty/clear 可见性）。 */
 export function refreshEntryRow(ctx: EditorContext, identifier: string, snapshot?: EditorSnapshot): void {
-    const row = ctx.dialog.find(`.pc-prompt-card[data-identifier="${cssEscape(identifier)}"]`);
+    const row = ctx.dialog.find(`#pc-prompt-list .pc-prompt-card[data-identifier="${cssEscape(identifier)}"]`);
     if (row.length === 0) return;
     const resolvedCtx = snapshot ?? resolveEditorSnapshot(ctx);
     const view = resolvedCtx?.entries.find((e) => e.identifier === identifier);

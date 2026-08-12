@@ -1619,10 +1619,6 @@
     min-width: 0;
 }
 
-.pc-diff-item > .pc-btn-undo {
-    flex-shrink: 0;
-}
-
 .pc-diff-item.diff-reorder { border-left-color: var(--SmartThemeQuoteColor, #3b82f6); }
 .pc-diff-item.diff-toggle { border-left-color: #f59e0b; }
 .pc-diff-item.diff-mount { border-left-color: #ef4444; }
@@ -1631,16 +1627,23 @@
 .pc-diff-item.diff-delete { border-left-color: #ef4444; }
 .pc-diff-item.diff-added { border-left-color: #10b981; }
 
-.pc-btn-undo {
+/* staged 卡片撤销：图标按钮，尺寸与 enable 开关一致，置于开关组最前 */
+.pc-card-switches .pc-btn-undo {
     background: transparent;
     border: 1px solid var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
-    padding: 4px 8px;
-    border-radius: 4px;
+    width: 32px;
+    height: 28px;
+    padding: 0;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
-.pc-btn-undo:hover {
+.pc-card-switches .pc-btn-undo:hover {
     background: rgba(255, 255, 255, 0.1);
 }
 

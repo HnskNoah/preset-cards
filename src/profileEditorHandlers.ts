@@ -330,8 +330,13 @@ export function bindEditorHandlers(ctx: EditorContext): void {
 
     ctx.dialog.on('input', '#pc-search-input', function () {
         ctx.searchQuery = String($(this).val() ?? '');
-        applySearch(ctx);
-        setupSortable(ctx); // 搜索中禁用拖拽
+        // 防抖：连续输入不逐键全量过滤，减少大列表下的 DOM 卡顿
+        if (ctx.searchTimer) clearTimeout(ctx.searchTimer);
+        ctx.searchTimer = setTimeout(() => {
+            ctx.searchTimer = undefined;
+            applySearch(ctx);
+            setupSortable(ctx); // 搜索中禁用拖拽
+        }, 120);
     });
 
     // 未使用 prompt 折叠区：点击标题展开/收起

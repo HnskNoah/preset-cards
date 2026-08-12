@@ -44,6 +44,8 @@ export interface EditorContext {
     // 会话可变状态
     searchQuery: string;
     searchIndex: Map<string, { name: string; content: string }>;
+    /** 搜索防抖定时器（input 连续输入时延迟执行过滤）。 */
+    searchTimer?: ReturnType<typeof setTimeout>;
     editTargetId: string | null;
     mobileShowRight: boolean;
     listLocked: boolean;
