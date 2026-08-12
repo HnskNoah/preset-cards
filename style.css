@@ -2100,14 +2100,42 @@
 .pc-role-badge.role-user { background: rgba(16, 185, 129, 0.2); color: #34d399; }
 .pc-role-badge.role-assistant { background: rgba(139, 92, 246, 0.2); color: #a78bfa; }
 
-/* 编辑界面内容栏：放大 Prompt Text，且让表单填满（不沿用 420px 限制），与 header 保存/取消右缘对齐 */
-.pc-edit-area .preset_cards_prompt_edit_form {
+/* 编辑界面内容栏：放大 Prompt Text，且让表单填满右栏剩余高度（不沿用 420px 限制 / 固定 300px）。
+   textarea 随容器伸缩（flex:1），内容过长时内部滚动，不再出现下方留白。 */
+.pc-edit-area {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+}
+
+.pc-edit-area .pc-edit-form {
+    flex: 1;
+    min-height: 0;
     width: 100%;
     max-width: none;
 }
 
+.pc-edit-area .preset_cards_prompt_edit_form {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: none;
+    display: flex;
+    flex-direction: column;
+}
+
+.pc-edit-area .preset_cards_prompt_edit_form .preset_edit_field:last-child {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .pc-edit-area .preset_cards_prompt_edit_form textarea {
-    min-height: 300px;
+    flex: 1;
+    min-height: 0;
+    resize: none;
     font-size: 15px;
     line-height: 1.5;
 }
