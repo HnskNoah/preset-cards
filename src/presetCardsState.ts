@@ -6,7 +6,7 @@ import { download } from '@sillytavern/scripts/utils';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { L } from './i18n.js';
 import { EXTENSION_NAME } from './constants.js';
-import { getProfile, readMeta, saveMeta } from './meta.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { applyProfileToPreset } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
@@ -127,6 +127,21 @@ export async function deletePresetByName(
     }
 
     return true;
+}
+
+/** 枚举指定预设下的 preset-cards profile（供外部扩展查询）。返回 { id, name } 列表。 */
+export function getPresetProfiles(name: string): { id: string; name: string }[] {
+    const idx = openai_setting_names[name];
+    if (idx === undefined) return [];
+    const meta = readMeta(openai_settings[idx] as Preset);
+    return (meta.profiles || [])
+        .filter((p) => isPromptBaseProfile(p) || isPromptDeltaProfile(p))
+        .map((p) => ({ id: String(p.id), name: p.name || String(p.id) }));
+}
+
+/** 列出所有含 preset-cards profile 的预设名。 */
+export function listPresetsWithProfiles(): string[] {
+    return Object.keys(openai_setting_names).filter((name) => getPresetProfiles(name).length > 0);
 }
 
 /** 按预设名 + profile id 应用 profile 到预设并持久化（不依赖卡片 UI ctx）。
