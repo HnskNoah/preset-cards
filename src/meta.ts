@@ -192,6 +192,46 @@ export function saveMeta(presetName: string, presetIndex: number, meta: PresetMe
     return saveChain;
 }
 
+/** 合并保存窗口（ms）：同一预设的合并保存延迟到窗口结束执行一次全量保存，避免高频操作逐次全量 POST。 */
+const MERGE_WINDOW_MS = 300;
+
+interface MergePending {
+    presetIndex: number;
+    meta: PresetMeta;
+    timer: ReturnType<typeof setTimeout>;
+    resolve: () => void;
+    reject: (e: unknown) => void;
+    promise: Promise<void>;
+}
+
+const mergePending = new Map<string, MergePending>();
+
+/** 合并保存：同一预设名在窗口内的多次保存合并为一次（保留最新 meta），窗口结束才真正落盘。
+ * 失败语义与 saveMeta 一致（reject 给调用方）；窗口内后续调用复用同一个 promise。 */
+export function saveMetaMerged(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+    const existing = mergePending.get(presetName);
+    if (existing) {
+        existing.meta = meta; // 保留最新 meta，延后到原 timer 触发
+        return existing.promise;
+    }
+    let resolveFn!: () => void;
+    let rejectFn!: (e: unknown) => void;
+    const promise = new Promise<void>((res, rej) => { resolveFn = res; rejectFn = rej; });
+    const pending: MergePending = {
+        presetIndex,
+        meta,
+        timer: setTimeout(() => {
+            mergePending.delete(presetName);
+            saveMeta(presetName, pending.presetIndex, pending.meta).then(resolveFn, rejectFn);
+        }, MERGE_WINDOW_MS),
+        resolve: resolveFn,
+        reject: rejectFn,
+        promise,
+    };
+    mergePending.set(presetName, pending);
+    return promise;
+}
+
 async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
     const preset = openai_settings[presetIndex] as Preset | undefined;
     if (!preset) return;

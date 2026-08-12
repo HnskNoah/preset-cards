@@ -3,7 +3,7 @@
 
 import { L } from './i18n.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaChange, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
-import { isPromptBaseProfile, readMeta, saveMeta } from './meta.js';
+import { isPromptBaseProfile, readMeta, saveMeta, saveMetaMerged } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
 import { buildDefaultSnapshotLock, captureExtra, captureSampling, findPromptInPreset, filterFields, promptFieldsEqual, resolveParentStates, snapshotToChanges, snapshotToDelta } from './promptToggle.js';
@@ -217,9 +217,15 @@ export async function commitBufferedEditsToProfile(
         : [...profiles, nextProfile];
     const nextMeta = { ...meta, profiles: nextProfiles };
     recordDefaultOriginalFields(nextMeta, name, sessionEdits);
-    await saveMeta(name, idx, nextMeta);
-    // 成功：同步内存，源 profile 槽位替换为副本
+    // 先同步内存：合并保存窗口内后续 commit 基于最新 profiles（否则窗口内第 2 次会覆盖第 1 次改动）
     meta.profiles = nextProfiles;
+    try {
+        await saveMetaMerged(name, idx, nextMeta);
+    } catch (err) {
+        // 保存失败回滚内存，与副本模式失败语义一致
+        meta.profiles = profiles;
+        throw err;
+    }
     toastr.success(L('Configuration updated'));
     return true;
 }
