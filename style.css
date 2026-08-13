@@ -1266,6 +1266,13 @@
         opacity: 0.7;
     }
 
+    /* Always reveal add/import/export config buttons on touch (no hover on touch) */
+    .preset_card_add_profile_btn,
+    .preset_card_import_profile_btn,
+    .preset_card_export_all_btn {
+        opacity: 1;
+    }
+
     /* Prompt edit popup: avoid horizontal overflow, keep buttons reachable */
     .preset_cards_prompt_edit_form {
         width: 100%;
@@ -1313,7 +1320,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(var(--SmartThemeBodyColorRgb, 200, 200, 200), 0.06);
     border-radius: 12px;
     padding: 16px;
     border: none;
@@ -1325,7 +1332,7 @@
     flex: 1.5;
     display: flex;
     flex-direction: column;
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(var(--SmartThemeBodyColorRgb, 200, 200, 200), 0.06);
     border-radius: 12px;
     padding: 16px;
     border: none;
@@ -1481,6 +1488,36 @@
     background: rgba(255, 255, 255, 0.1);
 }
 
+/* 已挂载条目的开关组：enabled + mounted 上下排列（像 = ） */
+.pc-card-switches {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+/* 挂载态开关：红色（激活态 on / 未激活 off） */
+.pc-btn-toggle.mount {
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.5);
+    width: 32px;
+    height: 22px;
+    font-size: 13px;
+}
+
+.pc-btn-toggle.mount.on {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.6);
+}
+
+.pc-btn-toggle.mount.off {
+    /* 未激活（unused 区）：与周围 prompt 同灰度，弱化提示 */
+    color: var(--white30a, rgba(255, 255, 255, 0.3));
+    border-color: transparent;
+    background: transparent;
+}
+
 .pc-top-action-btn {
     background: var(--SmartThemeButtonDisplayColor, rgba(255,255,255,0.05));
     border: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
@@ -1499,6 +1536,18 @@
     background: var(--SmartThemeButtonHoverColor, rgba(255,255,255,0.1));
 }
 
+/* 有 staged diff 时 View Staged 高亮提示（与 commit 可提交状态呼应） */
+.pc-btn-view-staged.has-staged {
+    background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.15);
+    border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
+    color: var(--SmartThemeQuoteColor);
+}
+
+.pc-btn-view-staged.has-staged .pc-staged-count {
+    color: var(--SmartThemeQuoteColor);
+    font-weight: bold;
+}
+
 .pc-btn-lock.active {
     background: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.2);
     border-color: rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.5);
@@ -1511,15 +1560,15 @@
 }
 
 .pc-btn-commit {
-    background: #3b82f6;
+    background: var(--SmartThemeQuoteColor, #3b82f6);
     color: white;
     border: none;
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    box-shadow: 0 2px 8px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.3);
 }
 
 .pc-btn-commit:hover {
-    background: #2563eb;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    filter: brightness(0.9);
+    box-shadow: 0 4px 12px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.4);
 }
 
 .pc-btn-commit:disabled {
@@ -1547,36 +1596,54 @@
 .pc-sortable-drag {
     opacity: 1 !important;
     background: var(--SmartThemeBlurTintColor, rgba(30, 30, 30, 0.9));
-    box-shadow: 0 10px 20px rgba(0,0,0,0.3);
-    transform: scale(1.02);
+    box-shadow: 0 16px 32px rgba(0,0,0,0.4), 0 0 0 2px var(--SmartThemeQuoteColor) !important;
+    transform: scale(1.02) rotate(1deg) !important;
+    cursor: grabbing !important;
+    z-index: 999999 !important;
 }
 
 .pc-diff-item {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
     padding: 12px;
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(var(--SmartThemeBodyColorRgb, 200, 200, 200), 0.06);
     border-left: 4px solid transparent;
 }
 
-.pc-diff-item.diff-reorder { border-left-color: #3b82f6; }
+/* staged 复用主列表卡片：卡片占满可用宽度，Undo 按钮固定右侧 */
+.pc-diff-item > .pc-prompt-card {
+    flex: 1;
+    min-width: 0;
+}
+
+.pc-diff-item.diff-reorder { border-left-color: var(--SmartThemeQuoteColor, #3b82f6); }
 .pc-diff-item.diff-toggle { border-left-color: #f59e0b; }
+.pc-diff-item.diff-mount { border-left-color: #ef4444; }
 .pc-diff-item.diff-modify { border-left-color: #8b5cf6; }
+.pc-diff-item.diff-clear { border-left-color: #ef4444; }
 .pc-diff-item.diff-delete { border-left-color: #ef4444; }
 .pc-diff-item.diff-added { border-left-color: #10b981; }
 
-.pc-btn-undo {
+/* staged 卡片撤销：图标按钮，尺寸与 enable 开关一致，置于开关组最前 */
+.pc-card-switches .pc-btn-undo {
     background: transparent;
     border: 1px solid var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
-    padding: 4px 8px;
-    border-radius: 4px;
+    width: 32px;
+    height: 28px;
+    padding: 0;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
 }
-.pc-btn-undo:hover {
+.pc-card-switches .pc-btn-undo:hover {
     background: rgba(255, 255, 255, 0.1);
 }
 
@@ -1616,13 +1683,13 @@
 }
 
 .pc-btn-icon-primary {
-    background: #3b82f6;
+    background: var(--SmartThemeQuoteColor, #3b82f6);
     color: white;
     border: none;
 }
 
 .pc-btn-icon-primary:hover {
-    background: #2563eb;
+    filter: brightness(0.9);
 }
 
 .pc-form-group {
@@ -1639,7 +1706,7 @@
 }
 
 .pc-form-control {
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(var(--SmartThemeBodyColorRgb, 200, 200, 200), 0.06);
     border: 1px solid var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
     padding: 8px 12px;
@@ -1651,7 +1718,8 @@
 
 .pc-form-control:focus {
     outline: none;
-    border-color: #3b82f6;
+    border-color: var(--SmartThemeQuoteColor, #3b82f6);
+    box-shadow: 0 0 0 2px rgba(var(--SmartThemeQuoteColorRgb, 100, 180, 255), 0.15);
 }
 
 /* ===== Profile Editor popup：pcmanager 移植定制 ===== */
@@ -1896,6 +1964,43 @@
     opacity: 0.6;
 }
 
+/* 未使用 prompt 折叠区 */
+.pc-unused-group {
+    margin-top: 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.1));
+    padding-top: 6px;
+}
+
+.pc-unused-toggle {
+    background: transparent;
+    border: none;
+    color: var(--SmartThemeBodyColor, inherit);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    opacity: 0.6;
+}
+
+.pc-unused-toggle:hover {
+    opacity: 1;
+    color: var(--SmartThemeQuoteColor, inherit);
+}
+
+.pc-unused-group.expanded .pc-unused-toggle i {
+    transform: rotate(90deg);
+}
+
+.pc-unused-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+
 /* 空提示 */
 .pc-prompt-empty {
     font-size: 12px;
@@ -1995,14 +2100,42 @@
 .pc-role-badge.role-user { background: rgba(16, 185, 129, 0.2); color: #34d399; }
 .pc-role-badge.role-assistant { background: rgba(139, 92, 246, 0.2); color: #a78bfa; }
 
-/* 编辑界面内容栏：放大 Prompt Text，且让表单填满（不沿用 420px 限制），与 header 保存/取消右缘对齐 */
-.pc-edit-area .preset_cards_prompt_edit_form {
+/* 编辑界面内容栏：放大 Prompt Text，且让表单填满右栏剩余高度（不沿用 420px 限制 / 固定 300px）。
+   textarea 随容器伸缩（flex:1），内容过长时内部滚动，不再出现下方留白。 */
+.pc-edit-area {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+}
+
+.pc-edit-area .pc-edit-form {
+    flex: 1;
+    min-height: 0;
     width: 100%;
     max-width: none;
 }
 
+.pc-edit-area .preset_cards_prompt_edit_form {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: none;
+    display: flex;
+    flex-direction: column;
+}
+
+.pc-edit-area .preset_cards_prompt_edit_form .preset_edit_field:last-child {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .pc-edit-area .preset_cards_prompt_edit_form textarea {
-    min-height: 300px;
+    flex: 1;
+    min-height: 0;
+    resize: none;
     font-size: 15px;
     line-height: 1.5;
 }
