@@ -180,6 +180,8 @@ export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): Stag
 
     const items: StagedItem[] = [];
     const entryById = new Map(resolved.entries.map((e) => [e.identifier, e]));
+    // 挂载差异基线用 profile 解析态（与 commit diff 语义一致）；未知条目回退 initialOrder
+    const profileMountedMap = resolveProfileMountedMap(resolved);
     for (const key of keys) {
         const identifier = key.slice(ctx.prefix.length);
         const entry = entryById.get(identifier);
@@ -188,8 +190,8 @@ export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): Stag
         if (rd) item.reorder = rd;
         const mountTarget = ctx.pendingMounts.get(key);
         if (mountTarget !== undefined) {
-            // original = 会话初始挂载态（弹窗打开时快照），而非 !target（多翻转下语义才正确）
-            const originalMounted = ctx.initialOrder.some((o) => o.identifier === identifier);
+            const originalMounted = profileMountedMap.get(identifier)
+                ?? ctx.initialOrder.some((o) => o.identifier === identifier);
             item.mount = { original: originalMounted, target: mountTarget };
         }
         const toggleTarget = ctx.pendingToggles.get(key);
@@ -255,6 +257,16 @@ export function applyUndoState(ctx: EditorContext, key: string, identifier: stri
         const soEntry = ctx.sessionOrder.find((o) => o.identifier === identifier);
         if (soEntry) soEntry.enabled = view.enabled;
     }
+}
+
+/** profile 解析态的挂载集合（identifier → mounted）：挂载净零检测与 staged mount 基线用（与 commit diff 语义一致）。 */
+export function resolveProfileMountedMap(snapshot: EditorSnapshot): Map<string, boolean> {
+    const resolved = resolveProfilePrompts(
+        snapshot.profile,
+        snapshot.meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[],
+        new Set(),
+    );
+    return new Map(resolved.map((e) => [e.identifier, e.mounted]));
 }
 
 /** 开关净零参照：目标等于 profile 解析值 → 删缓冲；否则记录目标。返回是否产生了 toggle 缓冲。 */
@@ -389,7 +401,7 @@ export function readEditableProfile(ctx: EditorContext): { meta: PresetMeta; pro
     return { meta, profile };
 }
 
-/** 清空当前 name 的全部会话缓冲（含 pendingClears / pendingMounts）：commit 消费后与关闭丢弃时共用。 */
+/** 清空当前 name 的全部会话缓冲（含 pendingClears / pendingMounts / clearedEdits）：commit 消费后与关闭丢弃时共用。 */
 export function clearSessionBuffers(ctx: EditorContext): void {
     clearBufferedForName(ctx.name, ctx.sessionEdits, ctx.pendingToggles);
     ctx.pendingClears.clear();
@@ -398,6 +410,9 @@ export function clearSessionBuffers(ctx: EditorContext): void {
     }
     for (const k of [...ctx.unmountPositions.keys()]) {
         if (k.startsWith(ctx.prefix)) ctx.unmountPositions.delete(k);
+    }
+    for (const k of [...ctx.clearedEdits.keys()]) {
+        if (k.startsWith(ctx.prefix)) ctx.clearedEdits.delete(k);
     }
 }
 

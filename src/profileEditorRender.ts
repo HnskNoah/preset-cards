@@ -136,7 +136,18 @@ export function buildUndoBtn(ctx: EditorContext, key: string, identifier: string
     undo.on('click', async () => {
         if (ctx.listLocked) return;
         if (onlyClear) {
+            // 撤销清除：恢复 clear 时快照的会话编辑（session + toggle），否则被销毁的编辑无法还原
             ctx.pendingClears.delete(key);
+            const cleared = ctx.clearedEdits.get(key);
+            if (cleared) {
+                if (cleared.session) ctx.sessionEdits.set(key, cleared.session);
+                if (cleared.toggle !== undefined) {
+                    ctx.pendingToggles.set(key, cleared.toggle);
+                    const soEntry = ctx.sessionOrder.find((o) => o.identifier === identifier);
+                    if (soEntry) soEntry.enabled = cleared.toggle;
+                }
+                ctx.clearedEdits.delete(key);
+            }
         } else if (forMount) {
             // 撤销挂载态：精确还原该条目的挂载（不整表还原），重渲染分组
             undoMount(ctx, key, identifier);
@@ -217,8 +228,9 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
         const editedFields = form.collectFields();
         if (editedFields) {
             const key = bufferKey(ctx.name, identifier);
-            // F2：clear 后重新编辑视为覆盖「清除」意图
+            // F2：clear 后重新编辑视为覆盖「清除」意图（clear 快照一并丢弃）
             ctx.pendingClears.delete(key);
+            ctx.clearedEdits.delete(key);
             const session = ctx.sessionEdits.get(key);
             const initial = session?.initial ?? capturePromptFields(prompt);
             const edited = { ...(session?.edited ?? {}), ...filterFields(editedFields) };
@@ -389,7 +401,8 @@ export function setupSortable(ctx: EditorContext): void {
         listEl.sortable({
             axis: 'y',
             handle: '.pc-drag-handle',
-            items: '.pc-prompt-card',
+            // 仅直接子级卡片可拖：unused 分组嵌在 .pc-prompt-list 内，避免其卡片被 sortable 捕获/拖拽错位
+            items: '> .pc-prompt-card',
             placeholder: 'pc-sortable-placeholder',
             start: () => listEl.addClass('sorting'),
             stop: () => listEl.removeClass('sorting'),

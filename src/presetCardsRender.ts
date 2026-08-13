@@ -34,11 +34,12 @@ export function refreshCardInPlace(ctx: CardsContext, idx: number): void {
         }
         for (const mid of meta.models) {
             const def = AVAILABLE_MODELS.find(m => m.id === mid);
-            const logoHtml = def ? `<img src="${LOGO_BASE + def.logo}" alt="" />` : '';
             const label = def ? def.label : mid;
-            card.find('.preset_card_tags').append(
-                `<span class="preset_card_chip" title="${label}">${logoHtml}${label}</span>`,
-            );
+            // 用户 meta 的 label（未知模型 id）走 text 节点，避免 HTML 注入
+            const chip = $('<span class="preset_card_chip"></span>').attr('title', label);
+            if (def) chip.append(`<img src="${LOGO_BASE + def.logo}" alt="" />`);
+            chip.append(document.createTextNode(label));
+            card.find('.preset_card_tags').append(chip);
         }
     } else {
         chipsEl.remove();

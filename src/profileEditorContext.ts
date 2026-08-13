@@ -60,6 +60,10 @@ export interface EditorContext {
     initialOrder: { identifier: string; enabled: boolean }[];
     /** 会话内工作顺序（唯一真值源）：挂载/卸载/拖拽只改这里，commit 成功后才投影回预设的 prompt_order。 */
     sessionOrder: { identifier: string; enabled: boolean }[];
+    /** 提交/重置进行中标志（防 re-entrancy：快速连点不二次进入）。 */
+    committing: boolean;
+    /** clear 时快照的会话编辑（undo clear 时恢复：session 恢复 + toggle 恢复）。 */
+    clearedEdits: Map<string, { session?: PromptEditBuffer; toggle?: boolean }>;
 }
 
 /** 创建弹窗上下文：完成全部状态初始化（含打开时 prompt_order 快照与 sessionOrder 种子）。 */
@@ -96,6 +100,8 @@ export function createEditorContext(
         initialOrderIndex: buildOrderCtxFromOrder(initialOrder).orderIndex,
         initialOrder,
         sessionOrder: initialOrder.map((o) => ({ ...o })),
+        committing: false,
+        clearedEdits: new Map(),
     };
 }
 

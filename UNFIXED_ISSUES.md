@@ -14,6 +14,19 @@
 - R7 N1 / R9 N2 [commit 失败运行时污染]：副作用全部后置于持久化成功之后 + 编辑期零写入，剩余面（applyBufferedEdits 成功路径后无失败点）已不可达 → 闭合。
 - 持久化双机制（全局串行链 + 300ms 合并窗口）统一为 per-preset 合并窗口 + 串行尾链，消除两套实现的交互面。
 
+## 清尾轮（issue 略过区最后一批）
+
+- L. 挂载净零检测参照错误：改为 profile 解析态（`resolveProfileMountedMap`），未知条目回退 initialOrder。
+- Y. re-entrancy：`ctx.committing` 守卫 commit/reset/close。
+- Z. clear 后 undo 无法恢复：`clearedEdits` 快照 session + toggle，undo clear 时恢复。
+- W. sortable 覆盖 unused 组：`items` 收紧为直接子级 `> .pc-prompt-card`。
+- F. commit 后 render 抛错：finalizeEditorSession 的 render/refresh 包 try/catch。
+- AC. chip label 注入：改 text 节点渲染。
+- AB. editModal 字段先改后存：by-design 闭合（幂等收敛）。
+- R. 会话中切角色错位：不可达闭合（模态弹窗阻挡 + 编辑期零写入）。
+
+剩余开放（issue 留档）：H（delta 模型无法表达删除字段，enhancement）、AA（reset 失败重试收敛）。
+
 ## R7 轮归档（D7 略过项）
 
 ### N1 [MEDIUM/REAL] commit 失败后运行时 preset 已改写，discard 只还原 order 不还原 prompts
