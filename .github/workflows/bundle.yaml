@@ -61,7 +61,7 @@ jobs:
         with:
           default_author: github_actions
           message: '[bot] Bundle v${{ steps.bump_version.outputs.new_version }}'
-          add: 'manifest.json package.json'
+          add: 'manifest.json package.json dist'
 
       - name: Push debug tag
         shell: bash
