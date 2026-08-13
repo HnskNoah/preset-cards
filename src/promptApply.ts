@@ -1,10 +1,9 @@
 import { L } from './i18n.js';
-import { isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
-import type { Preset, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptProfileEntry, PromptSampling } from './meta.js';
-import { SAMPLING_KEYS } from './constants.js';
-import { filterFields, applySampling, applyExtra, capturePromptFields, findPromptInPreset, EXTRA_EXCLUDED_KEYS } from './promptCapture.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
+import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptModel, PromptProfileEntry } from './meta.js';
+import { filterFields, applySampling, applyExtra, applyModel, capturePromptFields, findPromptInPreset } from './promptCapture.js';
 import { findOrderList, resolvePromptOrderTarget, replaceTargetPromptOrder, syncPromptOrder, resolveProfilePrompts, pruneStaleOrderEntries } from './promptOrder.js';
-import { snapshotPromptState, isNeverCaptureIdentifier } from './promptState.js';
+import { snapshotPromptState } from './promptState.js';
 
 /**
  * 单条开关应用到预设实际值：改 prompts[].enabled 并同步 prompt_order。
@@ -84,10 +83,32 @@ export function applyBaseProfile(preset: Preset, profile: PromptBaseProfile): vo
     applyResolvedPromptState(preset, profile.prompts);
 }
 
+/** 解析 profile 的模型快照：优先自身 model，delta 未记录时沿父链回溯（含防环）。 */
+export function resolveProfileModel(
+    profile: PresetProfile,
+    allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+): PromptModel | undefined {
+    if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return undefined;
+    const seen = new Set<string>();
+    let current: PresetProfile | undefined = profile;
+    while (current && (isPromptBaseProfile(current) || isPromptDeltaProfile(current))) {
+        const id = String(current.id);
+        if (seen.has(id)) return undefined;
+        seen.add(id);
+        if (current.model) return current.model;
+        if (isPromptDeltaProfile(current)) {
+            current = getProfile({ profiles: allProfiles } as PresetMeta, current.baseId);
+        } else {
+            current = undefined;
+        }
+    }
+    return undefined;
+}
+
 /**
- * 加载配置的核心分支（base / delta / v1）。
- * - v3 base/delta：resolve → applyResolvedPromptState（mounted/unused 精确还原）；
- * - v1：定义并集对齐（profile 有而 preset 无 → 补进；preset 有而 profile 无 → 标 unused；仅挂载的进 order）。
+ * 加载配置的核心分支（base / delta）。
+ * - v3 base/delta：resolve → applyResolvedPromptState（mounted/unused 精确还原）。
+ * - 模型快照：存在则一并应用（source + 对应模型键）。
  */
 export function applyProfileToPreset(
     preset: Preset,
@@ -96,6 +117,9 @@ export function applyProfileToPreset(
     opts?: { showMissingToast?: boolean },
 ): void {
     pruneStaleOrderEntries(preset);
+
+    const model = resolveProfileModel(profile, allProfiles);
+    if (model) applyModel(preset, model);
 
     if (isPromptBaseProfile(profile)) {
         applyResolvedPromptState(preset, resolveProfilePrompts(profile, allProfiles));
@@ -114,78 +138,6 @@ export function applyProfileToPreset(
         }
         if (profile.sampling) applySampling(preset, profile.sampling);
         if (profile.extra) applyExtra(preset, profile.extra);
-    } else {
-        // v1 全量快照：定义并集对齐（补进/覆盖/保留 + 挂载还原 + 采样/附加快照回放），不整份覆盖
-        applyV1UnionAlign(preset, profile.settings);
     }
 }
 
-/**
- * v1 全量快照的定义并集对齐应用（替代 Object.assign 整份覆盖）：
- * - 定义集合并集：v1 有而 preset 无 → 补进；v1 有而 preset 有 → 覆盖（对齐编辑结果）；
- *   preset 有而 v1 无 → 保留（不挂载 = unused），不误删保存 profile 后用户新加的定义。
- * - 挂载还原：按 v1 的 prompt_order（global 100001）重建目标 order；孤立引用（v1 order 里无定义）过滤。
- * - 采样 / 附加快照：v1.settings 里的采样键与其余键分别经 applySampling / applyExtra 回放。
- */
-function applyV1UnionAlign(preset: Preset, v1Settings: Record<string, any>): void {
-    const v1Prompts = Array.isArray(v1Settings.prompts) ? v1Settings.prompts : [];
-    const v1ById = new Map<string, any>();
-    for (const p of v1Prompts) {
-        if (p && typeof p.identifier === 'string' && p.identifier && !isNeverCaptureIdentifier(p.identifier)) v1ById.set(p.identifier, p);
-    }
-    if (!Array.isArray(preset.prompts)) preset.prompts = [];
-
-    // 定义集合并集：补进 / 覆盖 / 保留（PROMPT_NEVER_CAPTURE 如 SPresetSettings 一律跳过，由扩展自管理）
-    const presetById = new Map<string, any>();
-    for (const p of preset.prompts) {
-        if (p && typeof p.identifier === 'string' && p.identifier && !isNeverCaptureIdentifier(p.identifier)) presetById.set(p.identifier, p);
-    }
-    for (const [id, v1p] of v1ById) {
-        const existing = presetById.get(id);
-        if (existing) {
-            Object.assign(existing, structuredClone(v1p));
-        } else {
-            preset.prompts.push(structuredClone(v1p));
-        }
-    }
-
-    // 挂载还原：v1 order（global 100001）重建目标 order；无 v1 order 则只对齐定义、不碰挂载。
-    // PROMPT_NEVER_CAPTURE 的 identifier 不进入重建的 order（保持 preset 现状）。
-    const v1OrderList = Array.isArray(v1Settings.prompt_order)
-        ? v1Settings.prompt_order.find((l: any) => l && String(l.character_id) === '100001')
-        : undefined;
-    if (v1OrderList && Array.isArray(v1OrderList.order)) {
-        const allIds = new Set([...presetById.keys(), ...v1ById.keys()]);
-        const v1Order = v1OrderList.order
-            .filter((o: any) => o && typeof o.identifier === 'string' && allIds.has(o.identifier) && !isNeverCaptureIdentifier(o.identifier))
-            .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }));
-        const list = findOrderList(preset, 100001);
-        if (list) {
-            list.order = v1Order;
-        } else {
-            if (!Array.isArray(preset.prompt_order)) preset.prompt_order = [];
-            preset.prompt_order.push({ character_id: 100001, order: v1Order });
-        }
-    }
-
-    // 采样回放：v1 里的采样键
-    const sampling: PromptSampling = {};
-    for (const key of SAMPLING_KEYS) {
-        const value = (v1Settings as Record<string, unknown>)[key];
-        if (value !== undefined) (sampling as Record<string, unknown>)[key] = value;
-    }
-    if (Object.keys(sampling).length > 0) applySampling(preset, sampling);
-
-    // 附加快照回放：v1 里非 prompts/order/采样/连接键的其余键
-    const ext = preset.extensions;
-    const extra: Record<string, any> = {};
-    for (const [key, value] of Object.entries(v1Settings)) {
-        if (SAMPLING_KEYS.some((k) => k === key)) continue;
-        if (EXTRA_EXCLUDED_KEYS.has(key)) continue;
-        extra[key] = value;
-    }
-    if (Object.keys(extra).length > 0) {
-        Object.assign(preset, extra);
-        preset.extensions = ext;
-    }
-}

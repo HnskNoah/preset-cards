@@ -8,6 +8,7 @@ import type { ProfileEntryView } from './presetList.js';
 import {
     PROMPT_FIELD_WHITELIST,
     buildPromptSnapshot,
+    captureModel,
     captureSampling,
     filterFields,
     findOrderList,
@@ -322,9 +323,13 @@ export async function commitUpdate(
     const editor = readEditableProfile(ctx);
     if (!editor) return false;
     const { meta, profile } = editor;
+    const preset = openai_settings[ctx.idx] as Preset;
     // 副本上应用清除值变更：不直接改活 profile（失败回滚语义见 commitBufferedEditsToProfile）
     const nextProfile = structuredClone(profile);
     applyPendingClearsToProfile(nextProfile, ctx.pendingClears, ctx.name);
+    const model = captureModel(preset);
+    if (model) nextProfile.model = model;
+    else delete nextProfile.model;
     return commitBufferedEditsToProfile(nextProfile, snapshot, meta, ctx.name, ctx.idx, ctx.sessionEdits, 'full-changes');
 }
 
@@ -377,7 +382,7 @@ export async function commitCreateDelta(
     const deltaState = snapshotToDelta(snapshot.entries, parentEntries, snapshot.unusedIds);
     const changes = snapshotToChanges(snapshot.entries, parentEntries, [], snapshot.unusedIds);
     // 先构建新 profiles（含 delta），持久化成功后才赋给 meta——saveMeta 失败重试不产生重复 delta
-    const newProfiles = [...profiles, buildDerivedProfile(profile, deltaName, changes, captureSampling(preset) ?? undefined, deltaState.order)];
+    const newProfiles = [...profiles, buildDerivedProfile(profile, deltaName, changes, captureSampling(preset) ?? undefined, deltaState.order, captureModel(preset) ?? undefined)];
     recordDefaultOriginalFields(meta, ctx.name, ctx.sessionEdits);
     // saveMeta 持久化 nextMeta（含新 delta）；成功后把 profiles 同步回 meta 内存
     const nextMeta = { ...meta, profiles: newProfiles };

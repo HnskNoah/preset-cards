@@ -4,11 +4,11 @@ import { t } from '@sillytavern/scripts/i18n';
 import { download } from '@sillytavern/scripts/utils';
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
-import type { Preset, PromptBaseProfile } from './meta.js';
-import { captureSampling } from './promptToggle.js';
-import { buildDerivedProfile, collectDescendantProfileIds, isArchiveProfile } from './profileActions.js';
+import type { Preset } from './meta.js';
+import { captureModel, captureSampling } from './promptToggle.js';
+import { buildDerivedProfile, collectDescendantProfileIds } from './profileActions.js';
 import { resetProfileCore } from './profileMutators.js';
-import { buildProfileExportData, buildTreeExportData, chooseFromOptions, chooseProfileExportAction, warnV1ExcludedFromTreeExport } from './importExport.js';
+import { buildProfileExportData, buildTreeExportData, chooseFromOptions, chooseProfileExportAction } from './importExport.js';
 import { openEditModal } from './editModal.js';
 import { clearBufferedForName } from './presetBuffers.js';
 import { openProfileEditorPopup } from './profileEditor.js';
@@ -241,7 +241,6 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         if (choice !== 'export') return;
         const preset = openai_settings[idx] as Preset;
         const meta = readMeta(preset);
-        warnV1ExcludedFromTreeExport(meta);
         download(buildTreeExportData(meta), `${name}-tree.json`, 'application/json');
     });
 
@@ -266,14 +265,14 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const meta = readMeta(preset);
         const parent = getProfile(meta, profileId);
         if (!parent) return;
-        if (isArchiveProfile(parent as PromptBaseProfile) || (!isPromptBaseProfile(parent) && !isPromptDeltaProfile(parent))) {
+        if (!isPromptBaseProfile(parent) && !isPromptDeltaProfile(parent)) {
             toastr.warning(L('Cannot derive from a legacy profile'));
             return;
         }
         const deltaName = await Popup.show.input(L('Derived profile name:'), '');
         if (!deltaName) return;
         const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
-        const nextProfiles = [...profiles, buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined)];
+        const nextProfiles = [...profiles, buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined, undefined, captureModel(preset) ?? undefined)];
         // 副本模式：saveMeta 持久化含新 delta 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 delta）
         const nextMeta = { ...meta, profiles: nextProfiles };
         try {
@@ -301,10 +300,6 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const meta = readMeta(preset);
         const profile = getProfile(meta, profileId);
         if (!profile) return;
-        if (isArchiveProfile(profile as PromptBaseProfile)) {
-            toastr.warning(L('This profile type cannot be reset'));
-            return;
-        }
         if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) {
             toastr.warning(L('This profile type cannot be reset'));
             return;
@@ -346,19 +341,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         // 副本模式：删除/级联结果先在 nextMeta 上计算，saveMeta 成功后才写回活 meta 并清 activeProfile
         // （失败时内存与磁盘保持一致，不残留"已删但未落盘"的中间态）
         let nextProfiles = (meta.profiles || []).filter(p => !deleteIds.has(String(p.id)));
-        // 级联：遍历全部 archive 隐藏 base——最后一个可见子节点被删则移除 archive。
-        const remainingArchives = nextProfiles.filter((p) => isPromptBaseProfile(p) && isArchiveProfile(p as PromptBaseProfile));
-        for (const archive of remainingArchives) {
-            const stillReferenced = nextProfiles.some(p =>
-                isPromptDeltaProfile(p) && String(p.baseId) === String(archive.id));
-            if (!stillReferenced) {
-                nextProfiles = nextProfiles.filter(p => String(p.id) !== String(archive.id));
-            }
-        }
         const nextMeta = { ...meta, profiles: nextProfiles };
-        if (nextMeta.archiveBaseId && !nextProfiles.some(p => String(p.id) === nextMeta.archiveBaseId)) {
-            delete nextMeta.archiveBaseId;
-        }
         try {
             await saveMeta(name, idx, nextMeta);
         } catch (err) {
@@ -385,12 +368,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
 
         const choice = await chooseProfileExportAction();
         if (choice === 'tree') {
-            if (isPromptBaseProfile(profile) || isPromptDeltaProfile(profile)) {
-                warnV1ExcludedFromTreeExport(meta);
-                download(buildTreeExportData(meta, profile.id), `${profile.name}-tree.json`, 'application/json');
-            } else {
-                download(buildProfileExportData(profile, meta), `${profile.name}.json`, 'application/json');
-            }
+            download(buildTreeExportData(meta, profile.id), `${profile.name}-tree.json`, 'application/json');
         } else if (choice === 'profile') {
             download(buildProfileExportData(profile, meta), `${profile.name}.json`, 'application/json');
         }
@@ -421,7 +399,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const meta = readMeta(preset);
         const profile = getProfile(meta, profileId);
         if (!profile) return;
-        if (isArchiveProfile(profile as PromptBaseProfile) || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) {
+        if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) {
             toastr.warning(L('This profile type cannot be edited with switches'));
             return;
         }

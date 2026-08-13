@@ -7,10 +7,9 @@ import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { L } from './i18n.js';
 import { EXTENSION_NAME } from './constants.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
-import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
-import { applyProfileToPreset } from './promptToggle.js';
+import type { Preset, PromptBaseProfile, PromptDeltaProfile, PromptModel } from './meta.js';
+import { applyProfileToPreset, resolveProfileModel } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
-import { isArchiveProfile } from './profileActions.js';
 import { lockDefaultSnapshot } from './presetSnapshot.js';
 import { applyBufferedEdits, clearBufferedForName } from './presetBuffers.js';
 import { mergeImportedProfiles } from './importExport.js';
@@ -158,13 +157,23 @@ export function getPresetProfiles(name: string): { id: string; name: string }[] 
     if (idx === undefined) return [];
     const meta = readMeta(openai_settings[idx] as Preset);
     return (meta.profiles || [])
-        .filter((p) => (isPromptBaseProfile(p) || isPromptDeltaProfile(p)) && !(isPromptBaseProfile(p) && isArchiveProfile(p)))
+        .filter((p) => isPromptBaseProfile(p) || isPromptDeltaProfile(p))
         .map((p) => ({ id: String(p.id), name: p.name || String(p.id) }));
 }
 
 /** 列出所有含 preset-cards profile 的预设名。 */
 export function listPresetsWithProfiles(): string[] {
     return Object.keys(openai_setting_names).filter((name) => getPresetProfiles(name).length > 0);
+}
+
+/** 查询 profile 解析后的模型快照（自身未记录时沿父链回溯）。 */
+export function getProfileModel(name: string, profileId: string): PromptModel | undefined {
+    const idx = openai_setting_names[name];
+    if (idx === undefined) return undefined;
+    const meta = readMeta(openai_settings[idx] as Preset);
+    const profile = getProfile(meta, profileId);
+    if (!profile) return undefined;
+    return resolveProfileModel(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
 }
 
 /** 按预设名 + profile id 应用 profile 到预设并持久化（不依赖卡片 UI ctx）。
@@ -179,8 +188,6 @@ export async function applyProfileToPresetByName(
     const meta = readMeta(preset);
     const profile = getProfile(meta, profileId);
     if (!profile) return false;
-    // 与 UI 一致：archive（隐藏 base）不可通过此入口加载
-    if (isPromptBaseProfile(profile) && isArchiveProfile(profile)) return false;
     applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
     setActiveProfile({ presetName: name, profileId: String(profileId) });
     try {
@@ -321,7 +328,6 @@ export async function showConciseProfilesModal(ctx: CardsContext, card: JQuery<H
     const list = $('<div class="preset_card_profiles_list"></div>');
 
     meta.profiles.forEach(p => {
-        if (isArchiveProfile(p as PromptBaseProfile)) return;
         const row = $('<div class="preset_card_profile_row" style="cursor:pointer; padding:10px 14px; margin-bottom:4px;"></div>')
             .attr('data-profile-id', String(p.id));
         row.append($('<div class="preset_card_profile_name" style="font-size:14px;"></div>').text(p.name));
@@ -364,14 +370,12 @@ export async function importProfileFile(ctx: CardsContext, name: string, idx: nu
         // 首次导入：先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked）
         await lockDefaultSnapshot(preset, name, idx);
         const lockedMeta = readMeta(preset);
-        const { profiles, warnings, archiveBaseId } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
+        const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
         for (const warning of warnings) toastr.warning(warning);
         // 副本模式：saveMeta 持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
         const nextMeta = { ...lockedMeta, profiles };
-        if (archiveBaseId) nextMeta.archiveBaseId = archiveBaseId;
         await saveMeta(name, idx, nextMeta);
         lockedMeta.profiles = profiles;
-        if (archiveBaseId) lockedMeta.archiveBaseId = archiveBaseId;
         toastr.success(L('Configuration saved'));
         await refreshGrid(ctx, { applyBackgrounds: true });
         ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');

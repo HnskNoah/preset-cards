@@ -6,62 +6,13 @@ import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaChange, PromptDe
 import { isPromptBaseProfile, readMeta, saveMeta, saveMetaMerged } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
-import { buildDefaultSnapshotLock, captureExtra, captureSampling, findPromptInPreset, filterFields, promptFieldsEqual, resolveParentStates, snapshotToChanges, snapshotToDelta } from './promptToggle.js';
+import { buildDefaultSnapshotLock, captureExtra, captureModel, captureSampling, findPromptInPreset, filterFields, promptFieldsEqual, resolveParentStates, snapshotToChanges, snapshotToDelta } from './promptToggle.js';
+import { MODEL_KEYS } from './constants.js';
 import { entriesFromDefaultSnapshot } from './promptState.js';
 
-/** 迁移 v2（formatVersion 2）profile 到 v3：识别并转换该预设的全部 v2 base/delta。
- * 返回是否发生了迁移（调用方据此决定是否落盘）。
- * - v2 base：prompts[].mounted 补 true、lastActiveIndex 按数组序（v2 顺序即挂载顺序），formatVersion → 3；
- *   采样/extra 保留。
- * - v2 delta：changes 保留（mounted 继承父链，不冗余补），formatVersion → 3；采样/extra 保留。
- * v2 无独立 order 字段（顺序隐含在数组序），delta 的顺序信息 v2 本就没有，迁移不虚构。 */
-export function migrateLegacyV2Profiles(meta: PresetMeta): boolean {
-    if (!Array.isArray(meta.profiles)) return false;
-    let changed = false;
-    meta.profiles = meta.profiles.map((p) => {
-        const raw = p as Record<string, any>;
-        if (raw.formatVersion !== 2) return p;
-        if (raw.kind === 'prompt_base' && Array.isArray(raw.prompts)) {
-            changed = true;
-            const base: PromptBaseProfile = {
-                formatVersion: 3,
-                kind: 'prompt_base',
-                id: raw.id,
-                name: raw.name,
-                prompts: raw.prompts.map((entry: any, i: number) => ({
-                    identifier: entry.identifier,
-                    mounted: true,
-                    enabled: entry.enabled,
-                    ...(i > 0 || raw.prompts.length > 1 ? { lastActiveIndex: i } : {}),
-                    ...(entry.fields ? { fields: { ...entry.fields } } : {}),
-                })),
-                ...(raw.sampling ? { sampling: raw.sampling } : {}),
-                ...(raw.extra ? { extra: raw.extra } : {}),
-            };
-            return base;
-        }
-        if (raw.kind === 'prompt_delta' && Array.isArray(raw.changes)) {
-            changed = true;
-            const delta: PromptDeltaProfile = {
-                formatVersion: 3,
-                kind: 'prompt_delta',
-                id: raw.id,
-                name: raw.name,
-                baseId: raw.baseId,
-                changes: raw.changes as PromptDeltaChange[],
-                ...(raw.sampling ? { sampling: raw.sampling } : {}),
-                ...(raw.extra ? { extra: raw.extra } : {}),
-            };
-            return delta;
-        }
-        return p;
-    });
-    return changed;
-}
-
 // 首次对该预设 add base 时全量锁定默认基线：全部 prompt 采集挂载态 + 原始值字段；
-// 同时锁定出厂采样基线（defaultSampling）与出厂 extra 基线（defaultExtra）。
-// 写入 meta.defaultSnapshot + defaultSampling + defaultExtra 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
+// 同时锁定出厂采样基线（defaultSampling）、出厂 extra 基线（defaultExtra）与出厂模型基线（defaultModel）。
+// 写入 meta.defaultSnapshot + defaultSampling + defaultExtra + defaultModel 并持久化。幂等：defaultSnapshotLocked 为 true 时不覆盖（仅首次点加号锁定一次）。
 export async function lockDefaultSnapshot(preset: Preset, name: string, idx: number): Promise<void> {
     const meta = readMeta(preset);
     if (meta.defaultSnapshotLocked) return;
@@ -69,6 +20,7 @@ export async function lockDefaultSnapshot(preset: Preset, name: string, idx: num
     meta.defaultSnapshotLocked = true;
     meta.defaultSampling = captureSampling(preset) ?? undefined;
     meta.defaultExtra = captureExtra(preset as Record<string, unknown>) ?? undefined;
+    meta.defaultModel = captureModel(preset) ?? undefined;
     await saveMeta(name, idx, meta);
 }
 
@@ -142,6 +94,15 @@ export function applyDefaultExtra(preset: Preset, meta: PresetMeta): void {
     const ext = preset.extensions;
     Object.assign(preset, meta.defaultExtra);
     preset.extensions = ext;
+}
+
+// 把出厂模型基线应用回 preset（reset 到默认时还原首次 add base 前的模型）。
+export function applyDefaultModel(preset: Preset, meta: PresetMeta): void {
+    if (!meta.defaultModel) return;
+    const target = preset as Record<string, unknown>;
+    target['chat_completion_source'] = meta.defaultModel.source;
+    const modelKey = MODEL_KEYS[meta.defaultModel.source];
+    if (modelKey) target[modelKey] = meta.defaultModel.name;
 }
 
 /** defaultSnapshot 中出厂挂载的 v3 条目（reset 到默认时还原出厂挂载态+顺序）。

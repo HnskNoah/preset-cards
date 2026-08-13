@@ -5,6 +5,8 @@ export interface PresetCardsApi {
     loadProfile(presetName: string, profileId: string): Promise<boolean>;
     /** 枚举指定预设下的非 archive profile（id + name）。 */
     getProfiles(presetName: string): { id: string; name: string }[];
+    /** 查询 profile 解析后的模型快照（自身未记录时沿父链回溯）。 */
+    getProfileModel(presetName: string, profileId: string): { source: string; name: string } | undefined;
     /** 列出所有含 profile 的预设名。 */
     listPresets(): string[];
     /** 当前激活的 profile（presetName + profileId）。 */

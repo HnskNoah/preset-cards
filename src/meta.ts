@@ -9,13 +9,6 @@ export type Preset = Record<string, any> & {
     extensions?: Record<string, any>;
 };
 
-export interface PresetProfileV1 {
-    id: string;
-    name: string;
-    settings: Record<string, any>;
-    formatVersion?: 1;
-}
-
 /** prompt 值字段（全可选，向后兼容旧数据）。白名单见 PROMPT_FIELD_WHITELIST。 */
 export interface PromptFields {
     content?: string;
@@ -42,6 +35,12 @@ export interface PromptSampling {
     openai_max_context?: number;
     openai_max_tokens?: number;
     stream_openai?: boolean;
+}
+
+/** profile 绑定的模型（chat_completion_source + 对应模型键值）。加载 profile 时一并应用。 */
+export interface PromptModel {
+    source: string;
+    name: string;
 }
 
 /** v3 prompt 条目：挂载态（mounted）+ 开关 + 值字段差异。 */
@@ -72,13 +71,13 @@ export interface PromptBaseProfile {
     prompts: PromptProfileEntry[];
     /** 保存时未挂载（在 prompts 定义中但不在目标 prompt_order）的 identifier。只记 id，不存无意义字段。 */
     unusedIds?: string[];
-    /** 导入存档 base 标记：只读、隐藏、作为 reset 相对基线。最后一个子节点删除时级联删除。 */
-    archive?: true;
     /** 采样参数快照（可选）：仅存「相对出厂基线有差异」的键；加载时存在键覆盖，缺失键不动。 */
     sampling?: PromptSampling;
     /** 附加快照（可选）：仅存「相对出厂基线有差异」的预设键（如 impersonation_prompt、bias_preset_selected 等）。
      * 加载时 Object.assign 还原到预设（保留 extensions）。缺失键不动。 */
     extra?: Record<string, any>;
+    /** 创建/更新时记录的模型快照（仅记录展示用，加载 profile 不应用）。 */
+    model?: PromptModel;
 }
 
 /** 派生 profile 的一条差异：挂载/开关/顺序/值字段差异（与 PromptStateChange 同构的兼容别名）。
@@ -106,6 +105,8 @@ export interface PromptDeltaProfile {
     sampling?: PromptSampling;
     /** 附加快照（可选）：同 PromptBaseProfile.extra，仅存差异键。 */
     extra?: Record<string, any>;
+    /** 创建/更新时记录的模型快照（仅记录展示用，加载 profile 不应用）。 */
+    model?: PromptModel;
 }
 
 /** defaultSnapshot 条目：出厂基线（首次 add base 时锁定）。挂载态 + 开关 + 原始值字段。 */
@@ -117,7 +118,7 @@ export interface PromptDefaultSnapshotEntry {
     originalFields?: PromptFields;
 }
 
-export type PresetProfile = PresetProfileV1 | PromptBaseProfile | PromptDeltaProfile;
+export type PresetProfile = PromptBaseProfile | PromptDeltaProfile;
 
 export function isPromptBaseProfile(profile: PresetProfile): profile is PromptBaseProfile {
     return isV3BaseProfileData(profile);
@@ -140,9 +141,9 @@ export interface PresetMeta {
     defaultSampling?: PromptSampling;
     /** 出厂 extra 基线：首次 add base 时与 defaultSnapshot 一起锁定；reset 时把预设的 extra 键还原到出厂值。 */
     defaultExtra?: Record<string, any>;
-    /** 导入存档 base 的 id（只读隐藏 base）。该 base 的最后一个子节点删除时级联删除。 */
-    archiveBaseId?: string;
-}
+    /** 出厂模型基线：首次 add base 时锁定；reset 时把预设模型还原到出厂值。 */
+    defaultModel?: PromptModel;
+    }
 
 /** 按 id 查 profile（id 归一化为字符串，兼容数字/字符串来源）。 */
 export function getProfile(meta: PresetMeta, profileId: unknown): PresetProfile | undefined {
@@ -172,7 +173,9 @@ export function readMeta(preset: Preset | undefined): PresetMeta {
         defaultExtra: ext?.defaultExtra && typeof ext.defaultExtra === 'object' && !Array.isArray(ext.defaultExtra)
             ? ext.defaultExtra
             : undefined,
-        archiveBaseId: typeof ext?.archiveBaseId === 'string' ? ext.archiveBaseId : undefined,
+        defaultModel: ext?.defaultModel && typeof ext.defaultModel === 'object' && !Array.isArray(ext.defaultModel)
+            ? ext.defaultModel
+            : undefined,
     };
 }
 
@@ -247,7 +250,7 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
         defaultSnapshotLocked: meta.defaultSnapshotLocked === true,
         defaultSampling: meta.defaultSampling,
         defaultExtra: meta.defaultExtra,
-        archiveBaseId: meta.archiveBaseId,
+        defaultModel: meta.defaultModel,
     };
 
     // Also update oai_settings if this is the current preset

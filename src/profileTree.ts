@@ -3,7 +3,7 @@
 // 对齐 importExport 的 childrenByParent + DFS 模式，额外用 visited 防环（损坏/导入成环不死循环）。
 
 import { isPromptBaseProfile, isPromptDeltaProfile, type PresetProfile } from './meta.js';
-import { isArchiveProfile } from './profileActions.js';
+
 
 export interface ProfileTreeNode {
     profile: PresetProfile;
@@ -22,14 +22,7 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
     const childrenByParent = new Map<string, ProfileTreeNode[]>();
     const nodeById = new Map<string, ProfileTreeNode>();
 
-    // archive 隐藏 base 不建立节点（不进树）；其 delta 子节点 baseId 指向它时按「无父」处理（提升为根）
-    const archiveIds = new Set<string>();
     for (const p of profiles) {
-        if (isPromptBaseProfile(p) && isArchiveProfile(p)) archiveIds.add(String(p.id));
-    }
-
-    for (const p of profiles) {
-        if (isPromptBaseProfile(p) && archiveIds.has(String(p.id))) continue;
         nodeById.set(String(p.id), { profile: p, children: [] });
     }
 
@@ -49,7 +42,6 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
     // 按原数组顺序收集（同层保持原数组相对顺序）；成环簇（互相引用但无根祖先）随后收尾。
     const roots: ProfileTreeNode[] = [];
     for (const p of profiles) {
-        if (isPromptBaseProfile(p) && archiveIds.has(String(p.id))) continue;
         if (!nodeById.has(String(p.id))) continue;
         if (isPromptBaseProfile(p) || !isPromptDeltaProfile(p)) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
@@ -60,8 +52,6 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);
         }
     }
-    // 未被任何根可达的 delta（成环：互相引用但无根祖先）作为根节点收尾，
-    // 保证每个 profile 都展示且不丢（对齐 importExport：先 root 树、再收尾未访问节点）。
     const reached = new Set<string>();
     const mark = (node: ProfileTreeNode): void => {
         if (reached.has(String(node.profile.id))) return;
@@ -70,7 +60,6 @@ export function buildProfileForest(profiles: PresetProfile[]): ProfileTreeNode[]
     };
     for (const root of roots) mark(root);
     for (const p of profiles) {
-        if (archiveIds.has(String(p.id))) continue;
         if (!nodeById.has(String(p.id))) continue;
         if (!reached.has(String(p.id))) {
             roots.push(nodeById.get(String(p.id)) as ProfileTreeNode);

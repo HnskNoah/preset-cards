@@ -1,8 +1,8 @@
 import { L } from './i18n.js';
-import { isPromptBaseProfile, isPromptDeltaProfile, newProfileId, saveMeta } from './meta.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, newProfileId, saveMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
-import { applyBaseProfile, buildBaseSnapshot, captureExtra, captureSampling, resolveParentStates } from './promptToggle.js';
-import { applyDefaultExtra, applyDefaultOriginalFields, applyDefaultSampling, defaultEnabledEntries } from './presetSnapshot.js';
+import { applyBaseProfile, applyModel, buildBaseSnapshot, captureExtra, captureModel, captureSampling, resolveParentStates, resolveProfileModel } from './promptToggle.js';
+import { applyDefaultExtra, applyDefaultModel, applyDefaultOriginalFields, applyDefaultSampling, defaultEnabledEntries } from './presetSnapshot.js';
 
 /** 构造 add base 的 fv3 主 profile（mounted 完整 + unusedIds + 采样/extra 差异）。 */
 export function buildNewBaseProfile(
@@ -13,6 +13,7 @@ export function buildNewBaseProfile(
     const snapshot = buildBaseSnapshot(preset, baseline);
     const sampling = captureSampling(preset);
     const extra = captureExtra(preset as Record<string, unknown>);
+    const model = captureModel(preset);
     return {
         formatVersion: 3,
         kind: 'prompt_base',
@@ -22,6 +23,7 @@ export function buildNewBaseProfile(
         ...(snapshot.unusedIds.length > 0 ? { unusedIds: snapshot.unusedIds } : {}),
         ...(sampling ? { sampling } : {}),
         ...(extra ? { extra } : {}),
+        ...(model ? { model } : {}),
     };
 }
 
@@ -54,12 +56,22 @@ export async function resetProfileCore(
 ): Promise<'reset' | 'no-default' | null> {
     if (isPromptDeltaProfile(profile)) {
         const parentStates = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
+        const parent = getProfile(meta, profile.baseId);
+        const parentModel = parent ? resolveProfileModel(parent, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]) : undefined;
+        const defaultModel = meta.defaultModel;
+        const model = parentModel ?? defaultModel;
         if (parentStates.length > 0) {
             applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'parent', 'Parent', parentStates));
             profile.changes = [];
             delete profile.sampling;
             delete profile.order;
             delete profile.extra;
+            if (model) {
+                profile.model = model;
+                applyModel(preset, model);
+            } else {
+                delete profile.model;
+            }
             applyDefaultSampling(preset, meta);
             applyDefaultExtra(preset, meta);
         } else {
@@ -70,12 +82,15 @@ export async function resetProfileCore(
             applyDefaultOriginalFields(preset, meta);
             applyDefaultSampling(preset, meta);
             applyDefaultExtra(preset, meta);
+            applyDefaultModel(preset, meta);
             const defaultPrompts = defaultEnabledEntries(meta);
             applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'default', 'Default', defaultPrompts));
             profile.changes = [];
             delete profile.sampling;
             delete profile.order;
             delete profile.extra;
+            if (defaultModel) profile.model = defaultModel;
+            else delete profile.model;
         }
         await saveMeta(name, idx, meta);
         toastr.success(L('Configuration reset'));
@@ -89,6 +104,7 @@ export async function resetProfileCore(
         applyDefaultOriginalFields(preset, meta);
         applyDefaultSampling(preset, meta);
         applyDefaultExtra(preset, meta);
+        applyDefaultModel(preset, meta);
         const defaultPrompts = defaultEnabledEntries(meta);
         profile.prompts = structuredClone(defaultPrompts);
         const defaultUnused = defaultUnusedIds(meta);
@@ -96,6 +112,8 @@ export async function resetProfileCore(
         else delete profile.unusedIds;
         delete profile.sampling;
         delete profile.extra;
+        if (meta.defaultModel) profile.model = meta.defaultModel;
+        else delete profile.model;
         applyBaseProfile(preset, buildResetBaseProfile(profile.id, profile.name, defaultPrompts));
         await saveMeta(name, idx, meta);
         toastr.success(L('Configuration reset'));

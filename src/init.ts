@@ -3,7 +3,7 @@ import { SlashCommand } from '@sillytavern/scripts/slash-commands/SlashCommand';
 import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCommandParser';
 import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
-import { applyProfileToPresetByName, getPresetProfiles, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
+import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
 
 export function refresh(): void {
@@ -15,6 +15,7 @@ export function exposePresetCardsApi(): PresetCardsApi {
     return {
         loadProfile: applyProfileToPresetByName,
         getProfiles: getPresetProfiles,
+        getProfileModel,
         listPresets: listPresetsWithProfiles,
         getActiveProfile: () => getActiveProfile(),
         onProfileChanged,

@@ -1,7 +1,7 @@
 import { oai_settings, settingsToUpdate } from '@sillytavern/scripts/openai';
 import { PROMPT_FIELD_KEYS } from './profileSchema.js';
-import type { Preset, PromptFields, PromptSampling } from './meta.js';
-import { SAMPLING_KEYS } from './constants.js';
+import type { Preset, PromptFields, PromptModel, PromptSampling } from './meta.js';
+import { MODEL_KEYS, SAMPLING_KEYS } from './constants.js';
 
 /** 允许写入预设的值字段白名单；capture/apply 只处理这些键（R10 白名单兜底）。
  * injection_position / injection_depth 为用户可编辑字段，随 profile 捕获/应用
@@ -26,6 +26,25 @@ export function captureSampling(preset: Preset): PromptSampling | null {
         }
     }
     return Object.keys(sampling).length > 0 ? sampling : null;
+}
+
+/** 采集预设当前绑定的模型快照（source + MODEL_KEYS 对应模型名）。仅记录展示用，加载 profile 时应用。 */
+export function captureModel(preset: Preset): PromptModel | null {
+    const source = String(preset['chat_completion_source'] ?? '');
+    if (!source) return null;
+    const modelKey = MODEL_KEYS[source];
+    if (!modelKey) return null;
+    const name = String(preset[modelKey] ?? '');
+    return name ? { source, name } : null;
+}
+
+/** 应用模型快照到预设：写 chat_completion_source 与对应模型键（仅当快照存在）。 */
+export function applyModel(preset: Preset, model: PromptModel): void {
+    if (!model || !model.source || !model.name) return;
+    const target = preset as Record<string, unknown>;
+    target['chat_completion_source'] = model.source;
+    const modelKey = MODEL_KEYS[model.source];
+    if (modelKey) target[modelKey] = model.name;
 }
 
 /** 应用采样参数快照到预设：只写 sampling 中存在的键，缺失键保持预设当前值（不动）。 */

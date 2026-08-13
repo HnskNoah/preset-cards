@@ -95,7 +95,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     preset['stream_openai'] = streaming;
 
     try {
-        await saveMeta(presetName, presetIndex, { description: newDesc, models: newModels, bgImage: newBgImage, profiles: meta.profiles, defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked, defaultSampling: meta.defaultSampling, defaultExtra: meta.defaultExtra, archiveBaseId: meta.archiveBaseId });
+        await saveMeta(presetName, presetIndex, { description: newDesc, models: newModels, bgImage: newBgImage, profiles: meta.profiles, defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked, defaultSampling: meta.defaultSampling, defaultExtra: meta.defaultExtra, defaultModel: meta.defaultModel });
     } catch (err) {
         console.error('Edit preset save failed', err);
         toastr.error(t`Failed to save preset metadata`);

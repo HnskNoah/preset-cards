@@ -5,7 +5,7 @@ import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile } from '
 import { bufferKey, bufferPrefix, type PromptEditBuffer } from './presetBuffers.js';
 import { findOrderList, resolvePromptOrderTarget } from './promptToggle.js';
 import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
-import { isArchiveProfile } from './profileActions.js';
+
 
 /** 弹窗依赖：缓冲 Map 与刷新回调由 presetCards 闭包注入。 */
 export interface ProfileEditorDeps {
@@ -129,7 +129,7 @@ export function resolveEditorSnapshot(ctx: EditorContext): EditorSnapshot | unde
         profile,
         entries,
         orderCtx,
-        readOnly: isArchiveProfile(profile as PromptBaseProfile),
+        readOnly: false,
     };
 }
 

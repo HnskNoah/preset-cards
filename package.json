@@ -6,13 +6,16 @@
     "scripts": {
         "build": "vite build",
         "watch": "vite build --watch --mode development",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
     },
     "devDependencies": {
         "@types/jquery": "^4.0.1",
         "@types/node": "^24.0.0",
         "@types/toastr": "^2.1.43",
+        "tsx": "^4.23.12",
         "typescript": "^7.0.2",
-        "vite": "^7.3.3"
+        "vite": "^7.3.3",
+        "vitest": "^4.1.10"
     }
 }
