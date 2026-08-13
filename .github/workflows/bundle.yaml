@@ -26,24 +26,13 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # 检测源代码变更（仅影响 JS 构建的源文件）
-      - id: code_changed
-        shell: bash
-        run: |-
-          changed=$(git diff --name-only "${{ github.event.before }}..HEAD" -- src/ vite.config.ts tsconfig.json package.json package-lock.json manifest.json)
-          if [ -n "$changed" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
+      # 每次 debug push 都构建（dist 随提交落盘，dev-ts 可直接安装；内容未变时 add 自然为空）
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-        if: steps.code_changed.outputs.changed == 'true'
 
       # 版本处理：patch 递增并写回 manifest/package.json
       - id: bump_version
