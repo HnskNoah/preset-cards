@@ -3,7 +3,7 @@ import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { POPUP_TYPE, POPUP_RESULT, callGenericPopup } from '@sillytavern/scripts/popup';
 import { t } from '@sillytavern/scripts/i18n';
 import { AVAILABLE_MODELS, EXTENSION_NAME, LOGO_BASE } from './constants.js';
-import { readMeta, saveMeta, type Preset, type PromptFields } from './meta.js';
+import { readMeta, persistMetaTransaction, type Preset, type PromptFields } from './meta.js';
 import { findPromptInPreset } from './promptToggle.js';
 import { L } from './i18n.js';
 
@@ -94,13 +94,13 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     if (maxTokens !== undefined) preset['openai_max_tokens'] = maxTokens;
     preset['stream_openai'] = streaming;
 
-    try {
-        await saveMeta(presetName, presetIndex, { description: newDesc, models: newModels, bgImage: newBgImage, profiles: meta.profiles, defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked, defaultSampling: meta.defaultSampling, defaultExtra: meta.defaultExtra, defaultModel: meta.defaultModel });
-    } catch (err) {
-        console.error('Edit preset save failed', err);
-        toastr.error(t`Failed to save preset metadata`);
-        return;
-    }
+    const ok = await persistMetaTransaction(meta, (m) => ({
+        ...m,
+        description: newDesc,
+        models: newModels,
+        bgImage: newBgImage,
+    }), presetName, presetIndex);
+    if (!ok) return;
     toastr.success(t`Preset updated`);
     if (onSaved) onSaved();
 }

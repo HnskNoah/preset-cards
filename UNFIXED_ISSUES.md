@@ -4,6 +4,16 @@
 > 失败：`gh issue comment` / `gh api PATCH` 均 403（token 无 comment/edit 权限）
 > 需用户手动追加或升级 token 后重试。
 
+## 架构收敛轮（单向数据流 / 持久化统一 / sparse diff）闭合项
+
+以下历史略过项随本轮架构改动自然闭合：
+
+- C/N3/J/N [拖拽与 restore/unmount 的内存/磁盘分歧族]：编辑期不再直改 ST 的 `prompt_order`（会话 `sessionOrder` 为唯一真值源），`restoreOrderIfUncommitted` / `saveMetaWithCleanOrder` 整组防御代码删除 → 全部闭合。
+- V. [挂载确认取消残留空 order 列表]：不再创建目标 order 列表 → 闭合。
+- M/Q. [restoreOrderIfUncommitted 相关]：函数已删除 → 闭合。
+- R7 N1 / R9 N2 [commit 失败运行时污染]：副作用全部后置于持久化成功之后 + 编辑期零写入，剩余面（applyBufferedEdits 成功路径后无失败点）已不可达 → 闭合。
+- 持久化双机制（全局串行链 + 300ms 合并窗口）统一为 per-preset 合并窗口 + 串行尾链，消除两套实现的交互面。
+
 ## R7 轮归档（D7 略过项）
 
 ### N1 [MEDIUM/REAL] commit 失败后运行时 preset 已改写，discard 只还原 order 不还原 prompts

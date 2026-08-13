@@ -1,10 +1,10 @@
 import { Popup } from '@sillytavern/scripts/popup';
-import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
+import { openai_settings } from '@sillytavern/scripts/openai';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { bufferKey, bufferPrefix, type PromptEditBuffer } from './presetBuffers.js';
 import { findOrderList, resolvePromptOrderTarget } from './promptToggle.js';
-import { buildProfileEntries, buildProfileOrderCtx, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
+import { buildOrderCtxFromOrder, buildProfileEntries, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
 
 
 /** 弹窗依赖：缓冲 Map 与刷新回调由 presetCards 闭包注入。 */
@@ -56,11 +56,13 @@ export interface EditorContext {
     /** 本会话卸载条目在 order 中的原位置（卸载时记录，undo 撤销卸载时插回原位；reorder 可能已改动位置）。 */
     unmountPositions: Map<string, number>;
     initialOrderIndex: Map<string, number>;
-    /** 弹窗打开时目标 prompt_order 完整快照：不 Commit 关弹窗时还原。 */
+    /** 弹窗打开时目标 prompt_order 完整快照：reorder 差异基线 + 挂载净零判定 + 插回位置依据。 */
     initialOrder: { identifier: string; enabled: boolean }[];
+    /** 会话内工作顺序（唯一真值源）：挂载/卸载/拖拽只改这里，commit 成功后才投影回预设的 prompt_order。 */
+    sessionOrder: { identifier: string; enabled: boolean }[];
 }
 
-/** 创建弹窗上下文：完成全部状态初始化（含打开时 prompt_order 快照）。 */
+/** 创建弹窗上下文：完成全部状态初始化（含打开时 prompt_order 快照与 sessionOrder 种子）。 */
 export function createEditorContext(
     deps: ProfileEditorDeps,
     name: string,
@@ -68,13 +70,9 @@ export function createEditorContext(
     profileId: string,
 ): EditorContext {
     const preset = openai_settings[idx] as Preset;
-    const initialOrderIndex = buildProfileOrderCtx(
-        preset,
-        oai_settings.preset_settings_openai === name,
-    ).orderIndex;
-    // 弹窗打开时目标 prompt_order 完整快照（还原用）
+    // 弹窗打开时目标 prompt_order 完整快照（还原/基线用）
     const list = findOrderList(preset, resolvePromptOrderTarget());
-    const initialOrder = Array.isArray(list?.order)
+    const initialOrder: { identifier: string; enabled: boolean }[] = Array.isArray(list?.order)
         ? list.order
             .filter((o: any) => o && typeof o.identifier === 'string')
             .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
@@ -95,30 +93,29 @@ export function createEditorContext(
         pendingClears: new Map<string, true>(),
         pendingMounts: new Map<string, boolean>(),
         unmountPositions: new Map<string, number>(),
-        initialOrderIndex,
+        initialOrderIndex: buildOrderCtxFromOrder(initialOrder).orderIndex,
         initialOrder,
+        sessionOrder: initialOrder.map((o) => ({ ...o })),
     };
 }
 
 /** 读取当前预设/元数据/profile 解析后的展示条目（每次调用取最新内存态）。
+ * 顺序以会话 sessionOrder 为准（单向数据流：编辑期不改 ST 的 prompt_order）；
  * mounted 态叠加会话挂载缓冲（pendingMounts）：激活/卸载即时反映在展示分组。 */
 export function resolveEditorSnapshot(ctx: EditorContext): EditorSnapshot | undefined {
     const preset = openai_settings[ctx.idx] as Preset;
     const meta = readMeta(preset);
     const profile = getProfile(meta, ctx.profileId);
     if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return undefined;
-    const isActive = oai_settings.preset_settings_openai === ctx.name;
-    const orderCtx = buildProfileOrderCtx(preset, isActive);
+    const orderCtx = buildOrderCtxFromOrder(ctx.sessionOrder);
     const entries = buildProfileEntries(profile, meta, preset, orderCtx).map((e) => {
         const mountTarget = ctx.pendingMounts.get(bufferKey(ctx.name, e.identifier));
         if (mountTarget !== undefined) {
             e.mounted = mountTarget;
-            // 挂载后 enabled 取定义层（与 insertAtInitialPosition 落盘一致），否则刚挂载条目仍显示 Off
+            // 挂载后 enabled 取 sessionOrder（与提交快照一致），否则刚挂载条目仍显示 Off
             if (mountTarget) {
-                const prompt = Array.isArray(preset.prompts)
-                    ? preset.prompts.find((p: any) => p?.identifier === e.identifier)
-                    : undefined;
-                if (prompt) e.enabled = prompt.enabled === true;
+                const so = ctx.sessionOrder.find((o) => o.identifier === e.identifier);
+                if (so) e.enabled = so.enabled;
             }
         }
         return e;

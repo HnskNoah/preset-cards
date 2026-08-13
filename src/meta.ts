@@ -2,6 +2,7 @@ import { getRequestHeaders } from '@sillytavern/script';
 import { t } from '@sillytavern/scripts/i18n';
 import { openai_settings, oai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_KEY } from './constants.js';
+import { L } from './i18n.js';
 import { isV3BaseProfileData, isV3DeltaProfileData } from './profileSchema.js';
 
 /** 预设对象的最小结构;其余字段是 ST 的任意设置,保持宽松。 */
@@ -71,12 +72,12 @@ export interface PromptBaseProfile {
     prompts: PromptProfileEntry[];
     /** 保存时未挂载（在 prompts 定义中但不在目标 prompt_order）的 identifier。只记 id，不存无意义字段。 */
     unusedIds?: string[];
-    /** 采样参数快照（可选）：仅存「相对出厂基线有差异」的键；加载时存在键覆盖，缺失键不动。 */
+    /** 采样参数差异（可选）：仅存「相对出厂基线有差异」的键；加载时叠加到出厂基线（defaultSampling）。 */
     sampling?: PromptSampling;
-    /** 附加快照（可选）：仅存「相对出厂基线有差异」的预设键（如 impersonation_prompt、bias_preset_selected 等）。
-     * 加载时 Object.assign 还原到预设（保留 extensions）。缺失键不动。 */
+    /** 附加快照差异（可选）：仅存「相对出厂基线有差异」的预设键（如 impersonation_prompt、bias_preset_selected 等）。
+     * 加载时叠加到出厂基线（defaultExtra）并 Object.assign 还原到预设（保留 extensions）。 */
     extra?: Record<string, any>;
-    /** 创建/更新时记录的模型快照（仅记录展示用，加载 profile 不应用）。 */
+    /** 创建/更新时记录的模型快照；加载 profile 时沿父链解析并应用（链上无记录时回退出厂基线 defaultModel）。 */
     model?: PromptModel;
 }
 
@@ -101,11 +102,11 @@ export interface PromptDeltaProfile {
     changes: PromptStateChange[];
     /** 完整的 mounted identifier 顺序；缺省表示继承父级顺序。 */
     order?: string[];
-    /** 采样参数快照（可选）：仅存差异键；加载时存在键覆盖，缺失键不动。 */
+    /** 采样参数差异（可选）：仅存相对父链解析态有差异的键；加载时沿父链从出厂基线依次叠加。 */
     sampling?: PromptSampling;
-    /** 附加快照（可选）：同 PromptBaseProfile.extra，仅存差异键。 */
+    /** 附加快照差异（可选）：仅存相对父链解析态有差异的键；加载时沿父链从出厂基线依次叠加。 */
     extra?: Record<string, any>;
-    /** 创建/更新时记录的模型快照（仅记录展示用，加载 profile 不应用）。 */
+    /** 创建/更新时记录的模型快照；加载 profile 时沿父链解析并应用（链上无记录时回退出厂基线 defaultModel）。 */
     model?: PromptModel;
 }
 
@@ -143,11 +144,11 @@ export interface PresetMeta {
     defaultExtra?: Record<string, any>;
     /** 出厂模型基线：首次 add base 时锁定；reset 时把预设模型还原到出厂值。 */
     defaultModel?: PromptModel;
-    }
+}
 
 /** 按 id 查 profile（id 归一化为字符串，兼容数字/字符串来源）。 */
 export function getProfile(meta: PresetMeta, profileId: unknown): PresetProfile | undefined {
-    return meta.profiles.find((p) => p.id === String(profileId));
+    return meta.profiles.find((p) => String(p.id) === String(profileId));
 }
 
 /** 生成新的 profile id（时间戳 + 随机后缀）。 */
@@ -179,42 +180,31 @@ export function readMeta(preset: Preset | undefined): PresetMeta {
     };
 }
 
-/** 模块级保存串行链：同一时刻仅一个 saveMeta 在飞，避免并发 POST 全量预设造成 last-write-wins 丢更新。 */
-let saveChain: Promise<void> = Promise.resolve();
-
-/**
- * Persist metadata into the preset's extensions field and save to disk.
- * 串行执行：每次保存排队在前一次之后，网络失败时抛错（调用方决定回滚/提示）。
- */
-export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
-    // 失败也继续链（reject 传给调用方，但链不阻塞后续保存）
-    saveChain = saveChain.then(
-        () => doSaveMeta(presetName, presetIndex, meta),
-        () => doSaveMeta(presetName, presetIndex, meta),
-    );
-    return saveChain;
-}
-
-/** 合并保存窗口（ms）：同一预设的合并保存延迟到窗口结束执行一次全量保存，避免高频操作逐次全量 POST。 */
+/** 合并保存窗口（ms）：同一预设的多次保存合并为一次全量保存，避免高频操作逐次全量 POST。 */
 const MERGE_WINDOW_MS = 300;
 
 interface MergePending {
     presetIndex: number;
     meta: PresetMeta;
     timer: ReturnType<typeof setTimeout>;
-    resolve: () => void;
-    reject: (e: unknown) => void;
     promise: Promise<void>;
 }
 
+/** per-preset 合并窗口内的待保存项（窗口内末次 meta 胜出）。 */
 const mergePending = new Map<string, MergePending>();
 
-/** 合并保存：同一预设名在窗口内的多次保存合并为一次（保留最新 meta），窗口结束才真正落盘。
- * 失败语义与 saveMeta 一致（reject 给调用方）；窗口内后续调用复用同一个 promise。 */
-export function saveMetaMerged(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+/** per-preset 串行尾链：同一预设的落盘不并发（避免 last-write-wins 竞态）。 */
+const tailByPreset = new Map<string, Promise<void>>();
+
+/**
+ * Persist metadata into the preset's extensions field and save to disk.
+ * 统一机制：per-preset 合并窗口（窗口内末次 meta 胜出）+ per-preset 串行尾链。
+ * 网络失败时 reject 给调用方（调用方决定回滚/提示），不阻塞后续保存。
+ */
+export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
     const existing = mergePending.get(presetName);
     if (existing) {
-        existing.meta = meta; // 保留最新 meta，延后到原 timer 触发
+        existing.meta = meta;
         return existing.promise;
     }
     let resolveFn!: () => void;
@@ -225,14 +215,40 @@ export function saveMetaMerged(presetName: string, presetIndex: number, meta: Pr
         meta,
         timer: setTimeout(() => {
             mergePending.delete(presetName);
-            saveMeta(presetName, pending.presetIndex, pending.meta).then(resolveFn, rejectFn);
+            const tail = tailByPreset.get(presetName) ?? Promise.resolve();
+            const run = tail.then(() => doSaveMeta(presetName, pending.presetIndex, pending.meta));
+            tailByPreset.set(presetName, run.then(() => undefined, () => undefined));
+            run.then(resolveFn, rejectFn);
         }, MERGE_WINDOW_MS),
-        resolve: resolveFn,
-        reject: rejectFn,
         promise,
     };
     mergePending.set(presetName, pending);
     return promise;
+}
+
+/** 历史别名：与 saveMeta 语义一致（合并窗口 + 串行尾链）。 */
+export function saveMetaMerged(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+    return saveMeta(presetName, presetIndex, meta);
+}
+
+/** 统一「副本 → 变换 → 持久化 → 写回活 meta」事务：失败时不污染内存与磁盘，返回是否成功。
+ * transform 不得修改传入的 meta（副本模式）；成功后 Object.assign 写回活 meta（保持对象身份）。 */
+export async function persistMetaTransaction(
+    meta: PresetMeta,
+    transform: (m: PresetMeta) => PresetMeta,
+    name: string,
+    idx: number,
+): Promise<boolean> {
+    const nextMeta = transform(meta);
+    try {
+        await saveMeta(name, idx, nextMeta);
+    } catch (err) {
+        console.error('Persist preset metadata failed', err);
+        toastr.error(L('Failed to save preset metadata'));
+        return false;
+    }
+    Object.assign(meta, nextMeta);
+    return true;
 }
 
 async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {

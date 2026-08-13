@@ -63,7 +63,8 @@ describe('resetProfileCore (delta)', () => {
         const result = await resetProfileCore(preset, meta, child, 'Test', 0);
         expect(result).toBe('reset');
         expect(preset.temperature).toBe(0.5);
-        expect(child.sampling).toEqual({ temperature: 0.5 });
+        // 自身差异清空：继承父链解析态（加载时链式解析还原）
+        expect(child.sampling).toBeUndefined();
     });
 
     it('resets extra to the parent chain value', async () => {
@@ -86,7 +87,7 @@ describe('resetProfileCore (delta)', () => {
         };
         await resetProfileCore(preset, meta, child, 'Test', 0);
         expect(preset.impersonation_prompt).toBe('parent');
-        expect(child.extra).toEqual({ impersonation_prompt: 'parent' });
+        expect(child.extra).toBeUndefined();
     });
 
     it('falls back to factory default when parent has no sampling', async () => {

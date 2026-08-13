@@ -62,8 +62,18 @@ export function buildDerivedProfile(
     sampling?: PromptSampling,
     order?: string[],
     model?: PromptModel,
+    extra?: Record<string, any>,
 ): PromptDeltaProfile {
-    return makeDeltaProfile({ id: newProfileId(), name, baseId: parent.id, changes, ...(sampling ? { sampling } : {}), ...(order ? { order } : {}), ...(model ? { model } : {}) });
+    return makeDeltaProfile({
+        id: newProfileId(),
+        name,
+        baseId: parent.id,
+        changes,
+        ...(sampling ? { sampling } : {}),
+        ...(order ? { order } : {}),
+        ...(model ? { model } : {}),
+        ...(extra ? { extra } : {}),
+    });
 }
 
 // 判断 profile 是否为导入存档 base（只读隐藏）。v1/v2 迁移已移除，始终返回 false 保留接口兼容。

@@ -6,7 +6,7 @@ import { download } from '@sillytavern/scripts/utils';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { L } from './i18n.js';
 import { EXTENSION_NAME } from './constants.js';
-import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta, saveMeta } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile, PromptModel } from './meta.js';
 import { applyProfileToPreset, resolveProfileModel } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
@@ -188,7 +188,12 @@ export async function applyProfileToPresetByName(
     const meta = readMeta(preset);
     const profile = getProfile(meta, profileId);
     if (!profile) return false;
-    applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], { showMissingToast: true });
+    applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], {
+        showMissingToast: true,
+        defaultSampling: meta.defaultSampling,
+        defaultExtra: meta.defaultExtra,
+        defaultModel: meta.defaultModel,
+    });
     setActiveProfile({ presetName: name, profileId: String(profileId) });
     try {
         await saveMeta(name, idx, meta);
@@ -266,7 +271,6 @@ export async function addBaseProfile(
         await lockDefaultSnapshot(preset, name, idx);
 
         const meta = readMeta(preset);
-        const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
 
         // 新 base 快照须包含本会话缓冲的开关/值编辑：先统一应用缓冲再采集快照
         const missing = applyBufferedEdits(preset, name, ctx.sessionEdits, ctx.pendingToggles);
@@ -274,11 +278,15 @@ export async function addBaseProfile(
             toastr.warning(`${L('Missing prompts skipped')}: ${missing.join(', ')}`);
         }
 
-        // 副本模式：saveMeta 持久化含新 base 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 base）
-        const nextProfiles = [...profiles, buildNewBaseProfile(preset, meta.defaultSnapshot, profileName)];
-        const nextMeta = { ...meta, profiles: nextProfiles };
-        await saveMeta(name, idx, nextMeta);
-        meta.profiles = nextProfiles;
+        // 副本模式事务：持久化含新 base 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 base）
+        const ok = await persistMetaTransaction(meta, (m) => ({
+            ...m,
+            profiles: [
+                ...(Array.isArray(m.profiles) ? m.profiles : []),
+                buildNewBaseProfile(preset, m.defaultSnapshot, profileName, m.defaultSampling, m.defaultExtra),
+            ],
+        }), name, idx);
+        if (!ok) return;
     } catch (err) {
         console.error('Add base failed', err);
         toastr.error(L('Failed to save preset metadata'));
@@ -370,10 +378,9 @@ export async function importProfileFile(ctx: CardsContext, name: string, idx: nu
         const lockedMeta = readMeta(preset);
         const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
         for (const warning of warnings) toastr.warning(warning);
-        // 副本模式：saveMeta 持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
-        const nextMeta = { ...lockedMeta, profiles };
-        await saveMeta(name, idx, nextMeta);
-        lockedMeta.profiles = profiles;
+        // 副本模式事务：持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
+        const ok = await persistMetaTransaction(lockedMeta, (m) => ({ ...m, profiles }), name, idx);
+        if (!ok) return;
         toastr.success(L('Configuration saved'));
         await refreshGrid(ctx, { applyBackgrounds: true });
         ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');

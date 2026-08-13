@@ -8,7 +8,7 @@
 - **搜索 / 多选批量删除**：实时按名称或描述过滤；多选模式（Multi-Select）批量删除预设。
 - **主 profile（Base，formatVersion 3）**：保存当前预设全部 prompt 的完整挂载状态快照（`mounted` / `enabled` / `lastActiveIndex` / `fields`），值字段按「与出厂基线（`defaultSnapshot.originalFields`）的差异」存储；首次新建 Base 时幂等锁定全量出厂基线（含采样与 extra 基线）。
 - **派生 profile（Delta，formatVersion 3）**：只保存相对上级的差异（`changes`），支持嵌套派生（Delta 可再派 Delta），加载时递归解析父链叠加应用，带防环保护；`order` 字段记录完整挂载顺序。
-- **Profile 编辑器弹窗**：点击卡片上的 profile 名称加载后自动打开（pcmanager 式左右栏）。左栏为 prompt 列表（1-based 序号、角色徽章、开关、清除值变更、拖拽把手），右栏默认「暂存更改（Staged）」diff，点条目进入单条内联编辑；全部改动先写会话缓冲，点顶部 **Commit** 统一落盘。
+- **Profile 编辑器弹窗**：点击卡片上的 profile 名称加载后自动打开（pcmanager 式左右栏）。左栏为 prompt 列表（1-based 序号、角色徽章、开关、清除值变更、拖拽把手），右栏默认「暂存更改（Staged）」diff，点条目进入单条内联编辑；全部改动先写会话缓冲，点顶部 **Commit** 统一落盘。**单向数据流**：编辑期间挂载 / 卸载 / 拖拽只改会话内 `sessionOrder`，不改 ST 的 `prompt_order`；仅在 Commit 成功后投影回预设、加载时物化到运行时。
 - **拖拽重排**：重排通过 `profile.order` 纳入 staged diff，与开关 / 值编辑统一 Commit 落盘，支持逐条撤销；脏标记以弹窗打开时的原始顺序为基准，拖回原位自动清除。
 - **system_prompt / marker 条目**：不显示开关与内容编辑入口（内容由 ST 管理），仅普通 prompt 可切换、可编辑；允许调整 mounted / unused，操作前必须确认。
 - **内联值编辑**：编辑表单提供 Name、Role + Position（同一行）、Injection Depth（仅 position=2 显示）与全宽 Content 文本域；position 下拉含 **Relative(0) / In-chat(1) / In Chat Absolute Depth(2)**；marker 条目内容框禁用。值差异写入会话缓冲，仅记录净变化字段。
@@ -52,6 +52,7 @@ npm test           # 运行 vitest 单元测试
 - **Base（`formatVersion: 3`, `kind: 'prompt_base'`）**：`prompts[]` 为 `{ identifier, mounted, enabled, lastActiveIndex?, fields? }`，记录完整挂载状态与开关；可选 `unusedIds`（保存时未挂载的 identifier 集合）、`sampling`、`extra`、`model`。`fields` 只含「与出厂基线有差异」的值字段。
 - **Delta（`formatVersion: 3`, `kind: 'prompt_delta'`）**：`{ baseId, changes[], order? }`，`changes` 为 `{ identifier, mounted?, enabled?, lastActiveIndex?, fields? }`，仅记录相对上级的差异，可嵌套；`order` 记录完整挂载顺序。
 - **值字段白名单**：`content / name / role / injection_position / injection_depth`（`PROMPT_FIELD_KEYS`）；`order`（注入顺序）为内部字段，UI 不编辑、不随 profile 捕获。
+- **sampling / extra / model 链式解析**：加载 = 出厂基线（`defaultSampling` / `defaultExtra` / `defaultModel`）⊕ 父链 sparse diff ⊕ 自身 diff；采集（新建 Base / derive / create-delta）只存真正不同的键，diff 为空不写。旧版全量快照文件按 sparse 叠加结果值相同，无需迁移。
 - **隐藏默认基准（`defaultSnapshot`）**：首次为该预设新建 Base 时幂等全量锁定，每条 prompt 记录 `{ identifier, mounted, enabled, lastActiveIndex?, originalFields }`（mounted 与 unused 均记录）。reset 时只还原出厂挂载的条目（`defaultEnabledEntries`），出厂值由 `originalFields` 还原到预设。
 - **出厂采样基线（`defaultSampling`）与 extra 基线（`defaultExtra`）**：与 `defaultSnapshot` 同时锁定，reset 时还原预设采样键与 extra 字段到出厂值。extra 排除连接 / 凭据键（模型、来源、代理、endpoint 等 `is_connection` 字段）。
 - **第三方自管理 prompt 排除**：`SPresetSettings` 等固定名 prompt 不进入 profile 快照（`PROMPT_NEVER_CAPTURE`）。

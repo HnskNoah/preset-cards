@@ -1,10 +1,10 @@
-import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
+import { oai_settings } from '@sillytavern/scripts/openai';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { EXTENSION_NAME } from './constants.js';
 import { L } from './i18n.js';
 import type { Preset } from './meta.js';
 import { bufferKey } from './presetBuffers.js';
-import { capturePromptFields, filterFields, findOrderList, findPromptInPreset, promptFieldsEqual, resolvePromptOrderTarget } from './promptToggle.js';
+import { capturePromptFields, filterFields, findPromptInPreset, promptFieldsEqual } from './promptToggle.js';
 import { buildPromptEditForm } from './editModal.js';
 import { buildBreadcrumb } from './profileEditorContext.js';
 import { applyUndoState, computeReorder, undoMount, undoReorderItem, stagedItems } from './profileEditorState.js';
@@ -398,7 +398,7 @@ export function setupSortable(ctx: EditorContext): void {
     }
 }
 
-/** 拖拽重排：读 DOM 顺序 → 纯计算 → 更新内存 order + reorderedIds（进 diff，Commit 才落盘）。 */
+/** 拖拽重排：读 DOM 顺序 → 纯计算 → 更新会话 sessionOrder + reorderedIds（进 diff，Commit 才落盘）。 */
 export async function onReorder(ctx: EditorContext, listEl: JQuery<HTMLElement>): Promise<void> {
     if (ctx.listLocked) return;
     if (resolveEditorSnapshot(ctx)?.readOnly) return;
@@ -415,12 +415,8 @@ export async function onReorder(ctx: EditorContext, listEl: JQuery<HTMLElement>)
         refreshEntryRow(ctx, change.identifier);
     }
 
-    const preset = openai_settings[ctx.idx] as Preset;
-    const orderList = findOrderList(preset, resolvePromptOrderTarget());
-    if (!orderList) return;
-    orderList.order = result.order;
-    // reorder 进 diff：只改内存 order + reorderedIds 缓冲，Commit 才落盘（profile.order 权威，load 时重建 prompt_order）。
-    // 不再即时 saveMeta——避免「reorder 已落盘 vs 挂载仅缓冲」的不对称分歧（C/N 根因）。
+    // 单向数据流：只改会话 sessionOrder，预设 prompt_order 不动（Commit 时随 profile.order 落盘）
+    ctx.sessionOrder = result.order.map((o) => ({ ...o }));
     refreshCardIndexes(listEl, result.order);
     // 刷新 staged 计数与 commit 按钮（reorder 计入 diff）
     refreshCounts(ctx);

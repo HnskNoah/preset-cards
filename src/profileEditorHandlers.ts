@@ -1,30 +1,24 @@
-import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
+import { openai_settings } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { L } from './i18n.js';
-import { isPromptBaseProfile, isPromptDeltaProfile, saveMeta } from './meta.js';
+import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction } from './meta.js';
 import type { Preset } from './meta.js';
 import { applyBufferedEdits, bufferKey } from './presetBuffers.js';
 import { findOrderList, findPromptInPreset, resolvePromptOrderTarget } from './promptToggle.js';
-import { buildProfileOrderCtx } from './presetList.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, resolveToggleNet, resetProfileToParent, restoreOrderIfUncommitted, stagedItems } from './profileEditorState.js';
+import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, projectSessionOrder, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
 import { applyLockVisual, applySearch, refreshCounts, refreshEntryRow, renderDialog, renderRightPane, setupSortable } from './profileEditorRender.js';
 import { resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
 
-/** 提交/reset 后的会话收尾：清缓冲、退出编辑视图、重渲染弹窗 + 刷新卡片网格。 */
 /** 提交/reset 后的会话收尾：清缓冲、退出编辑视图、重渲染 + 刷新。
  * advanceBaseline=true（默认）：把基线推进到当前运行时态（此后净零检测/插回/discard 以最近 commit 为基线）。
- * advanceBaseline=false：仅当源 profile 持久态未变化（如 create-delta，挂载只进新 delta）时使用，基线维持打开时快照。
- * restoreRuntime：清缓冲前先把运行时 order 还原到基线（create-delta 专用——挂载改动只进新 delta，
- *   源 profile 未持久化，运行时残留会随后续 saveMeta 静默落盘）。 */
-async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true, restoreRuntime = false): Promise<void> {
-    if (restoreRuntime) {
-        restoreOrderIfUncommitted(ctx);
-    }
+ * advanceBaseline=false：仅当源 profile 持久态未变化（如 create-delta，挂载只进新 delta）时使用，
+ *   sessionOrder 回到打开时快照（单向数据流：编辑期从未改过预设的 prompt_order，无需还原）。 */
+async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true): Promise<void> {
     clearSessionBuffers(ctx);
     ctx.reorderedIds.clear();
     if (advanceBaseline) {
-        // 基线推进：commit 后以当前运行时 order 作为新 initialOrder（净零检测、insertAtInitialPosition、restoreOrderIfUncommitted 共用）
+        // 基线推进：commit 后以当前运行时 order 作为新 initialOrder（净零检测、insertAtInitialPosition 共用）
         const preset = openai_settings[ctx.idx] as Preset;
         const list = findOrderList(preset, resolvePromptOrderTarget());
         ctx.initialOrder = Array.isArray(list?.order)
@@ -32,8 +26,9 @@ async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true,
                 .filter((o: any) => o && typeof o.identifier === 'string')
                 .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
             : [];
-        ctx.initialOrderIndex = buildProfileOrderCtx(preset, oai_settings.preset_settings_openai === ctx.name).orderIndex;
+        ctx.initialOrderIndex = new Map(ctx.initialOrder.map((o, i) => [o.identifier, i]));
     }
+    ctx.sessionOrder = ctx.initialOrder.map((o) => ({ ...o }));
     ctx.editTargetId = null;
     ctx.mobileShowRight = false;
     await renderDialog(ctx);
@@ -55,7 +50,7 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         renderRightPane(ctx, snapshot);
     });
 
-    // 挂载态开关：激活（挂载）/卸载 unused 条目。改内存 prompt_order + 标记 pendingMounts，Commit 才写 profile。
+    // 挂载态开关：激活（挂载）/卸载 unused 条目。只改会话 sessionOrder + 标记 pendingMounts（单向数据流），Commit 才写 profile。
     ctx.dialog.on('click', '.pc-btn-toggle.mount', async function (e) {
         e.stopPropagation();
         if (ctx.listLocked) return;
@@ -66,7 +61,6 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         const target = !on; // true = 挂载；false = 卸载
 
         const preset = openai_settings[ctx.idx] as Preset;
-        const targetId = resolvePromptOrderTarget();
 
         // 激活（挂载）前警告：unused prompt 可能并非设计为可激活项，激活后可用性不作保证。
         // system_prompt / marker 用专门确认文案（AGENTS 约定）；按钮「激活 / 取消」。
@@ -84,25 +78,17 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             if (!ok) return;
         }
 
-        // 确认通过后才创建/确保目标 order 列表（取消时不得残留空列表）
-        let list = findOrderList(preset, targetId);
-        if (!list) {
-            if (!Array.isArray(preset.prompt_order)) preset.prompt_order = [];
-            list = { character_id: targetId, order: [] };
-            preset.prompt_order.push(list);
-        }
-        if (!Array.isArray(list.order)) list.order = [];
-
+        // 确认通过后操作 sessionOrder（单向数据流：编辑期不改预设的 prompt_order；取消时无残留）
         if (target) {
-            // 挂载：若 order 里无此条目则按弹窗打开时的相对位置插回（enabled 保持该 prompt 定义层值，mount 不改 enable）
-            if (!list.order.some((o: any) => o?.identifier === identifier)) {
-                insertAtInitialPosition(ctx, list, identifier, prompt?.enabled ?? true);
+            // 挂载：sessionOrder 中无此条目则按弹窗打开时的相对位置插回（enabled 保持该 prompt 定义层值，mount 不改 enable）
+            if (!ctx.sessionOrder.some((o) => o.identifier === identifier)) {
+                insertAtInitialPosition(ctx, identifier, prompt?.enabled ?? true);
             }
         } else {
-            // 卸载：记录原位置（undo 撤销卸载时插回原位，reorder 可能已改动位置），再从 order 移除
-            const idx = list.order.findIndex((o: any) => o?.identifier === identifier);
+            // 卸载：记录原位置（undo 撤销卸载时插回原位，reorder 可能已改动位置），再从 sessionOrder 移除
+            const idx = ctx.sessionOrder.findIndex((o) => o.identifier === identifier);
             ctx.unmountPositions.set(bufferKey(ctx.name, identifier), idx);
-            list.order = list.order.filter((o: any) => o?.identifier !== identifier);
+            ctx.sessionOrder = ctx.sessionOrder.filter((o) => o.identifier !== identifier);
         }
         // 净零检测：目标 = 弹窗打开时快照的挂载态 → 删缓冲（无净变化）；否则记录
         const initialMounted = ctx.initialOrder.some((o) => o.identifier === identifier);
@@ -129,6 +115,9 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         const target = !on;
 
         resolveToggleNet(ctx, snapshot, identifier, target);
+        // sessionOrder 同步开关目标值（提交快照以 sessionOrder 为准）
+        const soEntry = ctx.sessionOrder.find((o) => o.identifier === identifier);
+        if (soEntry) soEntry.enabled = target;
 
         // R9：同一 tick 只解析一次 profile（刷新函数复用 snapshot）
         refreshEntryRow(ctx, identifier, snapshot);
@@ -199,17 +188,14 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             const newName = key === 'Escape' ? currentName : (input.val() as string).trim() || currentName;
 
             if (newName !== currentName && key !== 'Escape') {
-                const oldName = currentName; // 回滚用旧名（shared profile 对象，改名直接作用到 preset 内存）
-                snapshot.profile.name = newName;
+                const profileToRename = snapshot.profile;
                 const meta = resolveEditorSnapshot(ctx)?.meta ?? snapshot.meta;
-                try {
-                    // POST 前先改 name → 保存内容含新名（doSaveMeta 引用同一 profiles 数组）
-                    await saveMeta(ctx.name, ctx.idx, meta);
-                } catch (err) {
-                    // 失败回滚内存 name，避免内存/磁盘分裂；UI 重建为旧名
-                    snapshot.profile.name = oldName;
-                    console.error('Rename failed', err);
-                    toastr.error(L('Failed to save preset metadata'));
+                // 事务：副本上重命名，持久化成功后写回；失败时内存未变（无需回滚）
+                const ok = await persistMetaTransaction(meta, (m) => ({
+                    ...m,
+                    profiles: m.profiles.map((p) => p === profileToRename ? { ...p, name: newName } : p),
+                }), ctx.name, ctx.idx);
+                if (!ok) {
                     await renderDialog(ctx);
                     return; // 不误报成功
                 }
@@ -271,19 +257,21 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         }
 
         const preset = openai_settings[ctx.idx] as Preset;
-        const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears);
+        const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder);
 
         try {
             let ok = true;
             if (choice === 'update') {
                 ok = await commitUpdate(ctx, snapshotData);
                 if (ok) {
-                    // 副作用后置：update 持久化成功后，才把缓冲写进运行时（此时=已提交态，天然一致）
+                    // 副作用后置：update 持久化成功后，先把 sessionOrder 投影回预设（唯一写回点），
+                    // 再把缓冲写进运行时（此时=已提交态，天然一致）
+                    projectSessionOrder(ctx);
                     applyBufferedEdits(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles);
                 }
             } else {
                 await commitCreateDelta(ctx, deltaName as string, snapshotData);
-                // create-delta：编辑属于新 delta，源 profile 运行时不写（无 prompts 残留）；挂载/顺序残留由 finalizeEditorSession 还原
+                // create-delta：编辑属于新 delta，源 profile 运行时不写（无 prompts 残留）；编辑期也从未改过预设 prompt_order
             }
             if (!ok) return;
         } catch (err) {
@@ -292,14 +280,13 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             return; // 缓冲保留可重试；运行时从未被写（纯函数快照），无污染
         }
 
-        // update：源 profile 已持久化 → 推进基线、不还原运行时（副作用已写入=已提交态），随后刷新活动态（克隆已提交 order）。
-        // create-delta：源 profile 未变 → 先还原运行时 order（挂载/顺序残留）到基线，再刷新活动态，
-        //   否则 refreshActivePresetUI 会把含残留挂载的 order 克隆进 oai_settings（#1，活动面板/落盘被污染）。
+        // update：源 profile 已持久化 → 推进基线（运行时=已提交态），随后刷新活动态（克隆已提交 order）。
+        // create-delta：源 profile 未变 → sessionOrder 回到打开时快照，再刷新活动态（预设未被会话污染）。
         if (choice === 'update') {
             ctx.refreshActivePresetUI(ctx.name);
-            await finalizeEditorSession(ctx, true, false);
+            await finalizeEditorSession(ctx, true);
         } else {
-            await finalizeEditorSession(ctx, false, true);
+            await finalizeEditorSession(ctx, false);
             ctx.refreshActivePresetUI(ctx.name);
         }
     });
@@ -309,8 +296,7 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             const discard = await callGenericPopup(L('You have uncommitted changes. Discard them?'), POPUP_TYPE.CONFIRM);
             if (!discard) return;
             toastr.info(L('Uncommitted changes discarded'));
-            // 未提交的挂载/顺序改动：还原内存 prompt_order 到弹窗打开时
-            restoreOrderIfUncommitted(ctx);
+            // 单向数据流：编辑期从未改过预设的 prompt_order，无需还原，清缓冲即可
             clearSessionBuffers(ctx);
         }
         ctx.popup?.completeCancelled();

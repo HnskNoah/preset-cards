@@ -3,7 +3,7 @@ import { L } from './i18n.js';
 import { createEditorContext, type ProfileEditorDeps } from './profileEditorContext.js';
 import { bindEditorHandlers } from './profileEditorHandlers.js';
 import { renderDialog } from './profileEditorRender.js';
-import { clearSessionBuffers, restoreOrderIfUncommitted, stagedItems } from './profileEditorState.js';
+import { clearSessionBuffers, stagedItems } from './profileEditorState.js';
 
 export type { ProfileEditorDeps };
 
@@ -37,11 +37,11 @@ export async function openProfileEditorPopup(
     // R2/F6：关闭弹窗即结束本次编辑会话。按钮退出已先确认并清缓冲；
     // 此处兜底 Escape/其他关闭路径仍有未提交改动时提示丢弃。用户选择保留（取消）时不清缓冲——
     // 缓冲与卡片页共享，保留改动可供后续「Save Base Profile」落盘。
+    // 单向数据流：编辑期从未改过预设的 prompt_order，丢弃时无需还原，清缓冲即可。
     if (stagedItems(ctx).length > 0) {
         const discard = await callGenericPopup(L('You have uncommitted changes. Discard them?'), POPUP_TYPE.CONFIRM);
         if (discard) {
             toastr.info(L('Uncommitted changes discarded'));
-            restoreOrderIfUncommitted(ctx);
             clearSessionBuffers(ctx);
         }
     }

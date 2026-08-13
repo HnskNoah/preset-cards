@@ -1,18 +1,20 @@
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, newProfileId, saveMeta } from './meta.js';
-import type { Preset, PresetMeta, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
-import { applyBaseProfile, applyExtra, applyModel, applySampling, buildBaseSnapshot, captureExtra, captureModel, captureSampling, resolveParentStates, resolveProfileExtra, resolveProfileModel, resolveProfileSampling } from './promptToggle.js';
+import type { Preset, PresetMeta, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptProfileEntry, PromptSampling } from './meta.js';
+import { applyBaseProfile, applyExtra, applyModel, applySampling, buildBaseSnapshot, captureExtra, captureModel, captureSampling, diffExtra, diffSampling, resolveEffectiveExtra, resolveEffectiveSampling, resolveParentStates, resolveProfileModel } from './promptToggle.js';
 import { applyDefaultExtra, applyDefaultModel, applyDefaultOriginalFields, applyDefaultSampling, defaultEnabledEntries } from './presetSnapshot.js';
 
-/** 构造 add base 的 fv3 主 profile（mounted 完整 + unusedIds + 采样/extra 差异）。 */
+/** 构造 add base 的 fv3 主 profile（mounted 完整 + unusedIds + 采样/extra sparse 差异）。 */
 export function buildNewBaseProfile(
     preset: Preset,
     baseline: PromptDefaultSnapshotEntry[] | null | undefined,
     name: string,
+    defaultSampling?: PromptSampling,
+    defaultExtra?: Record<string, any>,
 ): PromptBaseProfile {
     const snapshot = buildBaseSnapshot(preset, baseline);
-    const sampling = captureSampling(preset);
-    const extra = captureExtra(preset as Record<string, unknown>);
+    const sampling = diffSampling(captureSampling(preset), defaultSampling);
+    const extra = diffExtra(captureExtra(preset as Record<string, unknown>), defaultExtra);
     const model = captureModel(preset);
     return {
         formatVersion: 3,
@@ -61,25 +63,17 @@ export async function resetProfileCore(
         const parentModel = parent ? resolveProfileModel(parent, allProfiles) : undefined;
         const defaultModel = meta.defaultModel;
         const model = parentModel ?? defaultModel;
-        const parentSampling = parent ? resolveProfileSampling(parent, allProfiles) : undefined;
-        const parentExtra = parent ? resolveProfileExtra(parent, allProfiles) : undefined;
+        const parentSampling = parent ? resolveEffectiveSampling(parent, allProfiles, meta.defaultSampling) : undefined;
+        const parentExtra = parent ? resolveEffectiveExtra(parent, allProfiles, meta.defaultExtra) : undefined;
         if (parentStates.length > 0) {
             applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'parent', 'Parent', parentStates));
             profile.changes = [];
             delete profile.order;
-            if (model) {
-                profile.model = model;
-                applyModel(preset, model);
-            } else {
-                delete profile.model;
-            }
-            // sampling/extra 与 model 对齐：继承父链解析态，无则回出厂基线
-            if (parentSampling) profile.sampling = parentSampling;
-            else delete profile.sampling;
-            if (parentExtra) profile.extra = parentExtra;
-            else delete profile.extra;
-            applyDefaultSampling(preset, meta);
-            applyDefaultExtra(preset, meta);
+            // 清空自身 sampling/extra/model：继承父链解析态（加载时链式解析自然还原，含出厂基线回退）
+            delete profile.sampling;
+            delete profile.extra;
+            delete profile.model;
+            if (model) applyModel(preset, model);
             if (parentSampling) applySampling(preset, parentSampling);
             if (parentExtra) applyExtra(preset, parentExtra);
         } else {
@@ -97,8 +91,7 @@ export async function resetProfileCore(
             delete profile.sampling;
             delete profile.order;
             delete profile.extra;
-            if (defaultModel) profile.model = defaultModel;
-            else delete profile.model;
+            delete profile.model;
         }
         await saveMeta(name, idx, meta);
         toastr.success(L('Configuration reset'));
@@ -120,8 +113,7 @@ export async function resetProfileCore(
         else delete profile.unusedIds;
         delete profile.sampling;
         delete profile.extra;
-        if (meta.defaultModel) profile.model = meta.defaultModel;
-        else delete profile.model;
+        delete profile.model;
         applyBaseProfile(preset, buildResetBaseProfile(profile.id, profile.name, defaultPrompts));
         await saveMeta(name, idx, meta);
         toastr.success(L('Configuration reset'));

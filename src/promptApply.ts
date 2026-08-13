@@ -115,36 +115,73 @@ export function resolveProfileModel(
     return resolveProfileField(profile, allProfiles, (p) => p.model);
 }
 
-/** 解析 profile 的采样快照：优先自身 sampling，delta 未记录时沿父链回溯（含防环）。 */
-export function resolveProfileSampling(
+/** 收集 profile 的完整祖先链（根在前、自身在末）；成环/父缺失时返回已收集部分。 */
+export function collectProfileChain(
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
-): PromptSampling | undefined {
-    return resolveProfileField(profile, allProfiles, (p) => p.sampling);
+): (PromptBaseProfile | PromptDeltaProfile)[] {
+    const chain: (PromptBaseProfile | PromptDeltaProfile)[] = [];
+    const seen = new Set<string>();
+    let current: PresetProfile | undefined = profile;
+    while (current && (isPromptBaseProfile(current) || isPromptDeltaProfile(current)) && !seen.has(String(current.id))) {
+        seen.add(String(current.id));
+        chain.unshift(current);
+        if (isPromptDeltaProfile(current)) {
+            const baseId: string = current.baseId;
+            current = allProfiles.find((p) => String(p.id) === String(baseId));
+        } else {
+            current = undefined;
+        }
+    }
+    return chain;
 }
 
-/** 解析 profile 的附加快照：优先自身 extra，delta 未记录时沿父链回溯（含防环）。 */
-export function resolveProfileExtra(
+/** 解析 profile 的有效采样：出厂基线 ⊕ 祖先链各层 sparse 差异依次叠加。 */
+export function resolveEffectiveSampling(
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+    defaultSampling?: PromptSampling,
+): PromptSampling | undefined {
+    if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return undefined;
+    const merged: Record<string, unknown> = { ...(defaultSampling ?? {}) };
+    for (const p of collectProfileChain(profile, allProfiles)) {
+        if (!p.sampling) continue;
+        for (const [key, value] of Object.entries(p.sampling)) {
+            if (value !== undefined) merged[key] = value;
+        }
+    }
+    return Object.keys(merged).length > 0 ? (merged as PromptSampling) : undefined;
+}
+
+/** 解析 profile 的有效 extra：出厂基线 ⊕ 祖先链各层 sparse 差异依次叠加。 */
+export function resolveEffectiveExtra(
+    profile: PresetProfile,
+    allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+    defaultExtra?: Record<string, any>,
 ): Record<string, any> | undefined {
-    return resolveProfileField(profile, allProfiles, (p) => p.extra);
+    if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return undefined;
+    const merged: Record<string, any> = { ...(defaultExtra ?? {}) };
+    for (const p of collectProfileChain(profile, allProfiles)) {
+        if (p.extra) Object.assign(merged, p.extra);
+    }
+    return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 /**
  * 加载配置的核心分支（base / delta）。
  * - v3 base/delta：resolve → applyResolvedPromptState（mounted/unused 精确还原）。
- * - 模型快照：存在则一并应用（source + 对应模型键）。
+ * - 模型/采样/extra 统一链式解析：出厂基线（defaultModel/defaultSampling/defaultExtra）⊕ 父链 diff ⊕ 自身 diff。
+ *   旧版全量快照文件按 sparse 叠加结果值相同，无需迁移。
  */
 export function applyProfileToPreset(
     preset: Preset,
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
-    opts?: { showMissingToast?: boolean },
+    opts?: { showMissingToast?: boolean; defaultSampling?: PromptSampling; defaultExtra?: Record<string, any>; defaultModel?: PromptModel },
 ): void {
     pruneStaleOrderEntries(preset);
 
-    const model = resolveProfileModel(profile, allProfiles);
+    const model = resolveProfileModel(profile, allProfiles) ?? opts?.defaultModel;
     if (model) applyModel(preset, model);
 
     if (isPromptBaseProfile(profile)) {
@@ -155,8 +192,6 @@ export function applyProfileToPreset(
         } else {
             applyResolvedPromptState(preset, states);
         }
-        if (profile.sampling) applySampling(preset, profile.sampling);
-        if (profile.extra) applyExtra(preset, profile.extra);
     } else if (isPromptDeltaProfile(profile)) {
         const states = resolveProfilePrompts(profile, allProfiles);
         if (states.length === 0) {
@@ -168,8 +203,11 @@ export function applyProfileToPreset(
                 toastr.warning(`${L('Missing prompts skipped')}: ${missing.join(', ')}`);
             }
         }
-        if (profile.sampling) applySampling(preset, profile.sampling);
-        if (profile.extra) applyExtra(preset, profile.extra);
     }
+
+    const sampling = resolveEffectiveSampling(profile, allProfiles, opts?.defaultSampling);
+    if (sampling) applySampling(preset, sampling);
+    const extra = resolveEffectiveExtra(profile, allProfiles, opts?.defaultExtra);
+    if (extra) applyExtra(preset, extra);
 }
 

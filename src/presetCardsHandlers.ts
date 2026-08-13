@@ -3,9 +3,9 @@ import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup'
 import { t } from '@sillytavern/scripts/i18n';
 import { download } from '@sillytavern/scripts/utils';
 import { L } from './i18n.js';
-import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
-import type { Preset } from './meta.js';
-import { captureModel, captureSampling } from './promptToggle.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
+import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
+import { captureExtra, captureModel, captureSampling, diffExtra, diffSampling, resolveEffectiveExtra, resolveEffectiveSampling } from './promptToggle.js';
 import { buildDerivedProfile, collectDescendantProfileIds } from './profileActions.js';
 import { resetProfileCore } from './profileMutators.js';
 import { buildProfileExportData, buildTreeExportData, chooseFromOptions, chooseProfileExportAction } from './importExport.js';
@@ -271,18 +271,18 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         }
         const deltaName = await Popup.show.input(L('Derived profile name:'), '');
         if (!deltaName) return;
-        const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
-        const nextProfiles = [...profiles, buildDerivedProfile(parent, deltaName, [], captureSampling(preset) ?? undefined, undefined, captureModel(preset) ?? undefined)];
-        // 副本模式：saveMeta 持久化含新 delta 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 delta）
-        const nextMeta = { ...meta, profiles: nextProfiles };
-        try {
-            await saveMeta(name, idx, nextMeta);
-        } catch (err) {
-            console.error('Derive failed', err);
-            toastr.error(L('Failed to save preset metadata'));
-            return;
-        }
-        meta.profiles = nextProfiles;
+        // 副本模式事务：持久化含新 delta 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 delta）
+        const ok = await persistMetaTransaction(meta, (m) => {
+            const profiles = Array.isArray(m.profiles) ? m.profiles : [];
+            const allProfiles = profiles as (PromptBaseProfile | PromptDeltaProfile)[];
+            const samplingDiff = diffSampling(captureSampling(preset), resolveEffectiveSampling(parent, allProfiles, m.defaultSampling));
+            const extraDiff = diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(parent, allProfiles, m.defaultExtra));
+            return {
+                ...m,
+                profiles: [...profiles, buildDerivedProfile(parent, deltaName, [], samplingDiff ?? undefined, undefined, captureModel(preset) ?? undefined, extraDiff ?? undefined)],
+            };
+        }, name, idx);
+        if (!ok) return;
         toastr.success(L('Derived profile created'));
         await refreshGrid(ctx);
         ctx.dialog.find(`.preset_card_profile_row[data-profile-id="${String(parent.id)}"]`).parents('.preset_card_profile_group').addClass('expanded');
@@ -338,18 +338,13 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         if (!confirm) return;
 
         const deleteIds = new Set([String(profileId), ...descendantIds]);
-        // 副本模式：删除/级联结果先在 nextMeta 上计算，saveMeta 成功后才写回活 meta 并清 activeProfile
+        // 副本模式事务：删除/级联结果先在 nextMeta 上计算，持久化成功后才写回活 meta 并清 activeProfile
         // （失败时内存与磁盘保持一致，不残留"已删但未落盘"的中间态）
-        let nextProfiles = (meta.profiles || []).filter(p => !deleteIds.has(String(p.id)));
-        const nextMeta = { ...meta, profiles: nextProfiles };
-        try {
-            await saveMeta(name, idx, nextMeta);
-        } catch (err) {
-            console.error('Delete profile failed', err);
-            toastr.error(L('Failed to save preset metadata'));
-            return;
-        }
-        meta.profiles = nextProfiles;
+        const ok = await persistMetaTransaction(meta, (m) => ({
+            ...m,
+            profiles: (m.profiles || []).filter(p => !deleteIds.has(String(p.id))),
+        }), name, idx);
+        if (!ok) return;
         const active = getActiveProfile();
         if (active && active.presetName === name && deleteIds.has(active.profileId)) {
             setActiveProfile(undefined);

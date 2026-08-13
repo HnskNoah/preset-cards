@@ -8,11 +8,16 @@ import type { ProfileEntryView } from './presetList.js';
 import {
     PROMPT_FIELD_WHITELIST,
     buildPromptSnapshot,
+    captureExtra,
     captureModel,
     captureSampling,
+    diffExtra,
+    diffSampling,
     filterFields,
     findOrderList,
     findPromptInPreset,
+    resolveEffectiveExtra,
+    resolveEffectiveSampling,
     resolveProfilePrompts,
     resolvePromptOrderTarget,
     snapshotToChanges,
@@ -40,8 +45,8 @@ export interface StagedItem {
 }
 
 /** 采集当前缓冲（开关/值编辑）叠加后的快照——纯函数，不写运行时。
- * 构造临时视图 preset（浅克隆 prompts + 叠加 edited 字段与 toggle enabled），
- * 使 buildPromptSnapshot 采到与「提交后」一致的状态；运行时 prompts 保持未动。
+ * 构造临时视图 preset（浅克隆 prompts + 叠加字段 edited；目标 order 由会话 sessionOrder 表达），
+ * 使 buildPromptSnapshot 采到与「提交后」一致的状态；运行时 prompts/order 保持未动。
  * 副作用（applyBufferedEdits 写真实 prompt/镜像）由调用方在 commit 成功后执行。 */
 export function applyBufferedAndSnapshot(
     preset: Preset,
@@ -49,35 +54,32 @@ export function applyBufferedAndSnapshot(
     sessionEdits: Map<string, PromptEditBuffer>,
     pendingToggles: Map<string, boolean>,
     pendingClears: Map<string, true>,
+    sessionOrder: { identifier: string; enabled: boolean }[],
 ): { entries: PromptProfileEntry[]; unusedIds: string[] } {
     const prefix = bufferPrefix(name);
-    // 临时视图：prompts 与目标 order 均浅克隆，叠加本会话的 toggle enabled（定义层 + order 条目）
-    // 与字段 edited。运行时 prompts/order 保持未动。
+    // 临时视图：prompts 浅克隆叠加字段 edited；目标 order 用 sessionOrder（含开关目标值）替换。
+    // 运行时 prompts/order 保持未动（单向数据流：编辑期不改 ST 状态）。
+    const targetId = resolvePromptOrderTarget();
+    const clonedLists = Array.isArray(preset.prompt_order)
+        ? preset.prompt_order.map((list: any) => ({
+            ...list,
+            order: Array.isArray(list?.order) ? list.order.map((o: any) => ({ ...o })) : list?.order,
+        }))
+        : [];
+    let targetList = clonedLists.find((l: any) => String(l?.character_id) === String(targetId));
+    if (!targetList) {
+        targetList = { character_id: targetId, order: [] };
+        clonedLists.push(targetList);
+    }
+    targetList.order = sessionOrder.map((o) => ({ ...o }));
     const view = {
         ...preset,
         prompts: Array.isArray(preset.prompts)
             ? preset.prompts.map((p: any) => ({ ...p }))
             : [],
-        prompt_order: Array.isArray(preset.prompt_order)
-            ? preset.prompt_order.map((list: any) => ({
-                ...list,
-                order: Array.isArray(list?.order) ? list.order.map((o: any) => ({ ...o })) : list?.order,
-            }))
-            : preset.prompt_order,
+        prompt_order: clonedLists,
     };
     const viewById = new Map(view.prompts.map((p: any) => [p.identifier, p]));
-    for (const [key, enabled] of pendingToggles) {
-        if (!key.startsWith(prefix)) continue;
-        const identifier = key.slice(prefix.length);
-        const prompt = viewById.get(identifier);
-        if (prompt) prompt.enabled = enabled;
-        // 同步叠加目标 order 条目的 enabled（snapshotPromptState 优先读 order 条目）
-        const orderList = findOrderList(view, resolvePromptOrderTarget());
-        const orderEntry = Array.isArray(orderList?.order)
-            ? orderList.order.find((o: any) => o?.identifier === identifier)
-            : undefined;
-        if (orderEntry) orderEntry.enabled = enabled;
-    }
     for (const [key, session] of sessionEdits) {
         if (!key.startsWith(prefix)) continue;
         const prompt = viewById.get(key.slice(prefix.length));
@@ -210,22 +212,18 @@ export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): Stag
     return items;
 }
 
-/** 撤销 reorder 单条目：把该条目移回打开时基线位置（initialOrderIndex），更新 reorderedIds。 */
+/** 撤销单个 reorder：把该条目移回打开时基线位置（initialOrderIndex），更新 reorderedIds。 */
 export function undoReorderItem(ctx: EditorContext, identifier: string): void {
-    const preset = openai_settings[ctx.idx] as Preset;
-    const list = findOrderList(preset, resolvePromptOrderTarget());
-    if (!Array.isArray(list?.order)) return;
     const targetIdx = ctx.initialOrderIndex.get(identifier);
     if (targetIdx === undefined) return;
-    const cur = list.order.findIndex((o: any) => o?.identifier === identifier);
+    const cur = ctx.sessionOrder.findIndex((o) => o.identifier === identifier);
     if (cur < 0) return;
-    const [entry] = list.order.splice(cur, 1);
-    list.order.splice(Math.min(targetIdx, list.order.length), 0, entry);
+    const [entry] = ctx.sessionOrder.splice(cur, 1);
+    ctx.sessionOrder.splice(Math.min(targetIdx, ctx.sessionOrder.length), 0, entry);
     ctx.reorderedIds.delete(identifier);
 }
 
-/** 在给定 order 上叠加本会话挂载缓冲：卸载条目移除，挂载条目插回（原位优先，无记录按 initialOrder 相对位）。
-/** 撤销 toggle + 值编辑（full undo）：还原 preset 与活动预设的运行时值。 */
+/** 撤销 toggle + 值编辑（full undo）：还原 preset 与活动预设的运行时值，sessionOrder enabled 回退到 profile 解析值。 */
 export function applyUndoState(ctx: EditorContext, key: string, identifier: string): void {
     ctx.pendingToggles.delete(key);
     const session = ctx.sessionEdits.get(key);
@@ -250,6 +248,13 @@ export function applyUndoState(ctx: EditorContext, key: string, identifier: stri
             }
         }
     }
+    // 开关撤销：sessionOrder enabled 回退到 profile 解析值（snapshot 不含 toggle 覆盖，仅 pendingMounts 覆盖）
+    const snapshot = resolveEditorSnapshot(ctx);
+    const view = snapshot?.entries.find((e) => e.identifier === identifier);
+    if (view) {
+        const soEntry = ctx.sessionOrder.find((o) => o.identifier === identifier);
+        if (soEntry) soEntry.enabled = view.enabled;
+    }
 }
 
 /** 开关净零参照：目标等于 profile 解析值 → 删缓冲；否则记录目标。返回是否产生了 toggle 缓冲。 */
@@ -273,20 +278,17 @@ export function resolveToggleNet(
     return true;
 }
 
-/** 拖拽重排的纯计算：返回新 order 与脏标记变化。无变化返回 null。 */
+/** 拖拽重排的纯计算：基于会话 sessionOrder（不读不写 ST 的 prompt_order）。
+ * 返回新 order 与脏标记变化。无变化返回 null。 */
 export function computeReorder(
     ctx: EditorContext,
     domIds: string[],
-): { order: { identifier: string }[]; dirtyChanges: { identifier: string; dirty: boolean }[] } | null {
-    const preset = openai_settings[ctx.idx] as Preset;
-    const orderList = findOrderList(preset, resolvePromptOrderTarget());
-    if (!orderList || !Array.isArray(orderList.order)) return null;
-
-    const order = orderList.order as { identifier: string }[];
+): { order: { identifier: string; enabled: boolean }[]; dirtyChanges: { identifier: string; dirty: boolean }[] } | null {
+    const order = ctx.sessionOrder;
     const inDom = new Set(domIds);
     const byId = new Map(order.map((o) => [o.identifier, o]));
     const newOrder = [
-        ...domIds.map((id) => byId.get(id)).filter((o): o is { identifier: string } => !!o),
+        ...domIds.map((id) => byId.get(id)).filter((o): o is { identifier: string; enabled: boolean } => !!o),
         ...order.filter((o) => !inDom.has(o.identifier)),
     ];
     if (newOrder.length === order.length && newOrder.every((o, i) => o.identifier === order[i].identifier)) return null;
@@ -333,37 +335,6 @@ export async function commitUpdate(
     return commitBufferedEditsToProfile(nextProfile, snapshot, meta, ctx.name, ctx.idx, ctx.sessionEdits, 'full-changes');
 }
 
-/** 计算「create-delta 应落盘的 order」：源预设还原到打开时快照（不含 reorder/挂载/卸载会话残留）。
- * reorder 现在进 diff（不即时落盘），随 create 快照进新 delta 的 order；源预设磁盘不应含任何会话改动。 */
-function buildCommittedOrder(ctx: EditorContext, _list: any): { identifier: string; enabled: boolean }[] {
-    return ctx.initialOrder.map((o) => ({ ...o }));
-}
-
-/** create-delta 专用保存：落盘前把运行时 order 临时换成「打开时快照」（源预设不含任何会话残留），POST 后恢复残留引用。
- * doSaveMeta 会 structuredClone 整个运行时 preset 落盘；若不处理，源预设 prompt_order 会残留
- * 本会话挂载/卸载/reorder（内存由 finalizeEditorSession 还原，磁盘不会——磁盘/内存分裂）。
- * reorder 与挂载一样进 diff：随 create 快照进新 delta 的 order，源预设磁盘还原到打开时快照。
- * finally 按引用回填残留：saveMeta 失败时运行时保持残留态，重试 commit 的 delta 数据不变。 */
-async function saveMetaWithCleanOrder(ctx: EditorContext, meta: PresetMeta): Promise<void> {
-    const preset = openai_settings[ctx.idx] as Preset;
-    const dirtyList = findOrderList(preset, resolvePromptOrderTarget());
-    const dirtyOrder = dirtyList?.order;
-    const committed = buildCommittedOrder(ctx, dirtyList);
-    if (dirtyList && Array.isArray(dirtyOrder)) {
-        dirtyList.order = committed; // 临时换成 committed 视图（POST 体还原到打开时，不含会话残留）
-    }
-    try {
-        await saveMeta(ctx.name, ctx.idx, meta);
-    } finally {
-        // 恢复残留：列表被移除时插回，order 引用原样回填（失败时运行时保持残留态供重试）
-        if (dirtyList && !findOrderList(preset, resolvePromptOrderTarget())) {
-            if (!Array.isArray(preset.prompt_order)) preset.prompt_order = [];
-            preset.prompt_order.push(dirtyList);
-        }
-        if (dirtyList && Array.isArray(dirtyOrder)) dirtyList.order = dirtyOrder;
-    }
-}
-
 /** commit「新建为子配置」。 */
 export async function commitCreateDelta(
     ctx: EditorContext,
@@ -381,14 +352,18 @@ export async function commitCreateDelta(
     // unusedIds 传入以产出 unmount（mounted:false）change；顺序差异走 order（与 update 路径对称）。
     const deltaState = snapshotToDelta(snapshot.entries, parentEntries, snapshot.unusedIds);
     const changes = snapshotToChanges(snapshot.entries, parentEntries, [], snapshot.unusedIds);
-    // 先构建新 profiles（含 delta），持久化成功后才赋给 meta——saveMeta 失败重试不产生重复 delta
-    const newProfiles = [...profiles, buildDerivedProfile(profile, deltaName, changes, captureSampling(preset) ?? undefined, deltaState.order, captureModel(preset) ?? undefined)];
+    // sampling/extra 只存相对父链解析态的 sparse 差异（diff 为空不写）
+    const allProfiles = meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[];
+    const samplingDiff = diffSampling(captureSampling(preset), resolveEffectiveSampling(profile, allProfiles, meta.defaultSampling));
+    const extraDiff = diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(profile, allProfiles, meta.defaultExtra));
+    // 先构建新 profiles（含 delta），持久化成功后才赋给 meta——saveMeta 失败重试不产生重复 delta。
+    // 单向数据流：编辑期从未改过预设的 prompt_order，源预设落盘即为打开时状态，无需 clean-order 处理。
+    const newProfiles = [...profiles, buildDerivedProfile(profile, deltaName, changes, samplingDiff ?? undefined, deltaState.order, captureModel(preset) ?? undefined, extraDiff ?? undefined)];
     recordDefaultOriginalFields(meta, ctx.name, ctx.sessionEdits);
-    // saveMeta 持久化 nextMeta（含新 delta）；成功后把 profiles 同步回 meta 内存
     const nextMeta = { ...meta, profiles: newProfiles };
     const newDeltaId = String((newProfiles[newProfiles.length - 1] as PromptDeltaProfile).id);
     try {
-        await saveMetaWithCleanOrder(ctx, nextMeta);
+        await saveMeta(ctx.name, ctx.idx, nextMeta);
     } catch (err) {
         // doSaveMeta 已在 fetch 前把含 delta 的 profiles 写进 preset.extensions；失败时回滚，
         // 否则「保留缓冲可重试」会 readMeta 读到含失败 delta 的数组而重复生成
@@ -426,45 +401,38 @@ export function clearSessionBuffers(ctx: EditorContext): void {
     }
 }
 
-/** 未提交时还原内存 prompt_order 到弹窗打开时快照（挂载/卸载/顺序改动丢弃）。
- * 仅当本会话有挂载态或顺序改动（pendingMounts/reorderedIds 非空）才还原；否则不动。 */
-export function restoreOrderIfUncommitted(ctx: EditorContext): void {
-    const hasMountChanges = [...ctx.pendingMounts.keys()].some((k) => k.startsWith(ctx.prefix));
-    if (!hasMountChanges && ctx.reorderedIds.size === 0) return;
+/** 把会话 sessionOrder 投影回预设的 target prompt_order（仅在 commit 成功后调用；单向数据流的唯一写回点）。 */
+export function projectSessionOrder(ctx: EditorContext): void {
     const preset = openai_settings[ctx.idx] as Preset;
-    const list = findOrderList(preset, resolvePromptOrderTarget());
-    if (Array.isArray(list?.order)) {
-        list.order = ctx.initialOrder.map((o) => ({ ...o }));
+    const targetId = resolvePromptOrderTarget();
+    if (!Array.isArray(preset.prompt_order)) preset.prompt_order = [];
+    let list = findOrderList(preset, targetId);
+    if (!list) {
+        list = { character_id: targetId, order: [] };
+        preset.prompt_order.push(list);
     }
-    // 本会话新建了目标 order 列表（initialOrder 为空快照）：还原后列表无意义，从 prompt_order 移除
-    if (ctx.initialOrder.length === 0 && Array.isArray(preset.prompt_order)) {
-        const targetId = resolvePromptOrderTarget();
-        preset.prompt_order = preset.prompt_order.filter((l: any) => String(l?.character_id) !== String(targetId));
-    }
+    list.order = ctx.sessionOrder.map((o) => ({ ...o }));
 }
 
-/** 撤销单个挂载操作：还原该条目在 prompt_order 的挂载态，只动当前条目（不整表还原）。
+/** 撤销单个挂载操作：还原该条目在 sessionOrder 的挂载态，只动当前条目（不整表还原）。
  * target=true（用户挂载）→ 移除该条目；target=false（用户卸载）→ 加回该条目（卸载前原位）。 */
 export function undoMount(ctx: EditorContext, key: string, identifier: string): void {
     const target = ctx.pendingMounts.get(key);
     ctx.pendingMounts.delete(key);
-    const preset = openai_settings[ctx.idx] as Preset;
-    const list = findOrderList(preset, resolvePromptOrderTarget());
-    if (!Array.isArray(list?.order)) return;
 
     if (target === true) {
-        // 撤销挂载：从 order 移除，并清理可能残留的 reorder 记录
-        list.order = list.order.filter((o: any) => o?.identifier !== identifier);
+        // 撤销挂载：从 sessionOrder 移除，并清理可能残留的 reorder 记录
+        ctx.sessionOrder = ctx.sessionOrder.filter((o) => o.identifier !== identifier);
         ctx.reorderedIds.delete(identifier);
     } else if (target === false) {
         // 撤销卸载：优先按卸载时记录的原位插回（reorder 可能已改动位置）；无记录时按 initialOrder 相对位
-        if (!list.order.some((o: any) => o?.identifier === identifier)) {
+        if (!ctx.sessionOrder.some((o) => o.identifier === identifier)) {
             const originalIdx = ctx.unmountPositions.get(key);
-            if (originalIdx !== undefined && originalIdx >= 0 && originalIdx <= list.order.length) {
+            if (originalIdx !== undefined && originalIdx >= 0 && originalIdx <= ctx.sessionOrder.length) {
                 const original = ctx.initialOrder.find((o) => o.identifier === identifier);
-                list.order.splice(originalIdx, 0, { identifier, enabled: original?.enabled ?? true });
+                ctx.sessionOrder.splice(originalIdx, 0, { identifier, enabled: original?.enabled ?? true });
             } else {
-                insertAtInitialPosition(ctx, list, identifier);
+                insertAtInitialPosition(ctx, identifier);
             }
         }
         ctx.unmountPositions.delete(key);
@@ -472,15 +440,15 @@ export function undoMount(ctx: EditorContext, key: string, identifier: string): 
     }
 }
 
-/** 按弹窗打开时快照（initialOrder）的相对位置把条目插回目标 order。
- * 插入点 = initialOrder 中位于该条目之前、且当前仍在 order 的「最后一个前驱之后」的位置。
+/** 按弹窗打开时快照（initialOrder）的相对位置把条目插回 sessionOrder。
+ * 插入点 = initialOrder 中位于该条目之前、且当前仍在 sessionOrder 的「最后一个前驱之后」的位置。
  * 不假设前驱在 current order 中连续（拖拽 reorder 后前驱可能被分散），逐个扫描取最后出现位。
  * fallbackEnabled：initialOrder 中无该条目（异常路径）时使用的 enabled，默认 true。 */
-export function insertAtInitialPosition(ctx: EditorContext, list: any, identifier: string, fallbackEnabled = true): void {
+export function insertAtInitialPosition(ctx: EditorContext, identifier: string, fallbackEnabled = true): void {
     const original = ctx.initialOrder.find((o) => o.identifier === identifier);
     if (!original) {
         // 打开时不在初始 order（异常），退化为追加
-        list.order.push({ identifier, enabled: fallbackEnabled });
+        ctx.sessionOrder.push({ identifier, enabled: fallbackEnabled });
         return;
     }
     const beforeIds = new Set(
@@ -489,8 +457,8 @@ export function insertAtInitialPosition(ctx: EditorContext, list: any, identifie
     );
     // 插入点 = 最后一个存活前驱之后（前驱可能因 reorder 分散，取最后出现位置）
     let insertIdx = 0;
-    for (let i = 0; i < list.order.length; i++) {
-        if (beforeIds.has(list.order[i]?.identifier)) insertIdx = i + 1;
+    for (let i = 0; i < ctx.sessionOrder.length; i++) {
+        if (beforeIds.has(ctx.sessionOrder[i]?.identifier)) insertIdx = i + 1;
     }
-    list.order.splice(insertIdx, 0, { identifier, enabled: original.enabled });
+    ctx.sessionOrder.splice(insertIdx, 0, { identifier, enabled: original.enabled });
 }

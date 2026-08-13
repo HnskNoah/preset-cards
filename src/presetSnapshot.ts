@@ -3,7 +3,7 @@
 
 import { L } from './i18n.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaChange, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
-import { isPromptBaseProfile, readMeta, saveMeta, saveMetaMerged } from './meta.js';
+import { isPromptBaseProfile, persistMetaTransaction, readMeta, saveMetaMerged } from './meta.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { bufferKey, bufferPrefix } from './presetBuffers.js';
 import { buildDefaultSnapshotLock, captureExtra, captureModel, captureSampling, findPromptInPreset, filterFields, promptFieldsEqual, resolveParentStates, snapshotToChanges, snapshotToDelta } from './promptToggle.js';
@@ -16,12 +16,15 @@ import { entriesFromDefaultSnapshot } from './promptState.js';
 export async function lockDefaultSnapshot(preset: Preset, name: string, idx: number): Promise<void> {
     const meta = readMeta(preset);
     if (meta.defaultSnapshotLocked) return;
-    meta.defaultSnapshot = buildDefaultSnapshotLock(preset);
-    meta.defaultSnapshotLocked = true;
-    meta.defaultSampling = captureSampling(preset) ?? undefined;
-    meta.defaultExtra = captureExtra(preset as Record<string, unknown>) ?? undefined;
-    meta.defaultModel = captureModel(preset) ?? undefined;
-    await saveMeta(name, idx, meta);
+    const ok = await persistMetaTransaction(meta, (m) => ({
+        ...m,
+        defaultSnapshot: buildDefaultSnapshotLock(preset),
+        defaultSnapshotLocked: true,
+        defaultSampling: captureSampling(preset) ?? undefined,
+        defaultExtra: captureExtra(preset as Record<string, unknown>) ?? undefined,
+        defaultModel: captureModel(preset) ?? undefined,
+    }), name, idx);
+    if (!ok) throw new Error('Failed to lock default snapshot');
 }
 
 // 把当前挂载状态快照合并进主 profile（「保存→更新」与「覆盖」共用）：

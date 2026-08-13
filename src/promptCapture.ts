@@ -87,6 +87,30 @@ export function applyExtra(preset: Preset, extra: Record<string, any>): void {
     preset.extensions = ext;
 }
 
+/** 采样 sparse 差异采集：只保留相对 baseline 值不同的键；无差异返回 null。 */
+export function diffSampling(current: PromptSampling | null | undefined, baseline?: PromptSampling): PromptSampling | null {
+    if (!current) return null;
+    const out: PromptSampling = {};
+    for (const key of SAMPLING_KEYS) {
+        const value = (current as Record<string, unknown>)[key];
+        if (value === undefined) continue;
+        if ((baseline as Record<string, unknown> | undefined)?.[key] !== value) {
+            (out as Record<string, unknown>)[key] = value;
+        }
+    }
+    return Object.keys(out).length > 0 ? out : null;
+}
+
+/** extra sparse 差异采集：只保留相对 baseline 值不同的键；无差异返回 null。 */
+export function diffExtra(current: Record<string, any> | null | undefined, baseline?: Record<string, any>): Record<string, any> | null {
+    if (!current) return null;
+    const out: Record<string, any> = {};
+    for (const [key, value] of Object.entries(current)) {
+        if (baseline?.[key] !== value) out[key] = value;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+}
+
 /**
  * 采集单个 prompt 的值字段（仅白名单键，跳过 undefined）。
  * 纯读取，不修改 preset。

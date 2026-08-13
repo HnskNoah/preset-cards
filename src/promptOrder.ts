@@ -112,7 +112,7 @@ export function resolveProfilePrompts(
         return [];
     }
 
-    const parent = allProfiles.find((p) => p.id === profile.baseId);
+    const parent = allProfiles.find((p) => String(p.id) === String(profile.baseId));
     const entries = parent ? resolveProfilePrompts(parent, allProfiles, seen) : [];
     return applyPromptDelta(entries, profile.changes, profile.order);
 }
@@ -124,6 +124,6 @@ export function resolveParentStates(
     profile: PromptDeltaProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
 ): PromptProfileEntry[] {
-    const parent = allProfiles.find((p) => p.id === profile.baseId);
+    const parent = allProfiles.find((p) => String(p.id) === String(profile.baseId));
     return parent ? resolveProfilePrompts(parent, allProfiles) : [];
 }

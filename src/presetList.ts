@@ -100,6 +100,15 @@ export function buildProfileOrderCtx(preset: Preset, isActive: boolean): Profile
     return { orderIndex, orderLength };
 }
 
+/** 从显式 order 数组构建顺序编辑上下文（profile 编辑器会话 sessionOrder 用，单向数据流）。 */
+export function buildOrderCtxFromOrder(order: { identifier: string }[]): ProfileOrderCtx {
+    const orderIndex = new Map<string, number>();
+    order.forEach((o, i) => {
+        if (o && typeof o.identifier === 'string') orderIndex.set(o.identifier, i);
+    });
+    return { orderIndex, orderLength: order.length };
+}
+
 /** ST PromptManager 的 marker 条目开关白名单（forceTogglePrompts）：这些 marker 内容虽由 ST 管理，
  * 但原生允许用户开关其启用状态，我们的编辑器同样放开开关。 */
 const FORCE_TOGGLE_MARKERS = new Set([
