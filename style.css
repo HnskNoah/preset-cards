@@ -1896,16 +1896,10 @@
     cursor: grabbing;
 }
 
-/* 列表锁定：隐藏拖拽把手、清除按钮禁用视觉，编辑入口不再响应 */
+/* 列表锁定：只锁定顺序，隐藏拖拽把手；开关/值编辑/清除保持可操作 */
 .pc-prompt-list.pc-locked .pc-drag-handle {
     opacity: 0.1;
     cursor: not-allowed;
-}
-
-.pc-prompt-list.pc-locked .pc-card-clear {
-    opacity: 0.2;
-    cursor: not-allowed;
-    pointer-events: none;
 }
 
 .pc-prompt-list.pc-locked .pc-prompt-card {

@@ -15,16 +15,16 @@ function cssEscape(s: string): string {
 }
 
 /** 重建后重应用锁定视觉（模板只传 label，类/图标/高亮由 JS 维护，跨 renderDialog 不丢）。
- * 锁定时只读：可查看 prompt、可返回，隐藏重置/提交（保存键）。 */
+ * 锁定态只锁定顺序：禁止拖拽重排；开关/值编辑/挂载/清除/重置/Commit 均保持可用。 */
 export function applyLockVisual(ctx: EditorContext): void {
     const btn = ctx.dialog.find('#pc-btn-lock');
     btn.toggleClass('active', ctx.listLocked);
-    btn.attr('title', ctx.listLocked ? L('Unlock list') : L('Lock list'));
-    btn.find('.pc-btn-label').text(ctx.listLocked ? L('Unlock list') : L('Lock list'));
+    btn.attr('title', ctx.listLocked ? L('Unlock order') : L('Lock order'));
+    btn.find('.pc-btn-label').text(ctx.listLocked ? L('Unlock order') : L('Lock order'));
     btn.find('i').attr('class', ctx.listLocked ? 'fa-solid fa-unlock' : 'fa-solid fa-lock');
     ctx.dialog.find('.pc-prompt-list').toggleClass('pc-locked', ctx.listLocked);
-    ctx.dialog.find('#pc-btn-reset').toggle(!ctx.listLocked);
-    ctx.dialog.find('#pc-btn-commit').toggle(!ctx.listLocked);
+    ctx.dialog.find('#pc-btn-reset').toggle(true);
+    ctx.dialog.find('#pc-btn-commit').toggle(true);
 }
 
 /** 把缓冲状态叠加到已渲染的条目列表（开关目标 / 编辑后的名字 / dirty 高亮）。 */
@@ -134,7 +134,6 @@ export function buildUndoBtn(ctx: EditorContext, key: string, identifier: string
     const undo = $('<button class="pc-btn-undo" title="' + cssEscape(L('Undo')) + '"></button>')
         .append($('<i class="fa-solid fa-rotate-left"></i>'));
     undo.on('click', async () => {
-        if (ctx.listLocked) return;
         if (onlyClear) {
             // 撤销清除：恢复 clear 时快照的会话编辑（session + toggle），否则被销毁的编辑无法还原
             ctx.pendingClears.delete(key);
@@ -211,20 +210,17 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
 
     const prevSession = ctx.sessionEdits.get(bufferKey(ctx.name, identifier));
     const current = prevSession ? { ...capturePromptFields(prompt), ...prevSession.edited } : undefined;
-    // 锁定时只读查看：表单控件禁用，不显示保存
-    const form = buildPromptEditForm(preset, identifier, current, ctx.listLocked);
+    // 锁定态只锁顺序，编辑表单始终可编辑
+    const form = buildPromptEditForm(preset, identifier, current, false);
 
     const saveBtn = $('<button class="pc-btn-icon pc-btn-icon-primary" title="' + L('Save') + '"></button>')
         .append($('<i class="fa-solid fa-save"></i>'))
         .append(' ' + L('Save'));
-    const cancelBtn = $('<button class="pc-btn-icon" title="' + (ctx.listLocked ? L('Back') : L('Cancel')) + '"></button>')
+    const cancelBtn = $('<button class="pc-btn-icon" title="' + L('Cancel') + '"></button>')
         .append($('<i class="fa-solid fa-times"></i>'))
-        .append(' ' + (ctx.listLocked ? L('Back') : L('Cancel')));
-
-    if (ctx.listLocked) saveBtn.hide();
+        .append(' ' + L('Cancel'));
 
     saveBtn.on('click', () => {
-        if (ctx.listLocked) return;
         const editedFields = form.collectFields();
         if (editedFields) {
             const key = bufferKey(ctx.name, identifier);

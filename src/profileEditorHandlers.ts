@@ -44,7 +44,6 @@ async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true)
 /** 绑定全部事件 handler（逻辑全部下沉 state/render 纯函数，本文件仅做 DOM 绑定）。 */
 export function bindEditorHandlers(ctx: EditorContext): void {
     ctx.dialog.on('click', '.pc-prompt-card', function (e) {
-        // 锁定下仍可进入只读查看（表单禁用、无保存），修改类交互由各 handler 的 listLocked 守卫阻止
         const snapshot = resolveEditorSnapshot(ctx);
         if (snapshot?.readOnly) return;
         if ($(e.target).closest('.pc-drag-handle, .pc-card-clear, .pc-btn-toggle, button').length) return;
@@ -59,7 +58,6 @@ export function bindEditorHandlers(ctx: EditorContext): void {
     // 挂载态开关：激活（挂载）/卸载 unused 条目。只改会话 sessionOrder + 标记 pendingMounts（单向数据流），Commit 才写 profile。
     ctx.dialog.on('click', '.pc-btn-toggle.mount', async function (e) {
         e.stopPropagation();
-        if (ctx.listLocked) return;
         const snapshot = resolveEditorSnapshot(ctx);
         if (snapshot?.readOnly) return;
         const identifier = String($(this).closest('.pc-prompt-card').data('identifier'));
@@ -112,8 +110,8 @@ export function bindEditorHandlers(ctx: EditorContext): void {
 
     ctx.dialog.on('click', '.pc-btn-toggle', function (e) {
         e.stopPropagation();
-        if (ctx.listLocked) return; // 锁定列表时禁止切换（与 mount 开关一致）
         if ($(this).hasClass('mount')) return;
+        // 锁定态允许普通开关切换（Commit 保存仍可用），值编辑/挂载/清除/拖拽/重置保持锁定
         const snapshot = resolveEditorSnapshot(ctx);
         if (snapshot?.readOnly) return;
         const toggle = $(this);
@@ -135,7 +133,6 @@ export function bindEditorHandlers(ctx: EditorContext): void {
 
     ctx.dialog.on('click', '.pc-card-clear', function (e) {
         e.stopPropagation();
-        if (ctx.listLocked) return;
         const identifier = String($(this).closest('.pc-prompt-card').data('identifier'));
         const key = bufferKey(ctx.name, identifier);
         const snapshot = resolveEditorSnapshot(ctx);
@@ -334,12 +331,7 @@ export function bindEditorHandlers(ctx: EditorContext): void {
     ctx.dialog.on('click', '#pc-btn-lock', function () {
         ctx.listLocked = !ctx.listLocked;
         applyLockVisual(ctx);
-        // 锁定时退出当前编辑视图（编辑表单 Save/Cancel 不再可用）并禁用拖拽
-        if (ctx.listLocked) {
-            ctx.editTargetId = null;
-            ctx.mobileShowRight = false;
-            renderRightPane(ctx);
-        }
+        // 锁定态只锁定顺序：仅禁用拖拽，其余编辑/提交保持可用
         setupSortable(ctx);
     });
 
