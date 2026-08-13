@@ -1,6 +1,6 @@
 import { getRequestHeaders } from '@sillytavern/script';
 import { t } from '@sillytavern/scripts/i18n';
-import { openai_settings, oai_settings } from '@sillytavern/scripts/openai';
+import { openai_setting_names, openai_settings, oai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
 import { isV3BaseProfileData, isV3DeltaProfileData } from './profileSchema.js';
@@ -254,6 +254,9 @@ export async function persistMetaTransaction(
 async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
     const preset = openai_settings[presetIndex] as Preset | undefined;
     if (!preset) return;
+    // 合并窗口延迟落盘：预设若在窗口内被删除（openai_setting_names 已移除），放弃本次落盘，
+    // 避免用旧 body 把已删除的预设重新创建到服务器（删除与延迟保存的竞态）。
+    if (openai_setting_names[presetName] === undefined) return;
 
     // Ensure extensions object exists
     if (!preset.extensions) preset.extensions = {};

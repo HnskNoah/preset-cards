@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { saveMeta, saveMetaMerged } from '../src/meta.js';
-import { addPreset, openai_settings } from './mocks/openai.js';
+import { addPreset, openai_setting_names, openai_settings } from './mocks/openai.js';
 
 beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
@@ -70,5 +70,17 @@ describe('saveMeta 持久化统一机制', () => {
         const p2 = saveMeta('S', idx, { description: 'ok', models: [], profiles: [], bgImage: '' });
         await vi.advanceTimersByTimeAsync(400);
         await expect(p2).resolves.toBeUndefined();
+    });
+
+    it('预设删除后放弃延迟落盘（避免用旧 body 重建已删预设）', async () => {
+        vi.useFakeTimers();
+        const idx = addPreset('T', { prompts: [], extensions: {} });
+        const p = saveMeta('T', idx, { description: 'x', models: [], profiles: [], bgImage: '' });
+        // 合并窗口内删除预设（删除路径只移除 openai_setting_names 条目）
+        delete openai_setting_names['T'];
+        await vi.advanceTimersByTimeAsync(400);
+        await p;
+        const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 });
