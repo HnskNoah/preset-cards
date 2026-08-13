@@ -7,4 +7,5 @@ export const event_types: Record<string, string> = {
 
 export const eventSource = {
     emit: async (_event: string, ..._args: unknown[]): Promise<boolean> => true,
+    on: (_event: string, _listener: (...args: any[]) => unknown): void => undefined,
 };

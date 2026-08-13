@@ -1,7 +1,7 @@
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, newProfileId, saveMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
-import { applyBaseProfile, applyModel, buildBaseSnapshot, captureExtra, captureModel, captureSampling, resolveParentStates, resolveProfileModel } from './promptToggle.js';
+import { applyBaseProfile, applyExtra, applyModel, applySampling, buildBaseSnapshot, captureExtra, captureModel, captureSampling, resolveParentStates, resolveProfileExtra, resolveProfileModel, resolveProfileSampling } from './promptToggle.js';
 import { applyDefaultExtra, applyDefaultModel, applyDefaultOriginalFields, applyDefaultSampling, defaultEnabledEntries } from './presetSnapshot.js';
 
 /** 构造 add base 的 fv3 主 profile（mounted 完整 + unusedIds + 采样/extra 差异）。 */
@@ -55,25 +55,33 @@ export async function resetProfileCore(
     idx: number,
 ): Promise<'reset' | 'no-default' | null> {
     if (isPromptDeltaProfile(profile)) {
-        const parentStates = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
+        const allProfiles = meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[];
+        const parentStates = resolveParentStates(profile, allProfiles);
         const parent = getProfile(meta, profile.baseId);
-        const parentModel = parent ? resolveProfileModel(parent, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]) : undefined;
+        const parentModel = parent ? resolveProfileModel(parent, allProfiles) : undefined;
         const defaultModel = meta.defaultModel;
         const model = parentModel ?? defaultModel;
+        const parentSampling = parent ? resolveProfileSampling(parent, allProfiles) : undefined;
+        const parentExtra = parent ? resolveProfileExtra(parent, allProfiles) : undefined;
         if (parentStates.length > 0) {
             applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'parent', 'Parent', parentStates));
             profile.changes = [];
-            delete profile.sampling;
             delete profile.order;
-            delete profile.extra;
             if (model) {
                 profile.model = model;
                 applyModel(preset, model);
             } else {
                 delete profile.model;
             }
+            // sampling/extra 与 model 对齐：继承父链解析态，无则回出厂基线
+            if (parentSampling) profile.sampling = parentSampling;
+            else delete profile.sampling;
+            if (parentExtra) profile.extra = parentExtra;
+            else delete profile.extra;
             applyDefaultSampling(preset, meta);
             applyDefaultExtra(preset, meta);
+            if (parentSampling) applySampling(preset, parentSampling);
+            if (parentExtra) applyExtra(preset, parentExtra);
         } else {
             if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
                 toastr.warning(L('No default baseline available'));

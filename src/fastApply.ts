@@ -56,6 +56,29 @@ function migrateLegacyPresetFields(preset: Preset): void {
     }
 }
 
+/** 预设缺 prompts / prompt_order 时，把运行时对应值清为 undefined，
+ * 交由 PromptManager.sanitizeServiceSettings（OAI_PRESET_CHANGED_AFTER 触发）重建 ST 默认值，
+ * 避免继承上一个预设的顺序 / 开关（ST 原生仅在 preset[key] 定义时才复制，openai.js onSettingsPresetChange）。 */
+export function clearInheritedPromptState(preset: Preset, settings: Record<string, unknown>): void {
+    if (preset.prompts === undefined) {
+        settings.prompts = undefined;
+    }
+    if (preset.prompt_order === undefined) {
+        settings.prompt_order = undefined;
+    }
+}
+
+/** 覆盖 ST 原生「AI 响应配置」下拉切换路径：OAI_PRESET_CHANGED_BEFORE 时对传入 preset 缺
+ * prompts / prompt_order 的场景清空运行时值，使 AFTER 阶段 PromptManager 重建默认而非继承。
+ * （卡片切换路径由 fastApplyPreset 自身同样调用 clearInheritedPromptState，两条路径归一。） */
+export function initPresetOrderNormalization(): void {
+    eventSource.on(event_types.OAI_PRESET_CHANGED_BEFORE, (arg: any) => {
+        const preset = arg?.preset as Preset | undefined;
+        const settings = arg?.settings as Record<string, unknown> | undefined;
+        if (preset && settings) clearInheritedPromptState(preset, settings);
+    });
+}
+
 export async function fastApplyPreset(presetIndex: number, presetName: string): Promise<void> {
     const preset = openai_settings[presetIndex] as Preset | undefined;
     if (!preset) return;
@@ -94,6 +117,12 @@ export async function fastApplyPreset(presetIndex: number, presetName: string): 
                 : preset[key];
         }
     }
+
+    // 预设缺 prompts / prompt_order 时清空运行时值，交由 PromptManager.sanitizeServiceSettings
+    // （OAI_PRESET_CHANGED_AFTER → PromptManager.js:818-819）重建 ST 默认 prompts / 默认顺序。
+    // 否则 ST 仅在 preset[key] 定义时才复制（openai.js:4935），会继承上一个预设的顺序/开关，
+    // 且后续 add base / saveMeta 会把该继承值永久写进本预设。
+    clearInheritedPromptState(preset, oai_settings);
 
     // 同步 ToolManager 工具递归上限（原生经 #tool_call_recurse_limit input 处理器设置，openai.js:6919）；
     // ?? 5 为防御性兜底（正常加载后必有该值；仅手工编辑预设为 null 时命中，语义优于原生 Number(null)）。

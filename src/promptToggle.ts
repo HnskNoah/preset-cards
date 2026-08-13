@@ -6,7 +6,7 @@ import { findOrderList, resolvePromptOrderTarget } from './promptOrder.js';
 // ─── re-export：采集侧（promptCapture.ts）与应用侧（promptApply.ts）的函数统一经本文件暴露，
 // ─── 保持既有 `from './promptToggle.js'` 调用方不变。
 export { PROMPT_FIELD_WHITELIST, promptFieldsEqual, captureSampling, applySampling, captureExtra, applyExtra, capturePromptFields, captureModel, applyModel, filterFields, mirrorFieldsToActivePreset, findPromptInPreset, EXTRA_EXCLUDED_KEYS } from './promptCapture.js';
-export { applyEntryState, buildDefaultSnapshotLock, applyResolvedPromptState, applyBaseProfile, applyProfileToPreset, resolveProfileModel } from './promptApply.js';
+export { applyEntryState, buildDefaultSnapshotLock, applyResolvedPromptState, applyBaseProfile, applyProfileToPreset, resolveProfileModel, resolveProfileSampling, resolveProfileExtra } from './promptApply.js';
 export { findOrderList, resolvePromptOrderTarget, syncPromptOrder, replaceTargetPromptOrder, pruneStaleOrderEntries, resolveProfilePrompts, resolveParentStates } from './promptOrder.js';
 
 /**

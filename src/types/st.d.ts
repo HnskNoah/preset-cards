@@ -35,6 +35,7 @@ declare module '@sillytavern/scripts/events' {
     };
     export const eventSource: {
         emit(event: string, ...args: unknown[]): Promise<boolean>;
+        on(event: string, listener: (...args: any[]) => unknown): void;
         [key: string]: unknown;
     };
 }

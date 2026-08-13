@@ -1,6 +1,6 @@
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
-import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptModel, PromptProfileEntry } from './meta.js';
+import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptModel, PromptProfileEntry, PromptSampling } from './meta.js';
 import { filterFields, applySampling, applyExtra, applyModel, capturePromptFields, findPromptInPreset } from './promptCapture.js';
 import { findOrderList, resolvePromptOrderTarget, replaceTargetPromptOrder, syncPromptOrder, resolveProfilePrompts, pruneStaleOrderEntries } from './promptOrder.js';
 import { snapshotPromptState } from './promptState.js';
@@ -83,11 +83,12 @@ export function applyBaseProfile(preset: Preset, profile: PromptBaseProfile): vo
     applyResolvedPromptState(preset, profile.prompts);
 }
 
-/** 解析 profile 的模型快照：优先自身 model，delta 未记录时沿父链回溯（含防环）。 */
-export function resolveProfileModel(
+/** 沿父链回溯解析 profile 的某个可选字段（自身未记录时上溯，含防环）。 */
+function resolveProfileField<T>(
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
-): PromptModel | undefined {
+    pick: (p: PromptBaseProfile | PromptDeltaProfile) => T | undefined,
+): T | undefined {
     if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return undefined;
     const seen = new Set<string>();
     let current: PresetProfile | undefined = profile;
@@ -95,7 +96,8 @@ export function resolveProfileModel(
         const id = String(current.id);
         if (seen.has(id)) return undefined;
         seen.add(id);
-        if (current.model) return current.model;
+        const value = pick(current);
+        if (value !== undefined) return value;
         if (isPromptDeltaProfile(current)) {
             current = getProfile({ profiles: allProfiles } as PresetMeta, current.baseId);
         } else {
@@ -103,6 +105,30 @@ export function resolveProfileModel(
         }
     }
     return undefined;
+}
+
+/** 解析 profile 的模型快照：优先自身 model，delta 未记录时沿父链回溯（含防环）。 */
+export function resolveProfileModel(
+    profile: PresetProfile,
+    allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+): PromptModel | undefined {
+    return resolveProfileField(profile, allProfiles, (p) => p.model);
+}
+
+/** 解析 profile 的采样快照：优先自身 sampling，delta 未记录时沿父链回溯（含防环）。 */
+export function resolveProfileSampling(
+    profile: PresetProfile,
+    allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+): PromptSampling | undefined {
+    return resolveProfileField(profile, allProfiles, (p) => p.sampling);
+}
+
+/** 解析 profile 的附加快照：优先自身 extra，delta 未记录时沿父链回溯（含防环）。 */
+export function resolveProfileExtra(
+    profile: PresetProfile,
+    allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
+): Record<string, any> | undefined {
+    return resolveProfileField(profile, allProfiles, (p) => p.extra);
 }
 
 /**
@@ -122,7 +148,13 @@ export function applyProfileToPreset(
     if (model) applyModel(preset, model);
 
     if (isPromptBaseProfile(profile)) {
-        applyResolvedPromptState(preset, resolveProfilePrompts(profile, allProfiles));
+        const states = resolveProfilePrompts(profile, allProfiles);
+        if (states.length === 0) {
+            // 空解析（如导入锚点 base 的 prompts:[]）绝不 applyResolvedPromptState([])，那会清空目标 prompt_order
+            toastr.warning(L('No prompts to apply'));
+        } else {
+            applyResolvedPromptState(preset, states);
+        }
         if (profile.sampling) applySampling(preset, profile.sampling);
         if (profile.extra) applyExtra(preset, profile.extra);
     } else if (isPromptDeltaProfile(profile)) {
