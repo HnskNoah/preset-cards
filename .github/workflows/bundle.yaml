@@ -100,12 +100,13 @@ jobs:
           cp -f "$ROOT/edit.html" "$TMP/edit.html"
           cp -f "$ROOT/profile-editor.html" "$TMP/profile-editor.html"
           cp -rf "$ROOT/llm-logos" "$TMP/llm-logos"
+          cp -f "$ROOT/README.md" "$TMP/README.md"
 
           git fetch origin ts
           git checkout -B ts-sync origin/ts
 
           rm -rf dist llm-logos
-          rm -f manifest.json style.css cards.html edit.html profile-editor.html
+          rm -f manifest.json style.css cards.html edit.html profile-editor.html README.md
           cp -f "$TMP/manifest.json" manifest.json
           cp -rf "$TMP/dist" dist
           cp -f "$TMP/style.css" style.css
@@ -113,6 +114,7 @@ jobs:
           cp -f "$TMP/edit.html" edit.html
           cp -f "$TMP/profile-editor.html" profile-editor.html
           cp -rf "$TMP/llm-logos" llm-logos
+          cp -f "$TMP/README.md" README.md
           rm -rf "$TMP"
 
           git add -A
