@@ -16,8 +16,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  # ── 分支 push：完整构建 + 打 tag + release 同步 ts ──
-  bundle:
+  # ── dev-ts push：debug 构建 + 打 vX.Y.Z-Debug tag，不发布 ──
+  debug:
     if: github.ref_type == 'branch' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -26,18 +26,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # 识别提交类型：commit message 含 [release] → release 发版（不递增版本）；否则 debug（递增 patch）
-      - id: version_check
-        shell: bash
-        run: |-
-          message=$(git log -n 1 --pretty=format:"%s")
-          if [[ $message == *"[release]"* ]]; then
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # 检测源代码是否变更（仅影响 JS 构建的源文件）
+      # 检测源代码变更（仅影响 JS 构建的源文件）
       - id: code_changed
         shell: bash
         run: |-
@@ -53,88 +42,36 @@ jobs:
           node-version: 22
       - run: npm ci
       - run: npm run typecheck
-      # release 始终构建；debug 仅源代码变更时构建
       - run: npm run build
-        if: steps.version_check.outputs.is_release == 'true' || steps.code_changed.outputs.changed == 'true'
+        if: steps.code_changed.outputs.changed == 'true'
 
-      # 版本处理：debug → patch 递增并写回 manifest/package.json；release → 保持当前版本不变
+      # 版本处理：patch 递增并写回 manifest/package.json
       - id: bump_version
         shell: bash
         run: |-
           VERSION=$(node -p "require('./manifest.json').version")
-          NEW="$VERSION"
-          if [[ "${{ steps.version_check.outputs.is_release }}" != "true" ]]; then
-            IFS='.' read -r MAJ MIN PAT <<< "$VERSION"
-            PAT=$((PAT+1))
-            NEW="$MAJ.$MIN.$PAT"
-            node -e "const f='manifest.json';const j=require('./'+f);j.version='$NEW';require('fs').writeFileSync(f,JSON.stringify(j,null,4)+'\n')"
-            node -e "const f='package.json';const j=require('./'+f);j.version='$NEW';require('fs').writeFileSync(f,JSON.stringify(j,null,4)+'\n')"
-          fi
+          IFS='.' read -r MAJ MIN PAT <<< "$VERSION"
+          PAT=$((PAT+1))
+          NEW="$MAJ.$MIN.$PAT"
+          node -e "const f='manifest.json';const j=require('./'+f);j.version='$NEW';require('fs').writeFileSync(f,JSON.stringify(j,null,4)+'\n')"
+          node -e "const f='package.json';const j=require('./'+f);j.version='$NEW';require('fs').writeFileSync(f,JSON.stringify(j,null,4)+'\n')"
           echo "new_version=$NEW" >> "$GITHUB_OUTPUT"
 
-      # 提交 dist（debug 时含版本递增；release 时仅 dist）
       - uses: EndBug/add-and-commit@v9.1.3
         with:
           default_author: github_actions
           message: '[bot] Bundle v${{ steps.bump_version.outputs.new_version }}'
           add: 'manifest.json package.json'
 
-      # 打 tag：release → vX.Y.Z；debug → vX.Y.Z-Debug
-      - id: tag
+      - name: Push debug tag
         shell: bash
         run: |-
-          TAG="v${{ steps.bump_version.outputs.new_version }}"
-          if [[ "${{ steps.version_check.outputs.is_release }}" != "true" ]]; then
-            TAG="$TAG-Debug"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-      - name: Push tag
-        shell: bash
-        run: |-
-          TAG="${{ steps.tag.outputs.tag }}"
+          TAG="v${{ steps.bump_version.outputs.new_version }}-Debug"
           git tag "$TAG"
           git push origin "$TAG"
 
-      # release 时同步产物到 ts（debug 跳过）
-      - name: Sync artifacts to ts
-        if: steps.version_check.outputs.is_release == 'true'
-        shell: bash
-        run: |-
-          set -e
-          ROOT="$GITHUB_WORKSPACE"
-          TMP="$(mktemp -d)"
-          cp -f "$ROOT/manifest.json" "$TMP/manifest.json"
-          cp -rf "$ROOT/dist" "$TMP/dist"
-          cp -f "$ROOT/style.css" "$TMP/style.css"
-          cp -f "$ROOT/cards.html" "$TMP/cards.html"
-          cp -f "$ROOT/edit.html" "$TMP/edit.html"
-          cp -f "$ROOT/profile-editor.html" "$TMP/profile-editor.html"
-          cp -rf "$ROOT/llm-logos" "$TMP/llm-logos"
-
-          git fetch origin ts
-          git checkout -B ts-sync origin/ts
-
-          rm -rf dist llm-logos
-          rm -f manifest.json style.css cards.html edit.html profile-editor.html
-          cp -f "$TMP/manifest.json" manifest.json
-          cp -rf "$TMP/dist" dist
-          cp -f "$TMP/style.css" style.css
-          cp -f "$TMP/cards.html" cards.html
-          cp -f "$TMP/edit.html" edit.html
-          cp -f "$TMP/profile-editor.html" profile-editor.html
-          cp -rf "$TMP/llm-logos" llm-logos
-          rm -rf "$TMP"
-
-          git add -A
-          if ! git diff --cached --quiet; then
-            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "[bot] Sync artifacts"
-            git push origin HEAD:ts
-          else
-            echo "no artifact changes"
-          fi
-
-  # ── tag push：只同步 ts（release 同步、debug 不同步），不构建 ──
-  sync-on-tag:
+  # ── release tag push：从 tag 源码构建，同步产物到 ts ──
+  release:
     if: github.ref_type == 'tag' && !contains(github.ref_name, '-Debug')
     runs-on: ubuntu-latest
     steps:
@@ -143,14 +80,13 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
 
-      # 构建（dist 不跟踪，tag 从源码构建）
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm ci
+      - run: npm run typecheck
       - run: npm run build
 
-      # 从构建产物同步到 ts
       - name: Sync artifacts to ts
         shell: bash
         run: |-
