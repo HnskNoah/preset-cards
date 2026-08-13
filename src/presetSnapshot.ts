@@ -88,7 +88,6 @@ export function applyDefaultSampling(preset: Preset, meta: PresetMeta): void {
 }
 
 // 把出厂 extra 基线应用回 preset（reset 到默认时还原首次 add base 前的附加键值，保留 extensions）。
-// profile 自身 extra 不在此改变——reset 仅还原预设，v1 导入 profile 的 extra 保留存档不变。
 export function applyDefaultExtra(preset: Preset, meta: PresetMeta): void {
     if (!meta.defaultExtra) return;
     const ext = preset.extensions;

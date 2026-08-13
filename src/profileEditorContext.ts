@@ -151,7 +151,7 @@ export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile,
         visited.add(current.id);
         chain.unshift(current);
         if (chain.length > 50) break; // 硬上限，防御极端损坏数据
-        // 当前节点若是 delta，沿 baseId 向上找父；base/v1 或父缺失/非 base/delta 即到根
+        // 当前节点若是 delta，沿 baseId 向上找父；base 或父缺失/非 base/delta 即到根
         const node = getProfile(meta, current.id);
         if (!node || !isPromptDeltaProfile(node)) break;
         const parent = getProfile(meta, node.baseId);

@@ -263,7 +263,7 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         const choice = await chooseProfileSaveTarget();
         if (!choice) return;
 
-        // V1：create 的名称输入必须先于缓冲应用——用户取消时不得改写运行时状态
+        // create 的名称输入必须先于缓冲应用——用户取消时不得改写运行时状态
         let deltaName: string | null = null;
         if (choice === 'create') {
             deltaName = await Popup.show.input(L('Derived profile name:'), '');

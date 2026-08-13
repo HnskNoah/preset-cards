@@ -343,7 +343,7 @@ export async function showConciseProfilesModal(ctx: CardsContext, card: JQuery<H
     callGenericPopup(container, POPUP_TYPE.TEXT, '', { wide: false, large: false });
 }
 
-/** 导入 profile 文件：读取 → JSON 校验 → 取名 → 迁移合并 → 落盘 → 刷新。file input 由调用方提供。 */
+/** 导入 profile 文件：读取 → JSON 校验 → 取名 → 合并 → 落盘 → 刷新。file input 由调用方提供。 */
 export async function importProfileFile(ctx: CardsContext, name: string, idx: number, file: File): Promise<void> {
     let parsed: Record<string, any>;
     try {
@@ -352,10 +352,8 @@ export async function importProfileFile(ctx: CardsContext, name: string, idx: nu
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
             throw new Error('Imported configuration is not a JSON object');
         }
-        // fv3 base/delta/tree 载荷（有 kind）用 schema 校验，防畸形条目入库后崩溃；v1 快照（无 kind）走迁移分支。
-        if (parsed.kind !== undefined) {
-            assertV3ImportPayload(parsed);
-        }
+        // fv3 base/delta/tree 载荷用 schema 校验，防畸形条目入库后崩溃；旧版 v1/v2 须先用 migrate-to-v3 转换。
+        assertV3ImportPayload(parsed);
     } catch (err) {
         console.error(err);
         toastr.error(L('Failed to parse configuration file'));

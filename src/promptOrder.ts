@@ -107,7 +107,7 @@ export function resolveProfilePrompts(
         return arranged;
     }
 
-    // 非 delta（如 v1 全量快照或未知类型）无父链可解析，安全返回空，绝不抛错
+    // 非 delta（未知/畸形类型）无父链可解析，安全返回空，绝不抛错
     if (!isPromptDeltaProfile(profile)) {
         return [];
     }

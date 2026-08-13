@@ -226,7 +226,7 @@ export function buildPresetList(): PresetCardModel[] {
             const row: ProfileRow = {
                 id: String(p.id),
                 name: p.name,
-                isV1: !isPromptBaseProfile(p) && !isPromptDeltaProfile(p),
+                isV1: false,
                 depth: node.depth,
                 entries,
                 isActiveProfile: !!activeRef && activeRef.presetName === name && activeRef.profileId === String(p.id),
