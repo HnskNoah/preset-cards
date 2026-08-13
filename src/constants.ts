@@ -1,5 +1,7 @@
 import { chat_completion_sources } from '@sillytavern/scripts/openai';
 
+// Release force rebuild trigger
+
 export let EXTENSION_NAME = 'preset-cards';
 try {
     const url = new URL(import.meta.url);
