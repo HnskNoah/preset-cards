@@ -386,16 +386,25 @@ async function parseImportFile(file: File): Promise<Record<string, any> | null> 
     }
 }
 
-/** 选择 json 文件（promise 化；用户取消选择时事件不触发，不再 resolve）。 */
+/** 选择 json 文件（promise 化）。选中文件 resolve(File)；取消/超时 resolve(null)，保证调用方 async 链必然结束。 */
 export function pickJsonFile(): Promise<File | null> {
     return new Promise((resolve) => {
+        let settled = false;
+        const settle = (file: File | null) => {
+            if (settled) return;
+            settled = true;
+            input.onchange = null;
+            input.oncancel = null;
+            window.clearTimeout(timer);
+            resolve(file);
+        };
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.json';
-        input.onchange = () => {
-            const file = input.files?.[0] ?? null;
-            resolve(file);
-        };
+        input.onchange = () => settle(input.files?.[0] ?? null);
+        input.oncancel = () => settle(null);
+        // 兜底：个别浏览器不支持 file input 的 cancel 事件时，超时后结束悬空 async 链
+        const timer = window.setTimeout(() => settle(null), 60_000);
         input.click();
     });
 }
