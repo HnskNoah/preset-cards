@@ -1,0 +1,114 @@
+// core/store EditorStore：单个 profile 编辑态（staged diff / undo / redo）。
+// 零 ST 依赖、纯 reducer；commit 由 controller/adapter 消费。
+import type { PresetSnapshot, PromptStateChange } from '../domain/types.js';
+
+/** diff 结构复用 v3 Delta 形状（changes + order + topLevel）。 */
+export interface EditorDiff {
+    changes: PromptStateChange[];
+    order?: string[];
+    topLevel?: Record<string, unknown>;
+}
+
+export interface EditorState {
+    nodeId: string;
+    snapshot: PresetSnapshot;
+    staged: EditorDiff;
+    undoStack: EditorDiff[];
+    redoStack: EditorDiff[];
+    dirty: boolean;
+    readOnly: boolean;
+}
+
+export type EditorCommand =
+    | { type: 'EDIT'; identifier: string; fields: Record<string, unknown> }
+    | { type: 'UNDO' }
+    | { type: 'REDO' }
+    | { type: 'COMMIT' };
+
+export interface EditorStore {
+    getState(): EditorState;
+    dispatch(command: EditorCommand): void;
+    subscribe(listener: () => void): () => void;
+}
+
+export function createEditorStore(initial: EditorState): EditorStore {
+    let state = initial;
+    const listeners = new Set<() => void>();
+
+    function reducer(current: EditorState, command: EditorCommand): EditorState {
+        switch (command.type) {
+            case 'EDIT': {
+                const changes = mergeFieldChange(current.staged.changes, command.identifier, command.fields);
+                const staged: EditorDiff = { ...current.staged, changes };
+                return {
+                    ...current,
+                    staged,
+                    undoStack: [...current.undoStack, current.staged],
+                    redoStack: [],
+                    dirty: isDirty(staged),
+                };
+            }
+            case 'UNDO': {
+                if (current.undoStack.length === 0) return current;
+                const staged = current.undoStack[current.undoStack.length - 1];
+                return {
+                    ...current,
+                    staged,
+                    undoStack: current.undoStack.slice(0, -1),
+                    redoStack: [...current.redoStack, current.staged],
+                    dirty: isDirty(staged),
+                };
+            }
+            case 'REDO': {
+                if (current.redoStack.length === 0) return current;
+                const staged = current.redoStack[current.redoStack.length - 1];
+                return {
+                    ...current,
+                    staged,
+                    undoStack: [...current.undoStack, current.staged],
+                    redoStack: current.redoStack.slice(0, -1),
+                    dirty: isDirty(staged),
+                };
+            }
+            case 'COMMIT':
+                return { ...current, undoStack: [], redoStack: [], staged: { changes: [] }, dirty: false };
+            default:
+                return current;
+        }
+    }
+
+    return {
+        getState: () => state,
+        dispatch: (command) => {
+            const next = reducer(state, command);
+            if (next === state) return;
+            state = next;
+            for (const listener of [...listeners]) listener();
+        },
+        subscribe: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+    };
+}
+
+/** 合并某 identifier 的值字段变更：已有 change 则合并 fields，否则新增。 */
+function mergeFieldChange(
+    changes: PromptStateChange[],
+    identifier: string,
+    fields: Record<string, unknown>,
+): PromptStateChange[] {
+    const existing = changes.find((c) => c.identifier === identifier);
+    if (existing) {
+        return changes.map((c) => (
+            c.identifier === identifier ? { ...c, fields: { ...c.fields, ...fields } } : c
+        ));
+    }
+    return [...changes, { identifier, fields }];
+}
+
+function isDirty(staged: EditorDiff): boolean {
+    return staged.changes.length > 0
+        || (staged.order !== undefined && staged.order.length > 0)
+        || (staged.topLevel !== undefined && Object.keys(staged.topLevel).length > 0);
+}
