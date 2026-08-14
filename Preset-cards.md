@@ -24,6 +24,7 @@
 - **v1（原生 JS）**：早期实现，profile 为「整个预设对象深拷贝快照」存于 `profile.settings`，加载时 `Object.assign` 拍回设置——无 Base/Delta 派生、无稀疏差异。
 - **v2**：引入 base/delta 概念，但为全量快照 / 非稀疏差异存储。
 - **v3（当前，TypeScript + Vite）**：重构为模块化 TS 架构（`src/` 下按职责拆分，见 README「源码结构」），引入稀疏差异、父链解析、Profile 编辑器、会话缓冲单向数据流。**v1/v2 旧数据仅原样保留在 metadata，不显示、不应用、不导入**；旧文件须用 `tools/migrate-to-v3.ts` 转换。
+- **新架构（定稿，未实施，本地设计稿见 `docs/current/architecture.md`）**：以「对用户透明无感」为最高原则，设计 core（零 ST 依赖）/ adapter（ST 桥）/ ui（薄投影）三层、PresetStore + EditorStore 双 Store、ConfigNode 统一 Base/Delta（磁盘 v3 不变，codec 双向转换）；落地采用功能切片（codec → core 纯函数 → 双 Store → 导入分流）。
 - **当前实现已包含**：Profile 编辑器弹窗、会话缓冲（`sessionEdits`）+ Commit 落盘、拖拽重排纳入 staged diff、`defaultSnapshot` 出厂基线、快捷应用路径 `fastApply.ts`、对外 API `window.presetCards`、名字自动换行（超长重复串保留省略号）、面包屑祖先链压缩折叠、`L()` 跟随 ST 语言回退链。这些在 README「功能特性」「第三方集成」均有完整描述。
 
 ## 构建与安装
@@ -45,6 +46,6 @@ npm test           # 运行 vitest 单元测试
 | `AGENTS.md` | 开发 / CI / 分支 / PR / gh 代理约定（命令级） |
 | `CODING_GUIDELINES.md` | 代码结构与可维护性规范（规模阈值 / context 对象 / 纯函数下沉 / 防循环依赖） |
 | `UNFIXED_ISSUES.md` | 未修 bug 归档（无法写入 GitHub issue #39，token 只读） |
-| `docs/` | 本地设计记录（如 `docs/import-flow-design.md` 统一导入设计稿） |
+| `docs/` | 本地设计记录，按状态分类（`current/` 当前有效、`plans/` 已定稿未实施、`historical/` 已实现/过时、`archive/` 彻底过时）；入口见 `docs/README.md`。如 `docs/current/architecture.md` 新架构定稿、`docs/plans/import-flow-design.md` 导入流程设计稿 |
 
 > 交接新 agent 时，以上本地文档须随仓库目录一并提供（不入库）。

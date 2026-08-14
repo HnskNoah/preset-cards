@@ -12,7 +12,7 @@
 - **拖拽重排**：重排通过 `profile.order` 纳入 staged diff，与开关 / 值编辑统一 Commit 落盘，支持逐条撤销；脏标记以弹窗打开时的原始顺序为基准，拖回原位自动清除。
 - **system_prompt / marker 条目**：不显示开关与内容编辑入口（内容由 ST 管理），仅普通 prompt 可切换、可编辑；允许调整 mounted / unused，操作前必须确认。
 - **内联值编辑**：编辑表单提供 Name、Role + Position（同一行）、Injection Depth（仅 position=2 显示）与全宽 Content 文本域；position 下拉含 **Relative(0) / In-chat(1) / In Chat Absolute Depth(2)**；marker 条目内容框禁用。值差异写入会话缓冲，仅记录净变化字段。
-- **导入导出**：导出统一为「**完整 preset JSON**」（含预设本体 + `extensions['preset_cards']`，数据自动脱敏剔除连接 / 凭据字段）。三个导出入口行为：**卡片右上角 / 头部「导出全部配置文件」**导出该预设**全部** v3 profile；**单 profile「导出配置」**只导出该 profile **及其父链**（delta 需真实父链才能正确解析），父链外的 profile 不导出。导入目前双入口（头部 ST 原生还原 / 卡片并入 profiles），合并为单入口按类型分流的改造见「导入导出与旧版迁移」节。v1/v2 需先用迁移工具转换（见下）。
+- **导入导出**：导出统一为「**完整 preset JSON**」（含预设本体 + `extensions['preset_cards']`，数据自动脱敏剔除连接 / 凭据字段）。三个导出入口行为：**卡片右上角 / 头部「导出全部配置文件」**导出该预设**全部** v3 profile；**单 profile「导出配置」**只导出该 profile **及其父链**（delta 需真实父链才能正确解析），父链外的 profile 不导出。导入目前双入口（头部 ST 原生还原 / 卡片并入 profiles）；已定稿改造为「头部按类型分流 + 卡片保留为手动并入」，见「导入导出与旧版迁移」节。v1/v2 需先用迁移工具转换（见下）。
 - **重置**：Delta 回退到上级（Base 或上层 Delta），Base 回退到隐藏的默认基准（`defaultSnapshot`）。
 - **Commit 二选一**：编辑器顶部的 Commit 让用户选择「更新当前配置」或「新建为子配置（派生）」；delta 更新的差异基线用**父链解析**（`resolveParentStates`），未编辑的已存差异原样保留。
 - **清除值变更**：一键删除该条目的 `fields` 并**完全撤销**——同时还原运行时值、同步活动预设、清除本次会话编辑记录（`sessionEdits`）。
@@ -60,7 +60,7 @@ npm test           # 运行 vitest 单元测试
 ## 导入导出与旧版迁移
 
 - **导入（现状）**：两个入口——头部「导入预设」走 ST 原生还原完整预设；卡片「导入配置」（`importProfileFile`）提取 v3 profiles 并入当前预设（完整 preset 文件也走此路，纯追加不去重）。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 通过 idMap 重映射；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点。v1/v2 需先迁移（见下）。
-- **导入（设计目标，未实现）**：合并为头部单一入口按类型分流（v3 profile 弹窗选预设并入 / 完整 preset 弹窗并入或新建 / 其余回退 ST 原生）。设计稿见 `docs/import-flow-design.md`（docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供该文件）。
+- **导入（设计定稿，未实现）**：头部「导入预设」由插件接管文件读取，按类型分流——v3 profile 弹窗选预设并入 / 完整 preset 弹窗并入或新建 / 其余回退 ST 原生；卡片「导入配置」保留为**手动并入**入口（完整 preset 也接受，但明确只并 profiles）。设计稿见 `docs/current/architecture.md` 与 `docs/plans/import-flow-design.md`（docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供这些文件）。
 - **导出**：统一为导出完整 preset JSON（`exportPresetFile`），脱敏剔除 reverse_proxy / proxy_password / custom_url / azure / workers_ai 等连接与凭据字段。**卡片右上角 / 头部「导出全部」**导出全部 profiles；**单 profile「导出配置」**只导出该 profile 及其父链（`collectAncestorProfileIds`），父链外 profile 不导出。导入侧从该 JSON 的 `extensions['preset_cards']` 提取 profiles 并入当前预设。
 - **v1 / v2 迁移**：旧版 profile 文件**不会**在导入时自动迁移，需先用独立工具转换：
 
@@ -103,6 +103,8 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 ```
 
 `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。
+
+> **新架构定稿（未实施，见 `docs/current/architecture.md` 本地文档）**：对外 API 将升级为 `listProfiles(presetName?)`（返回带 `presetName` + `profileName` 的 `ProfileRef[]`）与「切换并激活」语义的 `loadProfile`（加载 + 持久化 + 切 ST 当前预设 + 记 active + 发事件），`onProfileChanged` 回调参数同步升级。当前代码仍为上方旧 API。
 
 ## 开发约定
 
