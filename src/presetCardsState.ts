@@ -12,7 +12,7 @@ import { applyProfileToPreset, resolveProfileModel } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
 import { lockDefaultSnapshot } from './presetSnapshot.js';
 import { applyBufferedEdits, clearBufferedForName } from './presetBuffers.js';
-import { chooseFromOptions, classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles } from './importExport.js';
+import { chooseFromOptions, classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles, orderPresetCandidates } from './importExport.js';
 import { assertV3ImportPayload } from './profileSchema.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
@@ -465,17 +465,20 @@ async function mergeParsedToPreset(
     }
 }
 
-/** 选择并入目标预设（列出全部现有预设；同名候选排首位；无预设时 toast 并返回 null）。 */
+/** 选择并入目标预设（列出全部现有预设；同名候选存在时排首位；无预设时 toast 并返回 null）。 */
 async function chooseTargetPreset(preferredFirst?: string): Promise<{ name: string; idx: number } | null> {
     const names = Object.keys(openai_setting_names);
     if (names.length === 0) {
         toastr.warning(L('No presets available to merge into'));
         return null;
     }
-    const candidates = preferredFirst ? [preferredFirst, ...names.filter((n) => n !== preferredFirst)] : names;
+    // 同名候选只有真实存在时才排首位——文件名叫 A 但没有任何预设叫 A 时，不得伪造 A 选项
+    const candidates = orderPresetCandidates(names, preferredFirst);
     const name = await chooseFromOptions<string>(L('Select target preset'), candidates.map((n) => [n, n]));
     if (!name) return null;
-    return { name, idx: openai_setting_names[name] };
+    const idx = openai_setting_names[name];
+    if (idx === undefined) return null;
+    return { name, idx };
 }
 
 /** 导入 profile 文件（卡片「导入配置」入口）：目标 = 当前卡片对应预设。 */

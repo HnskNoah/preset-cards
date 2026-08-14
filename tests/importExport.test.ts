@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles } from '../src/importExport.js';
+import { classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles, orderPresetCandidates } from '../src/importExport.js';
 import { makeBaseProfile, makeDeltaProfile } from '../src/profileActions.js';
 
 const baseProfile = makeBaseProfile({
@@ -208,5 +208,20 @@ describe('isCrossPresetImport', () => {
     it('v3 profile payloads always need confirmation (no source preset identity)', () => {
         expect(isCrossPresetImport({ kind: 'prompt_base', formatVersion: 3, id: 'b1', name: 'Base', prompts: [] }, 'A')).toBe(true);
         expect(isCrossPresetImport({ kind: 'prompt_tree', formatVersion: 3, profiles: [baseProfile] }, 'A')).toBe(true);
+    });
+});
+
+describe('orderPresetCandidates', () => {
+    it('puts an existing same-name preset first', () => {
+        expect(orderPresetCandidates(['B', 'A', 'C'], 'A')).toEqual(['A', 'B', 'C']);
+    });
+
+    it('does not fabricate a same-name option when no preset has that name', () => {
+        expect(orderPresetCandidates(['B', 'C'], 'A')).toEqual(['B', 'C']);
+    });
+
+    it('returns a copy of the original list without preferredFirst', () => {
+        expect(orderPresetCandidates(['B', 'A'])).toEqual(['B', 'A']);
+        expect(orderPresetCandidates([])).toEqual([]);
     });
 });

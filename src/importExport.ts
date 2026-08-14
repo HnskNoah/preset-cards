@@ -330,3 +330,14 @@ export function isCrossPresetImport(parsed: Record<string, unknown>, targetName:
     const sourceName = typeof parsed.name === 'string' ? parsed.name : undefined;
     return sourceName !== targetName;
 }
+
+/**
+ * 目标预设候选排序：同名候选**真实存在**时排首位；不存在时不得伪造该选项。
+ * 文件名叫 A 但没有任何预设叫 A 时，返回原列表，避免出现选不到的 A 选项。
+ */
+export function orderPresetCandidates(names: string[], preferredFirst?: string): string[] {
+    if (preferredFirst && names.includes(preferredFirst)) {
+        return [preferredFirst, ...names.filter((n) => n !== preferredFirst)];
+    }
+    return [...names];
+}
