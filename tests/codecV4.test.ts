@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addProfileNode, createPresetCardsFile, deleteNode } from '../src/core/codec/v4.js';
+import { addProfileNode, createPresetCardsFile, deleteNode, updateProfileNode } from '../src/core/codec/v4.js';
 import type { PresetSnapshot } from '../src/core/domain/types.js';
 
 /**
@@ -115,5 +115,28 @@ describe('codec v4: deleteNode (cascade)', () => {
 
         expect(next.nodes.map((n) => n.id)).toEqual(['root']);
         expect(next.presets[0].profileIds).toEqual([]);
+    });
+});
+
+describe('codec v4: updateProfileNode', () => {
+    it('replaces the snapshot and recomputes diff against the parent snapshot', () => {
+        const preset: PresetSnapshot = {
+            name: 'P',
+            prompts: [{ identifier: 'a', content: 'A', enabled: true }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
+        };
+        const file = createPresetCardsFile(preset, 'key-1');
+        const withA = addProfileNode(file, { id: 'A', name: 'A', presetSnapshot: preset });
+        const updated: PresetSnapshot = {
+            name: 'P',
+            prompts: [{ identifier: 'a', content: 'B', enabled: true }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
+        };
+
+        const next = updateProfileNode(withA, 'A', updated);
+        const a = next.nodes.find((n) => n.id === 'A')!;
+        expect(a.presetSnapshot.prompts).toEqual([{ identifier: 'a', content: 'B', enabled: true }]);
+        // A 相对 root 的 diff 重算:content A → B
+        expect(a.diff).toEqual({ changes: [{ identifier: 'a', fields: { content: 'B' } }] });
     });
 });

@@ -1,5 +1,6 @@
 // core/codec v4：preset-cards.json 文件格式（零 ST 依赖，纯函数）。
 import type { PresetCardsFile, PresetSnapshot, V4ProfileNode } from '../domain/types.js';
+import { diffSnapshot } from '../diff/snapshot.js';
 
 export const PRESET_CARDS_MARKER = 'preset-cards-v4';
 
@@ -51,6 +52,31 @@ export function deleteNode(file: PresetCardsFile, nodeId: string): PresetCardsFi
             profileIds: p.profileIds.filter((id) => !deleted.has(id)),
         })),
         nodes: file.nodes.filter((n) => !deleted.has(n.id)),
+    };
+}
+
+/** 在 v4 文件中更新节点快照：替换 presetSnapshot，并相对父节点（root 或 parentId）重算 diff。 */
+export function updateProfileNode(
+    file: PresetCardsFile,
+    nodeId: string,
+    newSnapshot: PresetSnapshot,
+): PresetCardsFile {
+    const snapshot = stripPresetCardsContainer(newSnapshot);
+    return {
+        ...file,
+        nodes: file.nodes.map((n) => {
+            if (String(n.id) !== String(nodeId)) return n;
+            const parent = n.parentId !== undefined
+                ? file.nodes.find((p) => String(p.id) === String(n.parentId))
+                : undefined;
+            const parentSnapshot = parent ? parent.presetSnapshot : undefined;
+            const diff = parentSnapshot ? diffSnapshot(parentSnapshot, snapshot) : undefined;
+            return {
+                ...n,
+                presetSnapshot: snapshot,
+                ...(diff !== undefined ? { diff } : {}),
+            };
+        }),
     };
 }
 
