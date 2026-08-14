@@ -434,7 +434,7 @@ function handOffToNative(file: File): void {
     handFileToNativePresetImport(file);
 }
 
-/** 把已解析的导入内容并入指定目标预设（风险确认 → 取名 → 合并去重 → 有新条目才锁基线/落盘 → 刷新；卡片/头部共用核心）。 */
+/** 把已解析的导入内容并入指定目标预设（风险确认 → 合并去重 → 有新条目才取名/锁基线/落盘 → 刷新；卡片/头部共用核心）。 */
 async function mergeParsedToPreset(
     ctx: CardsContext,
     targetName: string,
@@ -449,20 +449,26 @@ async function mergeParsedToPreset(
             if (!confirmed) return false;
         }
 
-        const profileName = await Popup.show.input(L('Configuration name:'), defaultName, defaultName);
-        if (!profileName) return false;
-
-        // 先合并去重：全部重复时不再锁基线/落盘，避免无意义的写盘和「配置已保存」误报
+        // 先合并去重：全部重复时直接提示，不弹「配置名称」框
         const preset = openai_settings[targetIdx] as Preset;
         const meta = readMeta(preset);
-        const { profiles, warnings, addedCount } = mergeImportedProfiles(parsed, meta.profiles, profileName, meta);
+        const { profiles, warnings, addedCount } = mergeImportedProfiles(parsed, meta.profiles, defaultName, meta);
         for (const warning of warnings) toastr.warning(warning);
         if (addedCount === 0) {
             toastr.info(L('No new configurations imported'));
             return true;
         }
 
-        // 有新增条目：先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked），再副本事务落盘
+        // 有新增条目：弹配置名；用户改名则更新最后一个新增 profile 的名字（新增项在 profiles 末尾追加）
+        const profileName = await Popup.show.input(L('Configuration name:'), defaultName, defaultName);
+        if (!profileName) return false;
+        if (profileName !== defaultName && addedCount > 0) {
+            const added = profiles.slice(-addedCount);
+            const target = added[added.length - 1];
+            if (target) target.name = profileName;
+        }
+
+        // 先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked），再副本事务落盘
         await lockDefaultSnapshot(preset, targetName, targetIdx);
         const lockedMeta = readMeta(preset);
         const ok = await persistMetaTransaction(lockedMeta, (m) => ({ ...m, profiles }), targetName, targetIdx);
