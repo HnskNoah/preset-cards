@@ -1,0 +1,54 @@
+// core/codec v4：preset-cards.json 文件格式（零 ST 依赖，纯函数）。
+import type { PresetCardsFile, PresetSnapshot, V4ProfileNode } from '../domain/types.js';
+
+export const PRESET_CARDS_MARKER = 'preset-cards-v4';
+
+/** root 节点固定 id：导入时原始快照的隐藏基线。 */
+export const ROOT_NODE_ID = 'root';
+
+/** 从完整 preset 生成 v4 文件对象：root 保存导入时快照（剔除 preset_cards 容器），presets 记录归属。 */
+export function createPresetCardsFile(preset: PresetSnapshot, key: string): PresetCardsFile {
+    const root: V4ProfileNode = {
+        id: ROOT_NODE_ID,
+        name: 'root',
+        presetSnapshot: stripPresetCardsContainer(preset),
+    };
+    return {
+        version: 4,
+        presets: [{ key, profileIds: [] }],
+        nodes: [root],
+    };
+}
+
+/** 快照不应包含插件自己的 preset_cards 容器（避免自引用/递归膨胀）。 */
+export function stripPresetCardsContainer(preset: PresetSnapshot): PresetSnapshot {
+    const clone = structuredClone(preset);
+    if (clone.extensions && typeof clone.extensions === 'object') {
+        const ext = { ...clone.extensions };
+        delete ext.preset_cards;
+        clone.extensions = ext;
+    }
+    return clone;
+}
+
+/** 在 v4 文件中新增一个 profile 节点（默认挂到 root，全量快照 + 相对 root 的 diff 由调用方/Phase 2 计算）。 */
+export function addProfileNode(
+    file: PresetCardsFile,
+    node: { id: string; name: string; presetSnapshot: PresetSnapshot; parentId?: string; diff?: unknown },
+): PresetCardsFile {
+    return {
+        ...file,
+        presets: file.presets.map((p, i) => (i === 0 ? { ...p, profileIds: [...p.profileIds, node.id] } : p)),
+        nodes: [
+            ...file.nodes,
+            {
+                id: node.id,
+                name: node.name,
+                parentId: node.parentId ?? ROOT_NODE_ID,
+                presetSnapshot: stripPresetCardsContainer(node.presetSnapshot),
+                ...(node.diff !== undefined ? { diff: node.diff } : {}),
+            },
+        ],
+    };
+}
+

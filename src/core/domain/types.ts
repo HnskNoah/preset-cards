@@ -113,3 +113,32 @@ export interface PromptDefaultSnapshotEntry {
 
 /** v3 profile 联合类型（base / delta）。 */
 export type PresetProfile = PromptBaseProfile | PromptDeltaProfile;
+
+/**
+ * v4 完整 preset 快照：结构化克隆的 preset 本体 + 其他扩展，
+ * 但不含 `extensions['preset_cards']`（插件容器/特征值不是用户预设运行状态）。
+ */
+export interface PresetSnapshot {
+    name?: string;
+    prompts?: any[];
+    prompt_order?: any[];
+    extensions?: Record<string, any>;
+    [key: string]: any;
+}
+
+/** v4 profile 节点：全量快照 + parentId 树 + 相对 root/父节点的差异集。 */
+export interface V4ProfileNode {
+    id: string;
+    name: string;
+    parentId?: string;
+    presetSnapshot: PresetSnapshot;
+    diff?: unknown;
+}
+
+/** v4 preset-cards.json 文件对象（一组 preset 的唯一权威文件）。 */
+export interface PresetCardsFile {
+    version: 4;
+    presets: { key: string; name?: string; profileIds: string[] }[];
+    nodes: V4ProfileNode[];
+}
+

@@ -104,7 +104,7 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 
 `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。
 
-> **新架构定稿（未实施，见 `docs/current/architecture.md` 本地文档）**：对外 API 将升级为 `listProfiles(presetName?)`（返回带 `presetName` + `profileName` 的 `ProfileRef[]`）与「切换并激活」语义的 `loadProfile`（加载 + 持久化 + 切 ST 当前预设 + 记 active + 发事件），`onProfileChanged` 回调参数同步升级。当前代码仍为上方旧 API。
+> **新架构定稿（未实施，见 `docs/current/architecture.md` 本地文档）**：v4 将改为「每个 profile 保存完整 preset 快照 + parentId 树 + 独立 diff」，存储迁移到独立 `preset-cards.json`（preset.extensions 只留特征值关联键），导出仍兼容 v3 文件形状。对外 API 将升级为 `listProfiles(presetName?)`（返回带 `presetName` + `profileName` 的 `ProfileRef[]`）与「切换并激活」语义的 `loadProfile`（加载 + 持久化 + 切 ST 当前预设 + 记 active + 发事件），`onProfileChanged` 回调参数同步升级。当前代码仍为上方 v3 API。
 
 ## 开发约定
 
