@@ -31,6 +31,29 @@ export function stripPresetCardsContainer(preset: PresetSnapshot): PresetSnapsho
     return clone;
 }
 
+/** 在 v4 文件中删除节点并级联删除全部后继（parentId 指向它的节点及其子树）。 */
+export function deleteNode(file: PresetCardsFile, nodeId: string): PresetCardsFile {
+    const deleted = new Set<string>([nodeId]);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const n of file.nodes) {
+            if (n.parentId !== undefined && deleted.has(n.parentId) && !deleted.has(n.id)) {
+                deleted.add(n.id);
+                changed = true;
+            }
+        }
+    }
+    return {
+        ...file,
+        presets: file.presets.map((p) => ({
+            ...p,
+            profileIds: p.profileIds.filter((id) => !deleted.has(id)),
+        })),
+        nodes: file.nodes.filter((n) => !deleted.has(n.id)),
+    };
+}
+
 /** 在 v4 文件中新增一个 profile 节点（默认挂到 root，全量快照 + 相对 root 的 diff 由调用方/Phase 2 计算）。 */
 export function addProfileNode(
     file: PresetCardsFile,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addProfileNode, createPresetCardsFile } from '../src/core/codec/v4.js';
+import { addProfileNode, createPresetCardsFile, deleteNode } from '../src/core/codec/v4.js';
 import type { PresetSnapshot } from '../src/core/domain/types.js';
 
 /**
@@ -64,5 +64,56 @@ describe('codec v4: addProfileNode', () => {
         expect(a.parentId).toBe('root');
         expect(a.presetSnapshot).toEqual(aSnapshot);
         expect(next.presets[0].profileIds).toEqual(['A']);
+    });
+
+    it('derives a child node from a non-root parent', () => {
+        const preset: PresetSnapshot = { name: 'P', prompts: [], prompt_order: [] };
+        const file = createPresetCardsFile(preset, 'key-1');
+        const withA = addProfileNode(file, {
+            id: 'A',
+            name: 'A',
+            presetSnapshot: { name: 'P', prompts: [], prompt_order: [] },
+        });
+        const bSnapshot: PresetSnapshot = {
+            name: 'P',
+            prompts: [{ identifier: 'a', content: 'B', enabled: false }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: false }] }],
+        };
+
+        const withB = addProfileNode(withA, { id: 'B', name: 'B', presetSnapshot: bSnapshot, parentId: 'A' });
+
+        const b = withB.nodes.find((n) => n.id === 'B')!;
+        expect(b.parentId).toBe('A');
+        expect(b.presetSnapshot).toEqual(bSnapshot);
+        expect(withB.presets[0].profileIds).toEqual(['A', 'B']);
+    });
+});
+
+describe('codec v4: deleteNode (cascade)', () => {
+    it('deletes a node and all its descendants, and removes them from ownership', () => {
+        const preset: PresetSnapshot = { name: 'P', prompts: [], prompt_order: [] };
+        const file = createPresetCardsFile(preset, 'key-1');
+        const withA = addProfileNode(file, {
+            id: 'A',
+            name: 'A',
+            presetSnapshot: { name: 'P', prompts: [], prompt_order: [] },
+        });
+        const withB = addProfileNode(withA, {
+            id: 'B',
+            name: 'B',
+            presetSnapshot: { name: 'P', prompts: [], prompt_order: [] },
+            parentId: 'A',
+        });
+        const withC = addProfileNode(withB, {
+            id: 'C',
+            name: 'C',
+            presetSnapshot: { name: 'P', prompts: [], prompt_order: [] },
+            parentId: 'B',
+        });
+
+        const next = deleteNode(withC, 'A');
+
+        expect(next.nodes.map((n) => n.id)).toEqual(['root']);
+        expect(next.presets[0].profileIds).toEqual([]);
     });
 });
