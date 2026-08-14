@@ -71,3 +71,28 @@ export function collectDescendants(nodes: V4ProfileNode[], nodeId: string): V4Pr
     }
     return result;
 }
+
+/** 面包屑名字截断上限（与现状 UI 一致）。 */
+export const TRUNCATE_MAX = 12;
+
+/** 面包屑条目：id + 显示名 + 是否被截断。 */
+export interface BreadcrumbItem {
+    id: string;
+    name: string;
+    truncated: boolean;
+}
+
+/** 构建面包屑链：根 → 近父 → 当前；超长名字截断为「开头 + …」。 */
+export function buildBreadcrumb(nodes: V4ProfileNode[], nodeId: string): BreadcrumbItem[] {
+    const ancestors = collectAncestors(nodes, nodeId);
+    const current = nodes.find((n) => String(n.id) === String(nodeId));
+    const chain = current ? [...ancestors, current] : ancestors;
+    return chain.map((n) => {
+        const truncated = n.name.length > TRUNCATE_MAX;
+        return {
+            id: String(n.id),
+            name: truncated ? `${n.name.slice(0, TRUNCATE_MAX)}…` : n.name,
+            truncated,
+        };
+    });
+}

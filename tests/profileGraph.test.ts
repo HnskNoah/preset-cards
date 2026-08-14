@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildForest, collectAncestors, collectDescendants } from '../src/core/profile/graph.js';
+import { buildBreadcrumb, buildForest, collectAncestors, collectDescendants } from '../src/core/profile/graph.js';
 import type { V4ProfileNode } from '../src/core/domain/types.js';
 
 function node(id: string, parentId?: string): V4ProfileNode {
@@ -33,5 +33,20 @@ describe('core profile graph', () => {
 
     it('collects all descendants (cascade set)', () => {
         expect(collectDescendants(nodes, 'A').map((n) => n.id)).toEqual(['B', 'C', 'D']);
+    });
+
+    it('builds a breadcrumb chain from root ancestor to current node, truncating long names', () => {
+        const longNameNodes: V4ProfileNode[] = [
+            node('root'),
+            { ...node('A', 'root'), name: 'this-is-a-very-long-profile-name' },
+            { ...node('B', 'A'), name: 'B' },
+        ];
+
+        const breadcrumb = buildBreadcrumb(longNameNodes, 'B');
+
+        expect(breadcrumb.map((b) => b.id)).toEqual(['A', 'B']);
+        expect(breadcrumb[0].name).toBe('this-is-a-ve…');
+        expect(breadcrumb[0].truncated).toBe(true);
+        expect(breadcrumb[1].truncated).toBe(false);
     });
 });
