@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createPresetStore } from '../src/core/store/PresetStore.js';
+import { createPresetStore, filterPresets } from '../src/core/store/PresetStore.js';
 import type { PresetEntry } from '../src/core/store/PresetStore.js';
 
 const presets: PresetEntry[] = [
@@ -18,5 +18,11 @@ describe('PresetStore', () => {
         expect(store.getState().search).toBe('be');
         expect(seen).toEqual(['change']);
         expect(store.getState().presets).toEqual(presets);
+    });
+
+    it('filters presets by name case-insensitively and returns all for empty query', () => {
+        expect(filterPresets(presets, 'ALPHA').map((p) => p.name)).toEqual(['Alpha']);
+        expect(filterPresets(presets, 'be').map((p) => p.name)).toEqual(['Beta']);
+        expect(filterPresets(presets, '').map((p) => p.name)).toEqual(['Alpha', 'Beta']);
     });
 });

@@ -8,6 +8,13 @@ export interface PresetEntry {
     isActive: boolean;
 }
 
+/** 按名称大小写不敏感过滤预设；空查询返回全部。 */
+export function filterPresets(presets: PresetEntry[], query: string): PresetEntry[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return presets;
+    return presets.filter((p) => p.name.toLowerCase().includes(q));
+}
+
 export interface PresetStoreState {
     presets: PresetEntry[];
     search: string;
