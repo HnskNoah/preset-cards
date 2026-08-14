@@ -91,3 +91,79 @@ describe('mergeImportedProfiles from full preset export', () => {
         expect(delta.name).toBe('Imported');
     });
 });
+
+describe('mergeImportedProfiles deduplication & cross-file merge', () => {
+    const chainPreset = {
+        name: 'My Preset',
+        prompts: [],
+        extensions: { preset_cards: { profiles: [baseProfile, deltaProfile] } },
+    };
+    const skipWarning = (warnings: string[]) =>
+        warnings.some((w) => w.includes('Duplicate configuration skipped') || w.includes('已跳过'));
+
+    it('re-importing the same file is a no-op with a skip warning', () => {
+        const first = mergeImportedProfiles(chainPreset, [], 'Imported', {} as any);
+        expect(first.profiles).toHaveLength(2);
+        const second = mergeImportedProfiles(chainPreset, first.profiles, 'Imported', {} as any);
+        expect(second.profiles).toEqual(first.profiles);
+        expect(skipWarning(second.warnings)).toBe(true);
+    });
+
+    it('re-import with a different input name still dedupes by content', () => {
+        const first = mergeImportedProfiles(chainPreset, [], 'Imported', {} as any);
+        const second = mergeImportedProfiles(chainPreset, first.profiles, 'Renamed', {} as any);
+        expect(second.profiles).toEqual(first.profiles);
+    });
+
+    it('same name but different content is NOT deduped (appended)', () => {
+        const fileA = { extensions: { preset_cards: { profiles: [baseProfile] } } };
+        const first = mergeImportedProfiles(fileA, [], 'X', {} as any);
+        const otherBase = makeBaseProfile({
+            id: 'b2',
+            name: baseProfile.name, // 同名
+            prompts: [{ identifier: 'a', mounted: false, enabled: true }], // 内容不同
+        });
+        const fileB = { extensions: { preset_cards: { profiles: [otherBase] } } };
+        const second = mergeImportedProfiles(fileB, first.profiles, 'Y', {} as any);
+        expect(second.profiles).toHaveLength(2);
+        expect(second.warnings).toEqual([]);
+    });
+
+    it('delta file whose parent already exists in the target attaches to the existing parent (cross-file merge)', () => {
+        // 第一次：导入 base-only 文件
+        const baseOnly = { extensions: { preset_cards: { profiles: [baseProfile] } } };
+        const first = mergeImportedProfiles(baseOnly, [], 'Imported', {} as any);
+        expect(first.profiles).toHaveLength(1);
+        const existingBase = first.profiles[0];
+
+        // 第二次：导入带内嵌父状态、父不在文件内的 delta（tree 载荷，父内容与目标已有 base 相同）
+        const deltaTree = {
+            kind: 'prompt_tree',
+            formatVersion: 3,
+            profiles: [{
+                kind: 'prompt_delta',
+                formatVersion: 3,
+                id: 'd9',
+                name: 'Delta2',
+                baseId: 'b9', // 不在文件内
+                base: { name: 'Base', prompts: baseProfile.prompts }, // 内嵌父状态 = 已有 base 的内容
+                changes: [{ identifier: 'a', enabled: false }],
+            }],
+        };
+        const second = mergeImportedProfiles(deltaTree, first.profiles, 'Delta2', {} as any);
+        // 父已存在 → 锚点被去重跳过，delta 直接挂到现有 base，不产生第二个 base
+        expect(second.profiles).toHaveLength(2);
+        expect(second.profiles.filter((p) => p.kind === 'prompt_base')).toHaveLength(1);
+        const delta = second.profiles.find((p) => p.kind === 'prompt_delta')!;
+        expect(delta.baseId).toBe(existingBase.id);
+    });
+
+    it('duplicate bases within one file are imported only once', () => {
+        const dupFile = {
+            extensions: { preset_cards: { profiles: [baseProfile, { ...baseProfile, id: 'bb' }] } },
+        };
+        const result = mergeImportedProfiles(dupFile, [], 'Imported', {} as any);
+        expect(result.profiles).toHaveLength(1);
+        expect(skipWarning(result.warnings)).toBe(true);
+    });
+});

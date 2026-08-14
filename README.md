@@ -59,7 +59,7 @@ npm test           # 运行 vitest 单元测试
 
 ## 导入导出与旧版迁移
 
-- **导入（现状）**：两个入口——头部「导入预设」走 ST 原生还原完整预设；卡片「导入配置」（`importProfileFile`）提取 v3 profiles 并入当前预设（完整 preset 文件也走此路，纯追加不去重）。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 通过 idMap 重映射；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点。v1/v2 需先迁移（见下）。
+- **导入（现状）**：两个入口——头部「导入预设」走 ST 原生还原完整预设；卡片「导入配置」（`importProfileFile`）提取 v3 profiles 并入当前预设（完整 preset 文件也走此路）。**并入按内容指纹去重**：与现有（或本批已并入）条目内容相同（kind + 语义字段 + delta 父链指纹）的 profile 跳过并提示；同一预设分多次导出的不同 profile 可合并为同一棵树，共享父节点只并入一次。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 重映射到有效 id；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点（父内容与已有 profile 相同时直接挂到已有父）。v1/v2 需先迁移（见下）。
 - **导入（设计定稿，未实现）**：头部「导入预设」由插件接管文件读取，按类型分流——v3 profile 弹窗选预设并入 / 完整 preset 弹窗并入或新建 / 其余回退 ST 原生；卡片「导入配置」保留为**手动并入**入口（完整 preset 也接受，但明确只并 profiles）。设计稿见 `docs/current/architecture.md` 与 `docs/plans/import-flow-design.md`（docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供这些文件）。
 - **导出**：统一为导出完整 preset JSON（`exportPresetFile`），脱敏剔除 reverse_proxy / proxy_password / custom_url / azure / workers_ai 等连接与凭据字段。**卡片右上角 / 头部「导出全部」**导出全部 profiles；**单 profile「导出配置」**只导出该 profile 及其父链（`collectAncestorProfileIds`），父链外 profile 不导出。导入侧从该 JSON 的 `extensions['preset_cards']` 提取 profiles 并入当前预设。
 - **v1 / v2 迁移**：旧版 profile 文件**不会**在导入时自动迁移，需先用独立工具转换：

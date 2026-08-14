@@ -93,6 +93,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'Cancel': '取消',
     'Export all configurations': '导出全部配置文件',
     'Import configuration': '导入配置',
+    'Duplicate configuration skipped': '已跳过内容相同的重复配置',
     'Failed to parse configuration file': '无法解析配置文件',
     'Concise Mode': '简洁模式',
     'No configurations saved for this preset': '该预设没有配置快照',

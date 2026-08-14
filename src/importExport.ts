@@ -75,14 +75,78 @@ export function extractProfilesFromPresetExport(parsed: Record<string, unknown>)
         isPromptBaseProfile(p) || isPromptDeltaProfile(p));
 }
 
+/** 稳定序列化：对象键递归排序，语义相同但键序不同的对象指纹一致。 */
+function stableStringify(value: unknown): string {
+    return JSON.stringify(value, (_key, v) => {
+        if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+            const record = v as Record<string, unknown>;
+            const sorted: Record<string, unknown> = {};
+            for (const k of Object.keys(record).sort()) sorted[k] = record[k];
+            return sorted;
+        }
+        return v;
+    });
+}
+
+/**
+ * profile 内容指纹：排除 id / name / baseId（跨导入随机 id 重映射后仍可比较）。
+ * delta 用「父节点指纹」代替 baseId——同一差异挂在不同父节点上指纹不同，不会误合并。
+ */
+function profileFingerprintOf(p: PresetProfile, parentFp: string | null): string {
+    const content: Record<string, unknown> = {
+        kind: p.kind === 'prompt_base' || p.kind === 'prompt_delta' ? p.kind : 'legacy',
+    };
+    if (p.kind === 'prompt_base') {
+        content.prompts = p.prompts;
+        if (p.unusedIds) content.unusedIds = p.unusedIds;
+    } else if (p.kind === 'prompt_delta') {
+        content.changes = p.changes;
+        if (p.order) content.order = p.order;
+        content.parent = parentFp;
+    }
+    if (p.sampling) content.sampling = p.sampling;
+    if (p.extra) content.extra = p.extra;
+    if (p.model) content.model = p.model;
+    return stableStringify(content);
+}
+
+/** 为 profile 集合构建 id → 内容指纹 映射（沿父链递归，成环时父指纹为 null）。 */
+function buildFingerprintMap(
+    profilesById: Map<string, PresetProfile>,
+    resolveExternalParent: (baseId: string) => string | null,
+): Map<string, string | null> {
+    const fpById = new Map<string, string | null>();
+    const computing = new Set<string>();
+    const compute = (id: string): string | null => {
+        const cached = fpById.get(id);
+        if (cached !== undefined) return cached;
+        if (computing.has(id)) return null; // 父链成环 → 父指纹不可得
+        const p = profilesById.get(id);
+        if (!p) return null;
+        computing.add(id);
+        let parentFp: string | null = null;
+        if (p.kind === 'prompt_delta' && p.baseId !== undefined) {
+            parentFp = compute(String(p.baseId)) ?? resolveExternalParent(String(p.baseId));
+        }
+        const fp = profileFingerprintOf(p, parentFp);
+        computing.delete(id);
+        fpById.set(id, fp);
+        return fp;
+    };
+    for (const id of profilesById.keys()) compute(id);
+    return fpById;
+}
+
 /**
  * 解析导入的 v3 profile 数据，返回并入导入条目后的新 profiles 数组与警告消息。
  * 无 UI / 持久化副作用。warning 由调用方 toast。
  *
  * 导入设计：
  * - 只接受 v3 format（base / delta / prompt_tree），旧版 v1/v2 须先用 migrate-to-v3 工具转换。
- * - 所有 profile 重新分配 id，baseId 引用通过 idMap 重映射到新 id。
+ * - 所有 profile 重新分配 id，baseId 引用重映射到有效 id。
  * - 带内嵌父状态（base.prompts）的 delta 或 prompt_tree 条目：当父不在文件内时转成可见 base + delta 子节点。
+ * - 内容去重并入：与现有 profiles（或本批已并入条目）内容指纹相同（kind + 语义字段 + delta 父链指纹）的条目跳过并提示。
+ * - 跨文件合并：同一预设分多次导出的不同 profile 导入同一目标时，共享 base 只并入一次，后续 delta 挂到已有的相同内容父节点上。
  */
 export function mergeImportedProfiles(
     parsed: Record<string, any>,
@@ -173,30 +237,64 @@ export function mergeImportedProfiles(
         }
     }
 
-    // id 重映射 + 写入
-    const idMap = new Map<string, string>();
-    for (const raw of rawProfiles) {
-        if (raw.id !== undefined) idMap.set(String(raw.id), freshId());
+    // 指纹：现有 profiles 与文件内 raw profiles（含锚点）各自构建；delta 父链以指纹比较而非随机 baseId
+    const existingById = new Map<string, PresetProfile>();
+    for (const p of existing) existingById.set(String(p.id), p);
+    const existingFpMap = buildFingerprintMap(existingById, () => null);
+    const rawById = new Map<string, PresetProfile>();
+    for (const raw of rawProfiles) rawById.set(String(raw.id), raw);
+    const rawFpMap = buildFingerprintMap(rawById, (baseId) => existingFpMap.get(baseId) ?? null);
+
+    // 第一遍：判定每个 raw 是「并入（分配新 id）」还是「跳过（内容与现有/本批重复）」，并记录父链接用的有效 id
+    const fpToId = new Map<string, string>(); // 内容指纹 → 该指纹对应 profile 的有效 id（现有 id 或本批新 id）
+    for (const [id, fp] of existingFpMap) {
+        if (fp !== null && !fpToId.has(fp)) fpToId.set(fp, id);
     }
+    const effectiveIdByRawId = new Map<string, string>(); // raw 原 id → 有效 id（并入的新 id，或跳过时对应的现有 id）
+    const skippedRawIds = new Set<string>();
+    let skippedCount = 0;
+    for (const raw of rawProfiles) {
+        if (raw.id === undefined) continue;
+        const rawId = String(raw.id);
+        const fp = rawFpMap.get(rawId) ?? null;
+        if (fp !== null && fpToId.has(fp)) {
+            // 内容重复 → 复用现有条目（不新增、不产生重复锚点）
+            effectiveIdByRawId.set(rawId, fpToId.get(fp)!);
+            skippedRawIds.add(rawId);
+            skippedCount++;
+        } else {
+            const newId = freshId();
+            effectiveIdByRawId.set(rawId, newId);
+            if (fp !== null) fpToId.set(fp, newId);
+        }
+    }
+
+    // 第二遍：写入（跳过的 raw 不写入；delta 父链接指向有效 id，父被去重跳过时也能挂到现有父上）
     const missingBaseIds: string[] = [];
     const targetId = typeof parsed.targetId === 'string' ? parsed.targetId : undefined;
     for (const raw of rawProfiles) {
-        const id = idMap.get(String(raw.id)) ?? freshId();
-        const isTarget = targetId ? String(raw.id) === targetId : raw === rawProfiles[rawProfiles.length - 1];
+        const rawId = String(raw.id);
+        if (skippedRawIds.has(rawId)) continue;
+        const id = effectiveIdByRawId.get(rawId);
+        if (id === undefined) continue;
+        const isTarget = targetId ? rawId === targetId : raw === rawProfiles[rawProfiles.length - 1];
         const name = isTarget ? profileName : raw.name;
 
         if (isPromptBaseProfile(raw)) {
             profiles.push({ ...raw, id, name });
         } else {
-            const mappedBase = idMap.get(String(raw.baseId));
-            if (!mappedBase && !existing.some((p) => String(p.id) === String(raw.baseId))) {
+            const parentId = raw.baseId !== undefined ? effectiveIdByRawId.get(String(raw.baseId)) : undefined;
+            if (!parentId && raw.baseId !== undefined && !existing.some((p) => String(p.id) === String(raw.baseId))) {
                 missingBaseIds.push(String(raw.baseId));
             }
-            profiles.push(makeDeltaProfile({ id, name, baseId: mappedBase ?? raw.baseId, changes: raw.changes, ...(raw.order ? { order: raw.order } : {}), ...(raw.sampling ? { sampling: raw.sampling } : {}), ...(raw.extra ? { extra: raw.extra } : {}), ...(raw.model ? { model: raw.model } : {}) }));
+            profiles.push(makeDeltaProfile({ id, name, baseId: parentId ?? raw.baseId, changes: raw.changes, ...(raw.order ? { order: raw.order } : {}), ...(raw.sampling ? { sampling: raw.sampling } : {}), ...(raw.extra ? { extra: raw.extra } : {}), ...(raw.model ? { model: raw.model } : {}) }));
         }
     }
     if (missingBaseIds.length > 0) {
         warnings.push(L('Base profile not found for this imported derived configuration'));
+    }
+    if (skippedCount > 0) {
+        warnings.push(`${L('Duplicate configuration skipped')}: ${skippedCount}`);
     }
 
     return { profiles, warnings };
