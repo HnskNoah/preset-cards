@@ -429,8 +429,11 @@ function handFileToNativePresetImport(file: File): void {
     }
 }
 
-/** 把文件交给 ST 原生导入（还原 / 回退路径）；保持卡片界面打开，不关闭插件弹窗。 */
-function handOffToNative(file: File): void {
+/** 把文件交给 ST 原生导入（还原 / 回退路径）。
+ * 先关闭卡片弹窗：ST 原生导入及第三方扩展（如酒馆助手）会在导入事件时弹出确认，
+ * 卡片弹窗保持打开会遮挡这些弹窗；merge 路径不受影响（不经过此函数）。 */
+function handOffToNative(ctx: CardsContext, file: File): void {
+    ctx.dialog.closest('.popup').find('.popup-controls .menu_button').click();
     handFileToNativePresetImport(file);
 }
 
@@ -539,7 +542,7 @@ export async function importPresetFromHeader(ctx: CardsContext): Promise<void> {
         ]);
         if (!choice) return;
         if (choice === 'restore') {
-            handOffToNative(file);
+            handOffToNative(ctx, file);
             return;
         }
         const target = await chooseTargetPreset(defaultName); // 同名候选排首位
@@ -556,6 +559,6 @@ export async function importPresetFromHeader(ctx: CardsContext): Promise<void> {
         return;
     }
 
-    // 其他（普通 ST 预设 / v1/v2 / 未知格式）：回退 ST 原生导入，不弹窗拦截、不关闭卡片界面
-    handOffToNative(file);
+    // 其他（普通 ST 预设 / v1/v2 / 未知格式）：回退 ST 原生导入，先关卡片避免第三方确认被遮
+    handOffToNative(ctx, file);
 }
