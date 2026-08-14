@@ -68,3 +68,55 @@ export function applyV3DeltaToSnapshot(parent: PresetSnapshot, delta: PromptDelt
     const childEntries: PromptProfileEntry[] = applyPromptDelta(parentEntries, delta.changes, delta.order);
     return entriesToSnapshot(childEntries);
 }
+
+/** 完整导入 v3 文件：Base + Delta 树 → v4 文件（root = 首个 Base 快照；Delta 沿父链还原全量；diff 直接带 v3 delta）。 */
+export function fromV3Profiles(
+    profiles: (PromptBaseProfile | PromptDeltaProfile)[],
+    key: string,
+): PresetCardsFile {
+    const byId = new Map(profiles.map((p) => [String(p.id), p]));
+    const resolved = new Map<string, PresetSnapshot>();
+    const resolving = new Set<string>();
+
+    const resolve = (profile: PromptBaseProfile | PromptDeltaProfile): PresetSnapshot => {
+        const id = String(profile.id);
+        const cached = resolved.get(id);
+        if (cached) return cached;
+        if (resolving.has(id)) return entriesToSnapshot([]); // 防环：返回空快照
+        resolving.add(id);
+        let snapshot: PresetSnapshot;
+        if (profile.kind === 'prompt_base') {
+            snapshot = entriesToSnapshot(profile.prompts);
+        } else {
+            const parent = byId.get(String(profile.baseId));
+            const parentSnapshot = parent ? resolve(parent) : entriesToSnapshot([]);
+            snapshot = applyV3DeltaToSnapshot(parentSnapshot, profile);
+        }
+        resolving.delete(id);
+        resolved.set(id, snapshot);
+        return snapshot;
+    };
+
+    // root 基线：首个 Base 快照；无 Base 时为空快照
+    const firstBase = profiles.find((p): p is PromptBaseProfile => p.kind === 'prompt_base');
+    const rootSnapshot = firstBase ? entriesToSnapshot(firstBase.prompts) : entriesToSnapshot([]);
+    let file = createPresetCardsFile(rootSnapshot, key);
+
+    for (const profile of profiles) {
+        const id = String(profile.id);
+        const snapshot = resolve(profile);
+        const parentId = profile.kind === 'prompt_delta'
+            ? String(profile.baseId)
+            : undefined;
+        file = addProfileNode(file, {
+            id,
+            name: profile.name,
+            parentId,
+            presetSnapshot: snapshot,
+            ...(profile.kind === 'prompt_delta'
+                ? { diff: { changes: profile.changes, ...(profile.order !== undefined ? { order: profile.order } : {}) } }
+                : {}),
+        });
+    }
+    return file;
+}
