@@ -194,6 +194,7 @@ export async function applyProfileToPresetByName(
         defaultSampling: meta.defaultSampling,
         defaultExtra: meta.defaultExtra,
         defaultModel: meta.defaultModel,
+        defaultSnapshot: meta.defaultSnapshot,
     });
     setActiveProfile({ presetName: name, profileId: String(profileId) });
     try {
@@ -207,22 +208,17 @@ export async function applyProfileToPresetByName(
     return true;
 }
 
-/** 加载 profile 到 preset（卡片行与 concise 弹窗共用）。
- * opts.closePopup：加载后关闭 concise 弹窗（仅弹窗内行点击传入）。 */
+/** 加载 profile 到 preset（卡片行与 concise 弹窗共用）。 */
 export async function loadProfile(
     ctx: CardsContext,
     name: string,
     idx: number,
     profileId: string,
-    opts?: { closePopup?: boolean },
 ): Promise<void> {
     if (!await applyProfileToPresetByName(name, profileId)) return;
     toastr.success(L('Configuration loaded'));
     activatePreset(ctx, name, idx);
     clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
-    if (opts?.closePopup) {
-        $('.popup:visible .popup-controls .menu_button').click();
-    }
     await refreshGrid(ctx);
 }
 
@@ -354,7 +350,9 @@ export async function showConciseProfilesModal(ctx: CardsContext, card: JQuery<H
         row.append($('<div class="preset_card_profile_name" style="font-size:14px;"></div>').text(p.name));
 
         row.on('click', async function () {
-            await loadProfile(ctx, name, idx, String(row.data('profile-id')), { closePopup: true });
+            await loadProfile(ctx, name, idx, String(row.data('profile-id')));
+            // 只关闭当前 concise 弹窗，避免全局选择器把底层卡片弹窗一起关掉
+            $(this).closest('.popup').find('.popup-controls .menu_button').click();
         });
 
         list.append(row);

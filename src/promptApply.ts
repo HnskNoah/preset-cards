@@ -177,9 +177,18 @@ export function applyProfileToPreset(
     preset: Preset,
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
-    opts?: { showMissingToast?: boolean; defaultSampling?: PromptSampling; defaultExtra?: Record<string, any>; defaultModel?: PromptModel },
+    opts?: { showMissingToast?: boolean; defaultSampling?: PromptSampling; defaultExtra?: Record<string, any>; defaultModel?: PromptModel; defaultSnapshot?: PromptDefaultSnapshotEntry[] },
 ): void {
     pruneStaleOrderEntries(preset);
+
+    // 先恢复出厂基线字段，再叠加 profile 的 sparse fields：避免前一个 profile 的字段残留到当前加载结果
+    if (opts?.defaultSnapshot) {
+        for (const d of opts.defaultSnapshot) {
+            if (!d.originalFields) continue;
+            const prompt = findPromptInPreset(preset, d.identifier);
+            if (prompt) Object.assign(prompt, filterFields(d.originalFields));
+        }
+    }
 
     const model = resolveProfileModel(profile, allProfiles) ?? opts?.defaultModel;
     if (model) applyModel(preset, model);

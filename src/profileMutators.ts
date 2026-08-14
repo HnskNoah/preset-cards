@@ -1,5 +1,5 @@
 import { L } from './i18n.js';
-import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, newProfileId, saveMeta } from './meta.js';
+import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, newProfileId, persistMetaTransaction } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptProfileEntry, PromptSampling } from './meta.js';
 import { applyBaseProfile, applyExtra, applyModel, applySampling, buildBaseSnapshot, captureExtra, captureModel, captureSampling, diffExtra, diffSampling, resolveEffectiveExtra, resolveEffectiveSampling, resolveParentStates, resolveProfileModel } from './promptToggle.js';
 import { applyDefaultExtra, applyDefaultModel, applyDefaultOriginalFields, applyDefaultSampling, defaultEnabledEntries } from './presetSnapshot.js';
@@ -47,8 +47,9 @@ export function defaultUnusedIds(meta: PresetMeta): string[] {
 }
 
 /** reset 到父链 / 隐藏默认的共享核心（profile editor 与卡片 reset 共用）。
- * 纯数据变换 + saveMeta + toastr；UI 刷新（refreshActivePresetUI / clearBuffered / refreshGrid）由调用方处理。
- * 返回 'reset'（成功）| 'no-default' | null（无默认基线或 profile 类型不可 reset）。 */
+ * 副本模式事务：先构造重置后的 profile 副本并持久化，成功后才同步 live profile + 应用运行时；
+ * 保存失败时不污染内存（后续保存不会把「失败的重置」写盘）。
+ * 返回 'reset'（成功）| 'no-default' | null（无默认基线 / 落盘失败 / profile 类型不可 reset）。 */
 export async function resetProfileCore(
     preset: Preset,
     meta: PresetMeta,
@@ -65,35 +66,49 @@ export async function resetProfileCore(
         const model = parentModel ?? defaultModel;
         const parentSampling = parent ? resolveEffectiveSampling(parent, allProfiles, meta.defaultSampling) : undefined;
         const parentExtra = parent ? resolveEffectiveExtra(parent, allProfiles, meta.defaultExtra) : undefined;
+        const nextProfile = structuredClone(profile) as PromptDeltaProfile;
         if (parentStates.length > 0) {
-            applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'parent', 'Parent', parentStates));
-            profile.changes = [];
-            delete profile.order;
+            nextProfile.changes = [];
+            delete nextProfile.order;
             // 清空自身 sampling/extra/model：继承父链解析态（加载时链式解析自然还原，含出厂基线回退）
-            delete profile.sampling;
-            delete profile.extra;
-            delete profile.model;
-            if (model) applyModel(preset, model);
-            if (parentSampling) applySampling(preset, parentSampling);
-            if (parentExtra) applyExtra(preset, parentExtra);
+            delete nextProfile.sampling;
+            delete nextProfile.extra;
+            delete nextProfile.model;
         } else {
             if (!meta.defaultSnapshot || meta.defaultSnapshot.length === 0) {
                 toastr.warning(L('No default baseline available'));
                 return 'no-default';
             }
+            nextProfile.changes = [];
+            delete nextProfile.sampling;
+            delete nextProfile.order;
+            delete nextProfile.extra;
+            delete nextProfile.model;
+        }
+        const ok = await persistMetaTransaction(meta, (m) => ({
+            ...m,
+            profiles: (m.profiles || []).map((p) => String(p.id) === String(profile.id) ? nextProfile : p),
+        }), name, idx);
+        if (!ok) return null;
+
+        // 成功后同步 live profile（保持引用身份）并应用运行时
+        Object.assign(profile, nextProfile);
+        for (const key of ['order', 'sampling', 'extra', 'model'] as const) {
+            if (!(key in nextProfile)) delete (profile as any)[key];
+        }
+        if (parentStates.length > 0) {
+            applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'parent', 'Parent', parentStates));
+            if (model) applyModel(preset, model);
+            if (parentSampling) applySampling(preset, parentSampling);
+            if (parentExtra) applyExtra(preset, parentExtra);
+        } else {
             applyDefaultOriginalFields(preset, meta);
             applyDefaultSampling(preset, meta);
             applyDefaultExtra(preset, meta);
             applyDefaultModel(preset, meta);
             const defaultPrompts = defaultEnabledEntries(meta);
             applyBaseProfile(preset, buildResetBaseProfile(profile.baseId || 'default', 'Default', defaultPrompts));
-            profile.changes = [];
-            delete profile.sampling;
-            delete profile.order;
-            delete profile.extra;
-            delete profile.model;
         }
-        await saveMeta(name, idx, meta);
         toastr.success(L('Configuration reset'));
         return 'reset';
     }
@@ -102,20 +117,31 @@ export async function resetProfileCore(
             toastr.warning(L('No default baseline available'));
             return 'no-default';
         }
+        const nextProfile = structuredClone(profile) as PromptBaseProfile;
+        const defaultPrompts = defaultEnabledEntries(meta);
+        nextProfile.prompts = structuredClone(defaultPrompts);
+        const defaultUnused = defaultUnusedIds(meta);
+        if (defaultUnused.length > 0) nextProfile.unusedIds = defaultUnused;
+        else delete nextProfile.unusedIds;
+        delete nextProfile.sampling;
+        delete nextProfile.extra;
+        delete nextProfile.model;
+        const ok = await persistMetaTransaction(meta, (m) => ({
+            ...m,
+            profiles: (m.profiles || []).map((p) => String(p.id) === String(profile.id) ? nextProfile : p),
+        }), name, idx);
+        if (!ok) return null;
+
+        // 成功后同步 live profile + 应用运行时
+        Object.assign(profile, nextProfile);
+        for (const key of ['unusedIds', 'sampling', 'extra', 'model'] as const) {
+            if (!(key in nextProfile)) delete (profile as any)[key];
+        }
         applyDefaultOriginalFields(preset, meta);
         applyDefaultSampling(preset, meta);
         applyDefaultExtra(preset, meta);
         applyDefaultModel(preset, meta);
-        const defaultPrompts = defaultEnabledEntries(meta);
-        profile.prompts = structuredClone(defaultPrompts);
-        const defaultUnused = defaultUnusedIds(meta);
-        if (defaultUnused.length > 0) profile.unusedIds = defaultUnused;
-        else delete profile.unusedIds;
-        delete profile.sampling;
-        delete profile.extra;
-        delete profile.model;
         applyBaseProfile(preset, buildResetBaseProfile(profile.id, profile.name, defaultPrompts));
-        await saveMeta(name, idx, meta);
         toastr.success(L('Configuration reset'));
         return 'reset';
     }
