@@ -12,7 +12,7 @@ import {
     type PromptProfileEntry,
 } from './meta.js';
 import { makeBaseProfile, makeDeltaProfile } from './profileActions.js';
-import { assertV3ImportPayload } from './profileSchema.js';
+import { assertV3ImportPayload, LegacyProfileFormatError } from './profileSchema.js';
 export function chooseProfileSaveTarget(): Promise<'update' | 'create' | null> {
     return chooseFromOptions(L('Save changes to'), [
         [L('Update current profile'), 'update'],
@@ -154,9 +154,10 @@ export function mergeImportedProfiles(
     existing: PresetProfile[],
     profileName: string,
     _meta: PresetMeta,
-): { profiles: PresetProfile[]; warnings: string[] } {
+): { profiles: PresetProfile[]; warnings: string[]; addedCount: number } {
     const profiles = [...existing];
     const warnings: string[] = [];
+    let addedCount = 0;
     const usedIds = new Set(profiles.map((p) => p.id));
     const freshId = (): string => {
         let id = newProfileId();
@@ -204,8 +205,14 @@ export function mergeImportedProfiles(
     }
 
     if (rawProfiles.length === 0) {
-        // 完整 preset 导出即使无 v3 profile 也视为合法（导入无条目可并入，直接返回现有 profiles）
-        if (isPresetExport) return { profiles, warnings };
+        // 完整 preset 导出：空 profiles 数组 = 合法空导入；非空但全部为非法/非 v3 条目 = 格式错误，禁止静默成功
+        if (isPresetExport) {
+            const rawArray = (parsed?.extensions?.[EXTENSION_KEY] as Record<string, unknown> | undefined)?.profiles;
+            if (Array.isArray(rawArray) && rawArray.length > 0) {
+                throw new LegacyProfileFormatError();
+            }
+            return { profiles, warnings, addedCount: 0 };
+        }
         throw new Error('Imported configuration is not a valid v3 preset snapshot');
     }
 
@@ -283,12 +290,14 @@ export function mergeImportedProfiles(
 
         if (isPromptBaseProfile(raw)) {
             profiles.push({ ...raw, id, name });
+            addedCount++;
         } else {
             const parentId = raw.baseId !== undefined ? effectiveIdByRawId.get(String(raw.baseId)) : undefined;
             if (!parentId && raw.baseId !== undefined && !existing.some((p) => String(p.id) === String(raw.baseId))) {
                 missingBaseIds.push(String(raw.baseId));
             }
             profiles.push(makeDeltaProfile({ id, name, baseId: parentId ?? raw.baseId, changes: raw.changes, ...(raw.order ? { order: raw.order } : {}), ...(raw.sampling ? { sampling: raw.sampling } : {}), ...(raw.extra ? { extra: raw.extra } : {}), ...(raw.model ? { model: raw.model } : {}) }));
+            addedCount++;
         }
     }
     if (missingBaseIds.length > 0) {
@@ -298,7 +307,7 @@ export function mergeImportedProfiles(
         warnings.push(`${L('Duplicate configuration skipped')}: ${skippedCount}`);
     }
 
-    return { profiles, warnings };
+    return { profiles, warnings, addedCount };
 }
 
 export type HeaderImportKind = 'preset' | 'v3profile' | 'native';

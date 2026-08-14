@@ -13,7 +13,7 @@ import { buildNewBaseProfile } from './profileMutators.js';
 import { lockDefaultSnapshot } from './presetSnapshot.js';
 import { applyBufferedEdits, clearBufferedForName } from './presetBuffers.js';
 import { chooseFromOptions, classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles, orderPresetCandidates } from './importExport.js';
-import { assertV3ImportPayload } from './profileSchema.js';
+import { assertV3ImportPayload, LegacyProfileFormatError } from './profileSchema.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
 import { getCardsTemplateContext } from './presetList.js';
@@ -427,7 +427,7 @@ function handOffToNative(file: File): void {
     handFileToNativePresetImport(file);
 }
 
-/** 把已解析的导入内容并入指定目标预设（风险确认 → 取名 → 锁基线 → 合并去重 → 落盘 → 刷新；卡片/头部共用核心）。 */
+/** 把已解析的导入内容并入指定目标预设（风险确认 → 取名 → 合并去重 → 有新条目才锁基线/落盘 → 刷新；卡片/头部共用核心）。 */
 async function mergeParsedToPreset(
     ctx: CardsContext,
     targetName: string,
@@ -445,13 +445,19 @@ async function mergeParsedToPreset(
         const profileName = await Popup.show.input(L('Configuration name:'), defaultName, defaultName);
         if (!profileName) return false;
 
+        // 先合并去重：全部重复时不再锁基线/落盘，避免无意义的写盘和「配置已保存」误报
         const preset = openai_settings[targetIdx] as Preset;
-        // 首次导入：先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked）
+        const meta = readMeta(preset);
+        const { profiles, warnings, addedCount } = mergeImportedProfiles(parsed, meta.profiles, profileName, meta);
+        for (const warning of warnings) toastr.warning(warning);
+        if (addedCount === 0) {
+            toastr.info(L('No new configurations imported'));
+            return true;
+        }
+
+        // 有新增条目：先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked），再副本事务落盘
         await lockDefaultSnapshot(preset, targetName, targetIdx);
         const lockedMeta = readMeta(preset);
-        const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
-        for (const warning of warnings) toastr.warning(warning);
-        // 副本模式事务：持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
         const ok = await persistMetaTransaction(lockedMeta, (m) => ({ ...m, profiles }), targetName, targetIdx);
         if (!ok) return false;
         toastr.success(L('Configuration saved'));
@@ -459,7 +465,11 @@ async function mergeParsedToPreset(
         return true;
     } catch (err) {
         console.error(err);
-        toastr.error(L('Failed to save preset metadata'));
+        if (err instanceof LegacyProfileFormatError) {
+            toastr.error(L('Failed to parse configuration file'));
+        } else {
+            toastr.error(L('Failed to save preset metadata'));
+        }
         return false;
     }
 }

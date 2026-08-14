@@ -81,6 +81,12 @@ describe('mergeImportedProfiles from full preset export', () => {
         const result = mergeImportedProfiles(preset, existing, 'Imported', {} as any);
         expect(result.profiles).toEqual(existing);
         expect(result.warnings).toEqual([]);
+        expect(result.addedCount).toBe(0);
+    });
+
+    it('rejects a full preset export whose profiles are all invalid (no silent no-op)', () => {
+        const preset = { extensions: { preset_cards: { profiles: [{ kind: 'prompt_base', formatVersion: 3, id: 1 }] } } };
+        expect(() => mergeImportedProfiles(preset, [], 'Imported', {} as any)).toThrow();
     });
 
     it('keeps v3 payload (tree) import path working unchanged', () => {
@@ -101,11 +107,13 @@ describe('mergeImportedProfiles deduplication & cross-file merge', () => {
     const skipWarning = (warnings: string[]) =>
         warnings.some((w) => w.includes('Duplicate configuration skipped') || w.includes('已跳过'));
 
-    it('re-importing the same file is a no-op with a skip warning', () => {
+    it('re-importing the same file is a no-op with a skip warning and addedCount 0', () => {
         const first = mergeImportedProfiles(chainPreset, [], 'Imported', {} as any);
         expect(first.profiles).toHaveLength(2);
+        expect(first.addedCount).toBe(2);
         const second = mergeImportedProfiles(chainPreset, first.profiles, 'Imported', {} as any);
         expect(second.profiles).toEqual(first.profiles);
+        expect(second.addedCount).toBe(0);
         expect(skipWarning(second.warnings)).toBe(true);
     });
 
