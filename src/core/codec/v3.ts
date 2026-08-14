@@ -1,5 +1,4 @@
-// core/codec v3：v4 节点 → v3 兼容导出形状（零 ST 依赖，纯函数）。
-import { PROMPT_FIELD_KEYS } from '../domain/schema.js';
+// core/codec v3：v4 节点 ↔ v3 兼容导出/导入形状（零 ST 依赖，纯函数）。
 import type {
     PresetCardsFile,
     PresetSnapshot,
@@ -8,7 +7,8 @@ import type {
     PromptProfileEntry,
     V4ProfileNode,
 } from '../domain/types.js';
-import { snapshotPromptState } from '../../promptState.js';
+import { applyPromptDelta } from '../../promptState.js';
+import { entriesFromSnapshot, entriesToSnapshot } from './snapshotEntries.js';
 import { addProfileNode, createPresetCardsFile } from './v4.js';
 
 /** 把 v4 节点导出为 v3 profiles（隐藏 root 不导出；根 profile → Base，非根 → Delta）。 */
@@ -25,7 +25,7 @@ export function toV3Profiles(file: PresetCardsFile): (PromptBaseProfile | Prompt
 }
 
 function toV3Base(node: V4ProfileNode): PromptBaseProfile {
-    const { entries, unusedIds } = entriesWithFields(node.presetSnapshot);
+    const { entries, unusedIds } = entriesFromSnapshot(node.presetSnapshot);
     return {
         formatVersion: 3,
         kind: 'prompt_base',
@@ -49,42 +49,11 @@ function toV3Delta(node: V4ProfileNode, baseId: string): PromptDeltaProfile {
     };
 }
 
-/** 从快照采集挂载态 + 白名单值字段的 v3 entries（snapshotPromptState 不采集 fields）。 */
-function entriesWithFields(snapshot: PresetSnapshot): { entries: PromptProfileEntry[]; unusedIds: string[] } {
-    const prompts = Array.isArray(snapshot.prompts) ? snapshot.prompts : [];
-    const order = orderEntries(snapshot.prompt_order);
-    const captured = snapshotPromptState(prompts, order);
-    const entries: PromptProfileEntry[] = captured.entries.map((e) => {
-        const prompt = prompts.find((p) => p && p.identifier === e.identifier);
-        const fields = pickFields(prompt);
-        return fields ? { ...e, fields } : e;
-    });
-    return { entries, unusedIds: captured.unusedIds };
-}
-
-function pickFields(prompt: any): Record<string, unknown> | undefined {
-    if (!prompt || typeof prompt !== 'object') return undefined;
-    const fields: Record<string, unknown> = {};
-    for (const key of PROMPT_FIELD_KEYS) {
-        const value = prompt[key];
-        if (value !== undefined) fields[key] = value;
-    }
-    return Object.keys(fields).length > 0 ? fields : undefined;
-}
-
-function orderEntries(promptOrder: unknown): { identifier: string; enabled?: boolean }[] {
-    if (!Array.isArray(promptOrder)) return [];
-    for (const item of promptOrder) {
-        if (item && Array.isArray(item.order)) return item.order as { identifier: string; enabled?: boolean }[];
-    }
-    return [];
-}
-
 type PromptStateChangeLike = { identifier: string; [key: string]: unknown };
 
 /** 把单个 v3 Base 还原为 v4 文件：root 保存导入时快照，Base 成为根 profile 节点。 */
 export function fromV3BaseProfile(base: PromptBaseProfile, key: string): PresetCardsFile {
-    const restored = baseToSnapshot(base);
+    const restored = entriesToSnapshot(base.prompts);
     const file = createPresetCardsFile(restored, key);
     return addProfileNode(file, {
         id: base.id,
@@ -93,17 +62,9 @@ export function fromV3BaseProfile(base: PromptBaseProfile, key: string): PresetC
     });
 }
 
-/** v3 Base entries → v4 完整快照（prompts + prompt_order；mounted 进 order）。 */
-export function baseToSnapshot(base: PromptBaseProfile): PresetSnapshot {
-    const prompts = base.prompts.map((e) => ({
-        identifier: e.identifier,
-        ...(e.fields ? { ...e.fields } : {}),
-    }));
-    const order = base.prompts
-        .filter((e) => e.mounted)
-        .map((e) => ({ identifier: e.identifier, enabled: e.enabled }));
-    return {
-        prompts,
-        prompt_order: [{ character_id: 100001, order }],
-    };
+/** 把 v3 Delta 应用到父完整快照，还原为子完整快照（父链解析由调用方/导入编排负责）。 */
+export function applyV3DeltaToSnapshot(parent: PresetSnapshot, delta: PromptDeltaProfile): PresetSnapshot {
+    const parentEntries = entriesFromSnapshot(parent).entries;
+    const childEntries: PromptProfileEntry[] = applyPromptDelta(parentEntries, delta.changes, delta.order);
+    return entriesToSnapshot(childEntries);
 }
