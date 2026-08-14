@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { createEditorStore } from '../src/core/store/EditorStore.js';
+import { applyStagedToSnapshot, createEditorStore } from '../src/core/store/EditorStore.js';
 import type { PresetSnapshot } from '../src/core/domain/types.js';
 
 const snapshot: PresetSnapshot = {
     name: 'P',
-    prompts: [{ identifier: 'a', content: 'A', enabled: true }],
+    prompts: [{ identifier: 'a', content: 'A' }],
     prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
 };
 
@@ -52,8 +52,8 @@ describe('EditorStore', () => {
         const twoPromptSnapshot: PresetSnapshot = {
             name: 'P',
             prompts: [
-                { identifier: 'a', content: 'A', enabled: true },
-                { identifier: 'b', content: 'B', enabled: true },
+                { identifier: 'a', content: 'A' },
+                { identifier: 'b', content: 'B' },
             ],
             prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }, { identifier: 'b', enabled: true }] }],
         };
@@ -73,5 +73,19 @@ describe('EditorStore', () => {
         store.dispatch({ type: 'REORDER', order: ['a', 'b'] });
         expect(store.getState().staged.order).toBeUndefined();
         expect(store.getState().dirty).toBe(false);
+    });
+
+    it('applies staged changes into a new snapshot for commit', () => {
+        const next = applyStagedToSnapshot(snapshot, {
+            changes: [{ identifier: 'a', enabled: false, fields: { content: 'B' } }],
+            order: ['a'],
+            topLevel: { temperature: 1.2 },
+        });
+
+        expect(next.prompts).toEqual([{ identifier: 'a', content: 'B' }]);
+        expect(next.prompt_order).toEqual([
+            { character_id: 100001, order: [{ identifier: 'a', enabled: false }] },
+        ]);
+        expect(next.temperature).toBe(1.2);
     });
 });

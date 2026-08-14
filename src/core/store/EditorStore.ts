@@ -176,3 +176,33 @@ function isDirty(staged: EditorDiff): boolean {
         || (staged.order !== undefined && staged.order.length > 0)
         || (staged.topLevel !== undefined && Object.keys(staged.topLevel).length > 0);
 }
+
+/** 把 staged 差异应用到快照，产出提交用的新快照（不改原快照）。 */
+export function applyStagedToSnapshot(snapshot: PresetSnapshot, staged: EditorDiff): PresetSnapshot {
+    const prompts = structuredClone(Array.isArray(snapshot.prompts) ? snapshot.prompts : []);
+    const orderList = structuredClone(Array.isArray(snapshot.prompt_order) ? snapshot.prompt_order : []);
+    const target = orderList[0] as { order: { identifier: string; enabled?: boolean }[] } | undefined;
+
+    for (const change of staged.changes) {
+        const prompt = prompts.find((p: any) => p && p.identifier === change.identifier);
+        // v4 快照 prompts 只存 identifier + 值字段;enabled 真值在 prompt_order 层
+        if (prompt && change.fields) Object.assign(prompt, change.fields);
+        const orderEntry = target?.order?.find((o) => o.identifier === change.identifier);
+        if (orderEntry && change.enabled !== undefined) orderEntry.enabled = change.enabled;
+    }
+
+    if (staged.order !== undefined && target) {
+        const enabledMap = new Map(
+            (target.order ?? []).map((o) => [o.identifier, o.enabled ?? true]),
+        );
+        target.order = staged.order.map((id) => ({ identifier: id, enabled: enabledMap.get(id) ?? true }));
+    }
+
+    const next: PresetSnapshot = {
+        ...structuredClone(snapshot),
+        prompts,
+        prompt_order: orderList,
+    };
+    if (staged.topLevel) Object.assign(next, structuredClone(staged.topLevel));
+    return next;
+}
