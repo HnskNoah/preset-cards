@@ -12,7 +12,7 @@
 - **拖拽重排**：重排通过 `profile.order` 纳入 staged diff，与开关 / 值编辑统一 Commit 落盘，支持逐条撤销；脏标记以弹窗打开时的原始顺序为基准，拖回原位自动清除。
 - **system_prompt / marker 条目**：不显示开关与内容编辑入口（内容由 ST 管理），仅普通 prompt 可切换、可编辑；允许调整 mounted / unused，操作前必须确认。
 - **内联值编辑**：编辑表单提供 Name、Role + Position（同一行）、Injection Depth（仅 position=2 显示）与全宽 Content 文本域；position 下拉含 **Relative(0) / In-chat(1) / In Chat Absolute Depth(2)**；marker 条目内容框禁用。值差异写入会话缓冲，仅记录净变化字段。
-- **导入导出**：profile 导出三选项——「导出」（自包含格式，delta 附解析后的父快照 `Imported Parent`）、「包含关系链的导出」（`prompt_tree` 导出该预设**全部** v3 base/delta，DFS 根先序保证每个 delta 的 baseId 祖先在其前，保留原始 id/baseId，v1 排除）、「取消」；完整预设导出走 ST 自带。配置区块头部有 3 个图标按钮——**导入 / 导出全部 / 加号**；卡片右上角为完整预设导出。导入只接受 v3 格式，v1/v2 需先用迁移工具转换（见下）。
+- **导入导出**：导出统一为「**完整 preset JSON**」（含预设本体 + `extensions['preset_cards']`，数据自动脱敏剔除连接 / 凭据字段）。三个导出入口行为：**卡片右上角 / 头部「导出全部配置文件」**导出该预设**全部** v3 profile；**单 profile「导出配置」**只导出该 profile **及其父链**（delta 需真实父链才能正确解析），父链外的 profile 不导出。导入目前双入口（头部 ST 原生还原 / 卡片并入 profiles）；已定稿改造为「头部按类型分流 + 卡片保留为手动并入」，见「导入导出与旧版迁移」节。v1/v2 需先用迁移工具转换（见下）。
 - **重置**：Delta 回退到上级（Base 或上层 Delta），Base 回退到隐藏的默认基准（`defaultSnapshot`）。
 - **Commit 二选一**：编辑器顶部的 Commit 让用户选择「更新当前配置」或「新建为子配置（派生）」；delta 更新的差异基线用**父链解析**（`resolveParentStates`），未编辑的已存差异原样保留。
 - **清除值变更**：一键删除该条目的 `fields` 并**完全撤销**——同时还原运行时值、同步活动预设、清除本次会话编辑记录（`sessionEdits`）。
@@ -20,7 +20,7 @@
 - **派生 / 重命名 / 删除（级联）**：profile 支持派生、行内重命名与删除；删除时递归收集全部派生后代并确认后级联删除。
 - **元数据编辑**：描述、适用模型标签（渲染厂商 Logo）、背景图 URL，支持背景图 IndexedDB 缓存与一键清理。
 - **锁定态只读查看**：锁定后隐藏重置 / 提交按钮，点击 prompt 可进入只读查看（表单禁用、无保存），取消按钮显示为返回。
-- **中文界面**：读取 ST 全局语言设置自动切换中英文（内置中英词典，无需改动 ST 的 i18n）。
+- **中文界面**：`L()` 用 ST 的 `getCurrentLocale()` 判定语言（回退链 = `localStorage['language']` → `navigator.language` → `en`，与 ST 完全一致），命中内置中英词典即切换中文；未显式设置语言时也跟随浏览器语言，不会默认误判英文。
 
 ## 安装与构建
 
@@ -59,8 +59,9 @@ npm test           # 运行 vitest 单元测试
 
 ## 导入导出与旧版迁移
 
-- **导入**：只接受 v3 格式（单 base / 单 delta / `prompt_tree`），载荷经 schema 校验（`assertV3ImportPayload`）。所有 profile 重新分配 id，`baseId` 通过 idMap 重映射；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点。
-- **导出**：`prompt_tree` 按 root→leaf DFS 排序，保证 delta 祖先在前；v1 排除。完整预设导出走 ST 自带。
+- **导入（现状）**：两个入口，均并入 profiles——头部「导入预设」由插件接管文件读取并按类型分流：**完整 preset 文件**弹窗「并入现有预设（去重合并）/ 作为新预设导入（ST 原生还原）」，同名候选预设排在目标选择首位；**v3 profile 文件**（base / delta / prompt_tree）弹窗选择目标预设并入；**其余类型**（普通 ST 预设 / v1/v2 / 未知格式）回退 ST 原生导入。卡片「导入配置」为**手动并入**入口（目标 = 当前卡片预设，完整 preset 也只并 profiles）。**跨预设风险确认**：完整 preset 文件内预设名与目标预设名不同，或 v3 profile 无法确认来源预设时，会先弹「跨预设导入风险」确认窗，用户确认后才继续。**并入按内容指纹去重**：与现有（或本批已并入）条目内容相同（kind + 语义字段 + delta 父链指纹）的 profile 跳过并提示；同一预设分多次导出的不同 profile 可合并为同一棵树，共享父节点只并入一次。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 重映射到有效 id；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点（父内容与已有 profile 相同时直接挂到已有父）。v1/v2 需先迁移（见下）。
+- **导入（定稿已实现，2026-08-14）**：头部「导入预设」已由插件接管文件读取，按类型分流——完整 preset 弹窗并入或新建 / v3 profile 弹窗选预设并入 / 其余回退 ST 原生；卡片「导入配置」保留为**手动并入**入口（完整 preset 也接受，但明确只并 profiles）。设计稿见 `docs/current/architecture.md` 与 `docs/plans/import-flow-design.md`（docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供这些文件）。
+- **导出**：统一为导出完整 preset JSON（`exportPresetFile`），脱敏剔除 reverse_proxy / proxy_password / custom_url / azure / workers_ai 等连接与凭据字段。**卡片右上角 / 头部「导出全部」**导出全部 profiles；**单 profile「导出配置」**只导出该 profile 及其父链（`collectAncestorProfileIds`），父链外 profile 不导出。导入侧从该 JSON 的 `extensions['preset_cards']` 提取 profiles 并入当前预设。
 - **v1 / v2 迁移**：旧版 profile 文件**不会**在导入时自动迁移，需先用独立工具转换：
 
   ```bash
@@ -69,7 +70,7 @@ npm test           # 运行 vitest 单元测试
   npx tsx tools/migrate-to-v3.ts --dir ./backup         # 批量转换目录下所有 .json
   ```
 
-  支持 v1 全量快照、v2 base/delta、含 v2 内部条目的 `prompt_tree`、纯预设本体等格式。
+  支持 v1 全量快照、v2 base/delta、含 v2 内部条目的 `prompt_tree`、纯预设本体等格式。**完整 preset JSON**（含 `extensions['preset_cards']`）：profiles 全部为 v3 时原样透传（保证导入/导出前后体验一致）；含 v1/v2 profiles 时仅迁移旧条目，预设本体与 v3 条目保留。
 
 ## 与 ST 集成的已知注意点
 
@@ -103,24 +104,53 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 
 `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。
 
+> **新架构定稿（未实施，见 `docs/current/architecture.md` 本地文档）**：对外 API 将升级为 `listProfiles(presetName?)`（返回带 `presetName` + `profileName` 的 `ProfileRef[]`）与「切换并激活」语义的 `loadProfile`（加载 + 持久化 + 切 ST 当前预设 + 记 active + 发事件），`onProfileChanged` 回调参数同步升级。当前代码仍为上方旧 API。
+
 ## 开发约定
 
-仓库根有 **`AGENTS.md`**（开发 / CI / 分支 / PR 工作流）与 **`CODING_GUIDELINES.md`**（文件规模阈值、context 对象、纯函数下沉、防循环依赖等）。**审查结论复核流程**：任何 review / audit 结论须先独立判定 `REAL` / `MARGINAL` / `FALSE`（附 file:line 证据，能复现则写 harness）方可执行。`docs/` 目录有意加入 `.gitignore`，设计文档不随仓库跟踪。已知未修问题见 `UNFIXED_ISSUES.md`。
+仓库根有 **`AGENTS.md`**（开发 / CI / 分支 / PR 工作流）与 **`CODING_GUIDELINES.md`**（文件规模阈值、context 对象、纯函数下沉、防循环依赖等）。**审查结论复核流程**：任何 review / audit 结论须先独立判定 `REAL` / `MARGINAL` / `FALSE`（附 file:line 证据，能复现则写 harness）方可执行。`AGENTS.md` / `CODING_GUIDELINES.md` / `UNFIXED_ISSUES.md` 与 `docs/` 目录均有意加入 `.gitignore`——本地交接文档不随仓库跟踪；已知未修问题见 `UNFIXED_ISSUES.md`（同为本地文件）。新 agent 接盘需随仓库目录一起取得这些本地文件。
+
+## 测试覆盖
+
+单元测试用 vitest（纯逻辑，无浏览器）。测试文件按被测模块命名，位于 `tests/`，依赖 `tests/mocks/` 下的 ST 全局模拟。跑全部：`npm test`；单文件：`npx vitest run tests/<file>.test.ts`。
+
+| 测试文件 | 覆盖 |
+|---|---|
+| `tests/metaPersist.test.ts` | `readMeta` / `saveMeta` 持久化串行链与合并窗口 |
+| `tests/profileActions.test.ts` | profile 派生 / 级联删除 / 父链收集（`collectAncestorProfileIds`） |
+| `tests/profileChain.test.ts` | delta 父链解析、防环、Imported Parent 锚点 |
+| `tests/profileEditorState.test.ts` | 编辑器状态 / 会话缓冲 / 撤销恢复 |
+| `tests/profileResetApply.test.ts` | reset 回退（Delta→父级 / Base→defaultSnapshot） |
+| `tests/profileSchema.test.ts` | v3 载荷 schema 校验（`assertV3ImportPayload`） |
+| `tests/profileTree.test.ts` | 派生关系森林 / 条目视图构建 |
+| `tests/promptCapture.test.ts` | 值字段白名单、采样 / extra / 模型捕获与应用 |
+| `tests/promptState.test.ts` | 挂载状态快照 / delta 差异 / 顺序重排 |
+| `tests/importExport.test.ts` | 导入导出：`extractProfilesFromPresetExport` / `mergeImportedProfiles` / 完整 preset 提取 |
+| `tests/migrate-to-v3.test.ts` | v1/v2 → v3 迁移工具 |
+| `tests/i18n.test.ts` | `L()` 语言判定：显式 zh/en、浏览器语言回退（`navigator.language`）、词典缺键 |
+| `tests/nameWrap.test.ts` | `isRepeatedRunName`：重复字符串检测阈值、空白忽略 |
+| `tests/profileEditorContext.test.ts` | `buildBreadcrumb` / `truncateBreadcrumbName`：父链折叠、名字压缩、防环 |
+
+> 新增逻辑（尤其纯数据变换层）应尽量作为纯函数测试，而非 DOM 弹窗测试；mocks 提供 `addPreset` 等辅助注册预设。
 
 ## 源码结构
 
 | 文件 | 职责 |
 |---|---|
 | `src/index.ts` / `src/init.ts` | 扩展入口、斜杠命令、`window.presetCards` 暴露 |
-| `src/presetCards.ts` / `presetCardsContext.ts` / `presetCardsState.ts` / `presetCardsHandlers.ts` / `presetCardsRender.ts` | 卡片页弹窗（打开 / 状态 / 事件 / 局部刷新） |
+| `src/presetCards.ts` / `presetCardsContext.ts` / `presetCardsState.ts` / `presetCardsHandlers.ts` / `presetCardsRender.ts` | 卡片页弹窗（打开 / 状态 / 事件 / 局部刷新；`presetCardsState.ts` 含 `onProfileChanged` 事件源，覆盖所有加载路径） |
 | `src/profileEditor.ts` / `profileEditorContext.ts` / `profileEditorState.ts` / `profileEditorHandlers.ts` / `profileEditorRender.ts` | 编辑器弹窗五件套 |
 | `src/meta.ts` | 元数据类型、`readMeta` / `saveMeta`（含保存串行链与合并窗口） |
 | `src/promptState.ts` | 挂载状态快照 / delta 差异 / 顺序重排纯函数 |
 | `src/promptCapture.ts` | 值字段白名单、采样 / extra / 模型快照采集与应用 |
 | `src/promptApply.ts` / `src/promptToggle.ts` / `src/promptOrder.ts` | profile 应用、prompt_order 同步与替换 |
+| `src/fastApply.ts` | 快捷应用预设：绕过 ST 原生逐元素同步 reflow，批量直写内存 + DOM，触发与原生一致的事件链 |
+| `src/presetBuffers.ts` | 会话编辑缓冲（`sessionEdits` / `pendingToggles`）的键管理与应用（纯数据，不接触 DOM） |
+| `src/activeProfile.ts` | 当前激活 profile 引用（localStorage 持久化）、`getActiveProfile` |
 | `src/presetSnapshot.ts` | defaultSnapshot 锁定 / 合并 / reset 基线 |
 | `src/profileMutators.ts` / `src/profileActions.ts` | profile 数据变换与派生 / 级联删除 |
 | `src/importExport.ts` / `src/profileSchema.ts` | 导入导出与 v3 载荷校验 |
 | `src/presetList.ts` / `src/profileTree.ts` | 卡片与弹窗共用的条目视图、派生关系森林 |
-| `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、中英词典、常量 |
+| `src/nameWrap.ts` | 名字换行策略：`applyNameWrap` 消费 `presetList.ts` 的 `isRepeatedRunName`（超长重复串检测），对名字元素加 `.pc-name-nowrap` 保留省略号 |
+| `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、ST 语言判定 `L()`、中英词典、常量 |
 | `tools/migrate-to-v3.ts` | v1/v2 → v3 迁移 CLI |
