@@ -422,9 +422,8 @@ function handFileToNativePresetImport(file: File): void {
     }
 }
 
-/** 关闭插件弹窗并把文件交给 ST 原生导入（还原 / 回退路径）。 */
-function closeDialogAndHandToNative(ctx: CardsContext, file: File): void {
-    ctx.dialog.closest('.popup').find('.popup-controls .menu_button').click();
+/** 把文件交给 ST 原生导入（还原 / 回退路径）；保持卡片界面打开，不关闭插件弹窗。 */
+function handOffToNative(file: File): void {
     handFileToNativePresetImport(file);
 }
 
@@ -517,7 +516,7 @@ export async function importPresetFromHeader(ctx: CardsContext): Promise<void> {
         ]);
         if (!choice) return;
         if (choice === 'restore') {
-            closeDialogAndHandToNative(ctx, file);
+            handOffToNative(file);
             return;
         }
         const target = await chooseTargetPreset(defaultName); // 同名候选排首位
@@ -534,6 +533,6 @@ export async function importPresetFromHeader(ctx: CardsContext): Promise<void> {
         return;
     }
 
-    // 其他（普通 ST 预设 / v1/v2 / 未知格式）：回退 ST 原生导入，不弹窗拦截
-    closeDialogAndHandToNative(ctx, file);
+    // 其他（普通 ST 预设 / v1/v2 / 未知格式）：回退 ST 原生导入，不弹窗拦截、不关闭卡片界面
+    handOffToNative(file);
 }
