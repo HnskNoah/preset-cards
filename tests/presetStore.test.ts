@@ -25,4 +25,21 @@ describe('PresetStore', () => {
         expect(filterPresets(presets, 'be').map((p) => p.name)).toEqual(['Beta']);
         expect(filterPresets(presets, '').map((p) => p.name)).toEqual(['Alpha', 'Beta']);
     });
+
+    it('toggles batch selection and clears it with notifications', () => {
+        const store = createPresetStore({ presets, search: '', selectedIds: new Set(), activeName: null });
+        const seen: string[] = [];
+        store.subscribe(() => seen.push('change'));
+
+        store.dispatch({ type: 'TOGGLE_SELECT', name: 'Alpha' });
+        store.dispatch({ type: 'TOGGLE_SELECT', name: 'Beta' });
+        expect([...store.getState().selectedIds].sort()).toEqual(['Alpha', 'Beta']);
+
+        store.dispatch({ type: 'TOGGLE_SELECT', name: 'Alpha' });
+        expect([...store.getState().selectedIds]).toEqual(['Beta']);
+
+        store.dispatch({ type: 'CLEAR_SELECT' });
+        expect(store.getState().selectedIds.size).toBe(0);
+        expect(seen).toEqual(['change', 'change', 'change', 'change']);
+    });
 });

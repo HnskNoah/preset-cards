@@ -25,7 +25,9 @@ export interface PresetStoreState {
 
 export type PresetStoreCommand =
     | { type: 'SET_SEARCH'; query: string }
-    | { type: 'SET_ACTIVE'; name: string | null };
+    | { type: 'SET_ACTIVE'; name: string | null }
+    | { type: 'TOGGLE_SELECT'; name: string }
+    | { type: 'CLEAR_SELECT' };
 
 export interface PresetStore {
     getState(): PresetStoreState;
@@ -43,6 +45,14 @@ export function createPresetStore(initial: PresetStoreState): PresetStore {
                 return { ...current, search: command.query };
             case 'SET_ACTIVE':
                 return { ...current, activeName: command.name };
+            case 'TOGGLE_SELECT': {
+                const selectedIds = new Set(current.selectedIds);
+                if (selectedIds.has(command.name)) selectedIds.delete(command.name);
+                else selectedIds.add(command.name);
+                return { ...current, selectedIds };
+            }
+            case 'CLEAR_SELECT':
+                return { ...current, selectedIds: new Set() };
             default:
                 return current;
         }
