@@ -53,4 +53,14 @@ describe('core diff: diffSnapshot', () => {
 
         expect(diff.order).toEqual(['b', 'a']);
     });
+
+    it('captures top-level setting changes (e.g. temperature) separately from prompt diffs', () => {
+        const parent = preset();
+        const child = preset({ temperature: 1.2 });
+
+        const diff = diffSnapshot(parent, child);
+
+        expect(diff.topLevel).toEqual({ temperature: 1.2 });
+        expect(diff.changes).toEqual([]);
+    });
 });

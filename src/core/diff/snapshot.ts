@@ -8,12 +8,34 @@ import { entriesFromSnapshot } from '../codec/snapshotEntries.js';
 export interface PresetDiff {
     changes: PromptStateChange[];
     order?: string[];
+    /** 顶层设置差异（采样/模型等非 prompts/order/extensions 的键；child 有差异的键取 child 值）。 */
+    topLevel?: Record<string, unknown>;
 }
 
-/** 计算 child 相对 parent 的差异集（v3 兼容；顶层设置/扩展差异后续切片）。 */
+const NON_TOP_LEVEL_KEYS = new Set(['prompts', 'prompt_order', 'extensions']);
+
+/** 计算 child 相对 parent 的差异集（v3 兼容 prompts 层 + 顶层设置差异）。 */
 export function diffSnapshot(parent: PresetSnapshot, child: PresetSnapshot): PresetDiff {
     const parentEntries = entriesFromSnapshot(parent);
     const childEntries = entriesFromSnapshot(child);
     const { changes, order } = diffPromptState(childEntries.entries, parentEntries.entries, childEntries.unusedIds);
-    return order !== undefined ? { changes, order } : { changes };
+    const topLevel = diffTopLevel(parent, child);
+    const diff: PresetDiff = { changes };
+    if (order !== undefined) diff.order = order;
+    if (topLevel !== undefined) diff.topLevel = topLevel;
+    return diff;
+}
+
+function diffTopLevel(parent: PresetSnapshot, child: PresetSnapshot): Record<string, unknown> | undefined {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(child)) {
+        if (NON_TOP_LEVEL_KEYS.has(key)) continue;
+        if (!Object.is(value, parent[key])) result[key] = value;
+    }
+    // 父有、子无的顶层键也算差异（显式删除）
+    for (const key of Object.keys(parent)) {
+        if (NON_TOP_LEVEL_KEYS.has(key) || key in child) continue;
+        result[key] = undefined;
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
 }
