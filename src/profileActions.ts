@@ -1,8 +1,8 @@
 // profile 级纯数据变换：派生构造与级联删除的纯计算。
 // 不接触 dialog/DOM；事件 handler 调用后自行持久化与刷新 UI。
 
-import { isPromptDeltaProfile, newProfileId } from './meta.js';
-import type { PresetMeta, PromptBaseProfile, PromptDeltaChange, PromptDeltaProfile, PromptModel, PromptProfileEntry, PromptSampling } from './meta.js';
+import { getProfile, isPromptDeltaProfile, newProfileId } from './meta.js';
+import type { PresetMeta, PresetProfile, PromptBaseProfile, PromptDeltaChange, PromptDeltaProfile, PromptModel, PromptProfileEntry, PromptSampling } from './meta.js';
 
 /** fv3 base 工厂：统一可选字段拼接（unusedIds/sampling/extra/model）。 */
 export function makeBaseProfile(p: {
@@ -97,6 +97,21 @@ export function collectDescendantProfileIds(meta: PresetMeta, rootId: string): s
                 queue.push(String(p.id));
             }
         }
+    }
+    return result;
+}
+
+// 收集 profile 的完整父链 id（含自身）：沿 baseId 向上直到根（base 或父缺失/非 base/delta）。
+// 顺序为从自身到根，供「单 profile 导出连带父链」使用；visited 防环。
+export function collectAncestorProfileIds(meta: PresetMeta, profileId: string): string[] {
+    const result: string[] = [];
+    const visited = new Set<string>();
+    let current: PresetProfile | undefined = getProfile(meta, profileId);
+    while (current && !visited.has(String(current.id))) {
+        visited.add(String(current.id));
+        result.push(String(current.id));
+        if (!isPromptDeltaProfile(current)) break;
+        current = getProfile(meta, current.baseId);
     }
     return result;
 }

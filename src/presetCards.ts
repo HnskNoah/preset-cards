@@ -6,11 +6,14 @@ import { buildPresetList, getCardsTemplateContext } from './presetList.js';
 import { applyCachedBackgrounds } from './cache.js';
 import { createCardsContext } from './presetCardsContext.js';
 import { bindCardsHandlers } from './presetCardsHandlers.js';
+import { applyNameWrap } from './nameWrap.js';
 
 /** 打开 preset-cards 卡片页弹窗。 */
 export async function openPresetCards(): Promise<void> {
     const html = await renderExtensionTemplateAsync(EXTENSION_NAME, 'cards', getCardsTemplateContext());
     const dialog = $(html);
+
+    applyNameWrap(dialog);
 
     const ctx = createCardsContext(dialog, buildPresetList());
     if (ctx.isConciseMode) {

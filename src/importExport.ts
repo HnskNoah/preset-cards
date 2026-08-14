@@ -1,7 +1,7 @@
 import { POPUP_TYPE, callGenericPopup } from '@sillytavern/scripts/popup';
+import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
 import {
-    getProfile,
     isPromptBaseProfile,
     isPromptDeltaProfile,
     newProfileId,
@@ -12,19 +12,10 @@ import {
     type PromptProfileEntry,
 } from './meta.js';
 import { makeBaseProfile, makeDeltaProfile } from './profileActions.js';
-import { resolveParentStates } from './promptToggle.js';
 export function chooseProfileSaveTarget(): Promise<'update' | 'create' | null> {
     return chooseFromOptions(L('Save changes to'), [
         [L('Update current profile'), 'update'],
         [L('Create new subprofile'), 'create'],
-    ]);
-}
-
-// 导出方式选择弹窗：单一导出 / 关系链导出 / 取消（完整预设导出直接用 ST 自带功能）
-export function chooseProfileExportAction(): Promise<'profile' | 'tree' | null> {
-    return chooseFromOptions(L('Export configuration'), [
-        [L('Export'), 'profile'],
-        [L('Export with branch chain'), 'tree'],
     ]);
 }
 
@@ -67,89 +58,21 @@ export async function chooseFromOptions<T extends string>(title: string, options
     return promise;
 }
 
-// 单 profile 自包含导出（fv3）：base → prompt_base / delta → 附解析后完整父状态快照。
-// 附带 preset 的 defaultSnapshot + defaultSampling + defaultExtra（出厂基线），导入后 reset 仍可还原出厂值。
-export function buildProfileExportData(profile: PresetProfile, meta: PresetMeta): string {
-    const base = (meta.defaultSnapshot && meta.defaultSnapshot.length > 0) ? meta.defaultSnapshot : undefined;
-    const baseline = {
-        ...(base ? { defaultSnapshot: base, defaultSnapshotLocked: meta.defaultSnapshotLocked === true } : {}),
-        ...(meta.defaultSampling ? { defaultSampling: meta.defaultSampling } : {}),
-        ...(meta.defaultExtra ? { defaultExtra: meta.defaultExtra } : {}),
-    };
-    if (isPromptBaseProfile(profile)) {
-        return JSON.stringify({
-            kind: profile.kind,
-            formatVersion: profile.formatVersion,
-            prompts: profile.prompts,
-            ...(profile.unusedIds ? { unusedIds: profile.unusedIds } : {}),
-            ...(profile.sampling ? { sampling: profile.sampling } : {}),
-            ...(profile.extra ? { extra: profile.extra } : {}),
-            ...(profile.model ? { model: profile.model } : {}),
-            ...baseline,
-        }, null, 4);
+// 从完整 preset 导出文件（exportPresetFile 产物，含 extensions['preset_cards']）中提取 profiles。
+// 返回数组（可能为空 = 该 preset 无 profiles）；非完整 preset 载荷（v3 base/delta/prompt_tree 或普通 ST 预设）返回 undefined。
+export function extractProfilesFromPresetExport(parsed: Record<string, unknown>): (PromptBaseProfile | PromptDeltaProfile)[] | undefined {
+    if (parsed?.kind === 'prompt_base' || parsed?.kind === 'prompt_delta' || parsed?.kind === 'prompt_tree') {
+        return undefined;
     }
-    if (isPromptDeltaProfile(profile)) {
-        const parentState = resolveParentStates(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[]);
-        return JSON.stringify({
-            kind: profile.kind,
-            formatVersion: profile.formatVersion,
-            baseId: profile.baseId,
-            base: {
-                name: 'Imported Parent',
-                prompts: parentState,
-            },
-            changes: profile.changes,
-            ...(profile.order ? { order: profile.order } : {}),
-            ...(profile.sampling ? { sampling: profile.sampling } : {}),
-            ...(profile.extra ? { extra: profile.extra } : {}),
-            ...(profile.model ? { model: profile.model } : {}),
-            ...baseline,
-        }, null, 4);
-    }
-    return '';
-}
-
-// 导出完整分支树 prompt_tree：收集全部 base/delta，按 root→leaf（DFS）排序。
-export function buildTreeExportData(meta: PresetMeta, targetId?: string): string {
-    const profiles = meta.profiles.filter(p => isPromptBaseProfile(p) || isPromptDeltaProfile(p)) as (PromptBaseProfile | PromptDeltaProfile)[];
-    const childrenByParent = new Map<string, PromptDeltaProfile[]>();
-    for (const p of profiles) {
-        if (isPromptDeltaProfile(p)) {
-            const list = childrenByParent.get(p.baseId) ?? [];
-            list.push(p);
-            childrenByParent.set(p.baseId, list);
-        }
-    }
-    const ordered: (PromptBaseProfile | PromptDeltaProfile)[] = [];
-    const visited = new Set<string>();
-    const visit = (p: PromptBaseProfile | PromptDeltaProfile): void => {
-        if (visited.has(p.id)) return;
-        if (isPromptDeltaProfile(p)) {
-            const parent = getProfile(meta, p.baseId);
-            if (parent && (isPromptBaseProfile(parent) || isPromptDeltaProfile(parent))) visit(parent);
-        }
-        visited.add(p.id);
-        ordered.push(p);
-        for (const child of childrenByParent.get(p.id) ?? []) visit(child);
-    };
-    for (const p of profiles) {
-        if (isPromptBaseProfile(p)) visit(p);
-    }
-    for (const p of profiles) {
-        if (!visited.has(p.id)) visit(p);
-    }
-    const payload = {
-        kind: 'prompt_tree' as const,
-        formatVersion: 3,
-        profiles: structuredClone(ordered),
-        ...((meta.defaultSnapshot && meta.defaultSnapshot.length > 0)
-            ? { defaultSnapshot: meta.defaultSnapshot, defaultSnapshotLocked: meta.defaultSnapshotLocked === true }
-            : {}),
-        ...(meta.defaultSampling ? { defaultSampling: meta.defaultSampling } : {}),
-        ...(meta.defaultExtra ? { defaultExtra: meta.defaultExtra } : {}),
-        ...(targetId ? { targetId } : {}),
-    };
-    return JSON.stringify(payload, null, 4);
+    const ext = (parsed?.extensions ?? {}) as Record<string, unknown>;
+    const presetCards = ext[EXTENSION_KEY] && typeof ext[EXTENSION_KEY] === 'object'
+        ? (ext[EXTENSION_KEY] as Record<string, unknown>)
+        : undefined;
+    if (!presetCards) return undefined;
+    const rawProfiles = presetCards.profiles;
+    if (!Array.isArray(rawProfiles)) return undefined;
+    return rawProfiles.filter((p): p is PromptBaseProfile | PromptDeltaProfile =>
+        isPromptBaseProfile(p) || isPromptDeltaProfile(p));
 }
 
 /**
@@ -182,7 +105,20 @@ export function mergeImportedProfiles(
     /** 带内嵌父状态的 delta：delta 原 id → 父状态 */
     const deltaBaseMap = new Map<string, { prompts: PromptProfileEntry[] }>();
 
-    if (parsed && parsed.kind === 'prompt_tree' && Array.isArray(parsed.profiles)) {
+    // 完整 preset 导出（含 extensions['preset_cards']）：直接从其中提取 profiles 数组
+    const presetProfiles = extractProfilesFromPresetExport(parsed);
+    /** 是否为完整 preset 导出（含 extensions['preset_cards']）；其空 profiles 也应视为合法导入（无条目可并入）。 */
+    const isPresetExport = Array.isArray(presetProfiles);
+
+    if (Array.isArray(presetProfiles)) {
+        for (const p of presetProfiles) {
+            if (isPromptBaseProfile(p)) {
+                rawProfiles.push(makeBaseProfile({ id: p.id, name: p.name, prompts: p.prompts, ...(p.unusedIds ? { unusedIds: p.unusedIds } : {}), ...(p.sampling ? { sampling: p.sampling } : {}), ...(p.extra ? { extra: p.extra } : {}), ...(p.model ? { model: p.model } : {}) }));
+            } else if (isPromptDeltaProfile(p)) {
+                rawProfiles.push(makeDeltaProfile({ id: p.id, name: p.name, baseId: p.baseId, changes: p.changes, ...(p.order ? { order: p.order } : {}), ...(p.sampling ? { sampling: p.sampling } : {}), ...(p.extra ? { extra: p.extra } : {}), ...(p.model ? { model: p.model } : {}) }));
+            }
+        }
+    } else if (parsed && parsed.kind === 'prompt_tree' && Array.isArray(parsed.profiles)) {
         for (const entry of parsed.profiles) {
             if (!entry) continue;
             if (entry.kind === 'prompt_base' && Array.isArray(entry.prompts)) {
@@ -203,6 +139,8 @@ export function mergeImportedProfiles(
     }
 
     if (rawProfiles.length === 0) {
+        // 完整 preset 导出即使无 v3 profile 也视为合法（导入无条目可并入，直接返回现有 profiles）
+        if (isPresetExport) return { profiles, warnings };
         throw new Error('Imported configuration is not a valid v3 preset snapshot');
     }
 

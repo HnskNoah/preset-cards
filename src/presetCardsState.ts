@@ -5,20 +5,21 @@ import { eventSource, event_types } from '@sillytavern/scripts/events';
 import { download } from '@sillytavern/scripts/utils';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { L } from './i18n.js';
-import { EXTENSION_NAME } from './constants.js';
+import { EXTENSION_KEY, EXTENSION_NAME } from './constants.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta, saveMeta } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile, PromptModel } from './meta.js';
 import { applyProfileToPreset, resolveProfileModel } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
 import { lockDefaultSnapshot } from './presetSnapshot.js';
 import { applyBufferedEdits, clearBufferedForName } from './presetBuffers.js';
-import { mergeImportedProfiles } from './importExport.js';
+import { mergeImportedProfiles, extractProfilesFromPresetExport } from './importExport.js';
 import { assertV3ImportPayload } from './profileSchema.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
 import { getCardsTemplateContext } from './presetList.js';
 import type { CardsContext } from './presetCardsContext.js';
 import { clearImageCache, applyCachedBackgrounds } from './cache.js';
+import { applyNameWrap } from './nameWrap.js';
 
 /** profile 加载事件订阅回调。 */
 export type ProfileChangedListener = (ref: { presetName: string; profileId: string }) => void;
@@ -232,6 +233,7 @@ export async function refreshGrid(ctx: CardsContext, opts?: { applyBackgrounds?:
     const newHtml = await renderExtensionTemplateAsync(EXTENSION_NAME, 'cards', getCardsTemplateContext());
     ctx.dialog.html($(newHtml).html());
     if (opts?.applyBackgrounds !== false) applyCachedBackgrounds(ctx.dialog);
+    applyNameWrap(ctx.dialog);
     if (query) ctx.dialog.find('#preset_cards_search').val(query);
     if (ctx.isConciseMode) ctx.dialog.find('#preset_cards_concise_btn').addClass('active');
     // 批量模式 UI 恢复：模板重建后重挂 batch class / 按钮可见性 / 已选高亮
@@ -296,8 +298,10 @@ export async function addBaseProfile(
     await refreshGrid(ctx);
 }
 
-/** 导出完整 preset JSON（剔除敏感连接字段）。 */
-export function exportPresetFile(name: string, idx: number): void {
+/** 导出完整 preset JSON（剔除敏感连接字段）。
+ * profileIds 为空表示导出全部 profiles；指定时为「只导出这些 profile + 预设本体」（单 profile 导出）。
+ * fileName 指定下载文件名（不含 .json，自动补后缀），缺省用预设名。 */
+export function exportPresetFile(name: string, idx: number, profileIds?: string[], fileName?: string): void {
     const preset = structuredClone(openai_settings[idx] as Preset);
     const sensitiveKeys = [
         'reverse_proxy', 'proxy_password', 'custom_url', 'custom_include_body', 'custom_exclude_body',
@@ -309,7 +313,16 @@ export function exportPresetFile(name: string, idx: number): void {
     for (const [key, [,, , isConnection]] of Object.entries(settingsToUpdate)) {
         if (isConnection) delete preset[key];
     }
-    download(JSON.stringify(preset, null, 4), `${name}.json`, 'application/json');
+    // 单 profile 导出：只保留指定 profile，其余剔除（profile 的 defaultSnapshot 等出厂基线随 meta 保留）
+    if (profileIds && profileIds.length > 0) {
+        const ext = preset.extensions?.[EXTENSION_KEY];
+        if (ext && Array.isArray(ext.profiles)) {
+            const keep = new Set(profileIds.map(String));
+            ext.profiles = ext.profiles.filter((p: any) => keep.has(String(p.id)));
+        }
+    }
+    const baseName = fileName?.trim() ? fileName.trim() : name;
+    download(JSON.stringify(preset, null, 4), `${baseName}.json`, 'application/json');
 }
 
 /** 清空图片缓存并刷新。 */
@@ -348,6 +361,7 @@ export async function showConciseProfilesModal(ctx: CardsContext, card: JQuery<H
     });
 
     container.append(list);
+    applyNameWrap(container);
     callGenericPopup(container, POPUP_TYPE.TEXT, '', { wide: false, large: false });
 }
 
@@ -360,8 +374,11 @@ export async function importProfileFile(ctx: CardsContext, name: string, idx: nu
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
             throw new Error('Imported configuration is not a JSON object');
         }
-        // fv3 base/delta/tree 载荷用 schema 校验，防畸形条目入库后崩溃；旧版 v1/v2 须先用 migrate-to-v3 转换。
-        assertV3ImportPayload(parsed);
+        // 完整 preset 导出（含 extensions['preset_cards']）：提取其中 profiles 并入；其余走 v3 载荷校验。
+        // 旧版 v1/v2 须先用 migrate-to-v3 工具转换。
+        if (!extractProfilesFromPresetExport(parsed)) {
+            assertV3ImportPayload(parsed);
+        }
     } catch (err) {
         console.error(err);
         toastr.error(L('Failed to parse configuration file'));

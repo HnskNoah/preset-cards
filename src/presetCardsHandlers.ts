@@ -1,14 +1,13 @@
 import { oai_settings, openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { t } from '@sillytavern/scripts/i18n';
-import { download } from '@sillytavern/scripts/utils';
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { captureExtra, captureModel, captureSampling, diffExtra, diffSampling, resolveEffectiveExtra, resolveEffectiveSampling } from './promptToggle.js';
-import { buildDerivedProfile, collectDescendantProfileIds } from './profileActions.js';
+import { buildDerivedProfile, collectAncestorProfileIds, collectDescendantProfileIds } from './profileActions.js';
 import { resetProfileCore } from './profileMutators.js';
-import { buildProfileExportData, buildTreeExportData, chooseFromOptions, chooseProfileExportAction } from './importExport.js';
+import { chooseFromOptions } from './importExport.js';
 import { openEditModal } from './editModal.js';
 import { clearBufferedForName } from './presetBuffers.js';
 import { openProfileEditorPopup } from './profileEditor.js';
@@ -136,11 +135,13 @@ export function bindCardsHandlers(ctx: CardsContext): void {
     });
 
     // ---- Export button ----
-    ctx.dialog.on('click', '.preset_card_export_btn', function (e) {
+    ctx.dialog.on('click', '.preset_card_export_btn', async function (e) {
         e.stopPropagation();
         const name = $(this).attr('data-preset-name') as string;
         const idx = $(this).data('preset-index') as number;
-        exportPresetFile(name, idx);
+        const fileName = await Popup.show.input(L('Export file name:'), name, name);
+        if (!fileName) return;
+        exportPresetFile(name, idx, undefined, fileName);
     });
 
     // ---- Delete button ----
@@ -239,9 +240,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const { name, idx } = cardContext($(this));
         const choice = await chooseFromOptions(L('Export configuration'), [[L('Export all configurations'), 'export']]);
         if (choice !== 'export') return;
-        const preset = openai_settings[idx] as Preset;
-        const meta = readMeta(preset);
-        download(buildTreeExportData(meta), `${name}-tree.json`, 'application/json');
+        exportPresetFile(name, idx);
     });
 
     // ---- Profiles: 分组折叠切换 ----
@@ -355,18 +354,16 @@ export function bindCardsHandlers(ctx: CardsContext): void {
     // ---- Profiles: Export Configuration ----
     ctx.dialog.on('click', '.preset_card_profile_export', async function (e) {
         e.stopPropagation();
-        const { profileId, idx } = rowContext($(this));
+        const { profileId, name, idx } = rowContext($(this));
+        const choice = await chooseFromOptions(L('Export configuration'), [[L('Export'), 'export']]);
+        if (choice !== 'export') return;
         const preset = openai_settings[idx] as Preset;
         const meta = readMeta(preset);
         const profile = getProfile(meta, profileId);
         if (!profile) return;
-
-        const choice = await chooseProfileExportAction();
-        if (choice === 'tree') {
-            download(buildTreeExportData(meta, profile.id), `${profile.name}-tree.json`, 'application/json');
-        } else if (choice === 'profile') {
-            download(buildProfileExportData(profile, meta), `${profile.name}.json`, 'application/json');
-        }
+        // 单 profile 导出：连带父链一起导出（delta 需真实父链才能正确解析），parent 链外 profile 不导出
+        const ancestorIds = collectAncestorProfileIds(meta, profileId);
+        exportPresetFile(name, idx, ancestorIds);
     });
 
     // ---- Profiles: Import Configuration ----

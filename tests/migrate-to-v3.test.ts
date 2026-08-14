@@ -67,6 +67,73 @@ describe('migrate-to-v3', () => {
         expect(migrateFile(input)).toBe(input);
     });
 
+    it('passes full preset export with v3 profiles through unchanged', () => {
+        const input = {
+            name: 'My Preset',
+            prompts: [{ identifier: 'a', content: 'hi' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
+            extensions: {
+                preset_cards: {
+                    profiles: [
+                        { formatVersion: 3, kind: 'prompt_base', id: 'b1', name: 'B', prompts: [{ identifier: 'a', mounted: true, enabled: true }] },
+                    ],
+                },
+            },
+        };
+        expect(migrateFile(input)).toBe(input);
+    });
+
+    it('migrates v2 profiles inside a full preset export, keeping preset body and v3 profiles', () => {
+        const input = {
+            name: 'My Preset',
+            prompts: [{ identifier: 'a', content: 'hi' }],
+            extensions: {
+                preset_cards: {
+                    profiles: [
+                        { formatVersion: 2, kind: 'prompt_base', id: 'b1', name: 'B', prompts: [{ identifier: 'a', enabled: true }] },
+                        { formatVersion: 3, kind: 'prompt_delta', id: 'd1', name: 'D', baseId: 'b1', changes: [] },
+                    ],
+                },
+            },
+        };
+        const out = migrateFile(input);
+        expect(out).not.toBe(input);
+        expect(out.name).toBe('My Preset');
+        expect(out.extensions.preset_cards.profiles[0].formatVersion).toBe(3);
+        expect(out.extensions.preset_cards.profiles[0].prompts[0].mounted).toBe(true);
+        expect(out.extensions.preset_cards.profiles[1]).toEqual(input.extensions.preset_cards.profiles[1]);
+    });
+
+    it('migrates all-v2 profiles inside a full preset export (no v3 entries)', () => {
+        const input = {
+            name: 'Legacy',
+            prompts: [],
+            extensions: {
+                preset_cards: {
+                    profiles: [
+                        { formatVersion: 2, kind: 'prompt_base', id: 'b1', name: 'B', prompts: [{ identifier: 'a', enabled: true }] },
+                    ],
+                },
+            },
+        };
+        const out = migrateFile(input);
+        expect(out.name).toBe('Legacy');
+        expect(out.extensions.preset_cards.profiles).toHaveLength(1);
+        expect(out.extensions.preset_cards.profiles[0].formatVersion).toBe(3);
+        expect(out.extensions.preset_cards.profiles[0].prompts[0].mounted).toBe(true);
+    });
+
+    it('snapshots a plain preset body (no preset_cards) to a single base', () => {
+        const out = migrateFile({
+            name: 'Plain',
+            prompts: [{ identifier: 'a', content: 'hi' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
+        });
+        expect(out.formatVersion).toBe(3);
+        expect(out.kind).toBe('prompt_base');
+        expect(out.prompts[0].identifier).toBe('a');
+    });
+
     it('throws on unrecognized format', () => {
         expect(() => migrateFile({ foo: 'bar' })).toThrow(/Unrecognized format/);
     });

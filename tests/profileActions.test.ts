@@ -3,6 +3,7 @@ import {
     makeBaseProfile,
     makeDeltaProfile,
     buildDerivedProfile,
+    collectAncestorProfileIds,
     collectDescendantProfileIds,
     isArchiveProfile,
 } from '../src/profileActions.js';
@@ -61,6 +62,30 @@ describe('profileActions', () => {
         } as any;
         const ids = collectDescendantProfileIds(meta, 'a');
         expect(ids.sort()).toEqual(['b', 'c', 'd']);
+    });
+
+    it('collects ancestor profile chain (self → root) for single-profile export', () => {
+        const meta = {
+            profiles: [
+                { id: 'a', kind: 'prompt_base', formatVersion: 3, name: 'A', prompts: [] },
+                { id: 'b', kind: 'prompt_delta', formatVersion: 3, name: 'B', baseId: 'a', changes: [] },
+                { id: 'c', kind: 'prompt_delta', formatVersion: 3, name: 'C', baseId: 'b', changes: [] },
+                { id: 'd', kind: 'prompt_delta', formatVersion: 3, name: 'D', baseId: 'a', changes: [] },
+            ],
+        } as any;
+        expect(collectAncestorProfileIds(meta, 'c')).toEqual(['c', 'b', 'a']);
+        expect(collectAncestorProfileIds(meta, 'a')).toEqual(['a']);
+    });
+
+    it('collectAncestorProfileIds stops at missing/cyclic parent', () => {
+        const meta = {
+            profiles: [
+                { id: 'x', kind: 'prompt_delta', formatVersion: 3, name: 'X', baseId: 'missing', changes: [] },
+                { id: 'y', kind: 'prompt_delta', formatVersion: 3, name: 'Y', baseId: 'y', changes: [] },
+            ],
+        } as any;
+        expect(collectAncestorProfileIds(meta, 'x')).toEqual(['x']);
+        expect(collectAncestorProfileIds(meta, 'y')).toEqual(['y']);
     });
 
     it('archive stubs always return false', () => {

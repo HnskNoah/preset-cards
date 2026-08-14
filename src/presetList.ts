@@ -72,9 +72,14 @@ export interface ProfileNode extends ProfileRow {
     children: ProfileNode[];
 }
 
-function truncate(str: string, max: number): string {
-    if (!str) return '';
-    return str.length > max ? '…' + str.slice(-(max - 1)) : str;
+/** 检测「超长的单个重复字符/符号串」（如 aaaaaaaa... / !!!!!!... / ----...）。
+ * 去掉所有空白后，存在 >=12 个相同字符连续重复，或整串仅由单个字符重复构成。
+ * 这类名字换行只会变成一列无意义重复，应保留省略号。 */
+export function isRepeatedRunName(name: string): boolean {
+    if (!name) return false;
+    const compact = name.replace(/\s+/g, '');
+    if (!compact) return false;
+    return /(.)\1{11,}/.test(compact);
 }
 
 /** 顺序编辑上下文：目标 prompt_order 条目的顺序索引与长度（仅活动预设有效）。 */
@@ -211,7 +216,7 @@ export function buildPresetList(): PresetCardModel[] {
         const source = String(preset['chat_completion_source'] ?? '');
         const sourceLabel = SOURCE_LABELS[source] || '';
         const modelKey = MODEL_KEYS[source] || '';
-        const modelName = modelKey ? truncate(String(preset[modelKey] ?? ''), 40) : '';
+        const modelName = modelKey ? String(preset[modelKey] ?? '') : '';
 
         // Source + model combined line
         let sourceAndModel = sourceLabel;
