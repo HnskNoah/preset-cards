@@ -318,3 +318,15 @@ export function classifyHeaderImport(parsed: Record<string, unknown>): HeaderImp
         return 'native';
     }
 }
+
+/**
+ * 判断本次并入是否需要「跨预设风险确认」：
+ * - 完整 preset 导出：以文件内预设名与目标预设名比对，不同名（可能改名，也可能真是别的预设）→ 需要确认
+ * - v3 profile / 来源不明的载荷：无预设名可比对 → 一律需要确认
+ * 返回 true = 需要弹风险确认；false = 可视为同一预设的恢复，无需确认。
+ */
+export function isCrossPresetImport(parsed: Record<string, unknown>, targetName: string): boolean {
+    if (!Array.isArray(extractProfilesFromPresetExport(parsed))) return true;
+    const sourceName = typeof parsed.name === 'string' ? parsed.name : undefined;
+    return sourceName !== targetName;
+}

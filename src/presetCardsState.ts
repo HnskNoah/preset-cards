@@ -12,7 +12,7 @@ import { applyProfileToPreset, resolveProfileModel } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
 import { lockDefaultSnapshot } from './presetSnapshot.js';
 import { applyBufferedEdits, clearBufferedForName } from './presetBuffers.js';
-import { chooseFromOptions, classifyHeaderImport, extractProfilesFromPresetExport, mergeImportedProfiles } from './importExport.js';
+import { chooseFromOptions, classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles } from './importExport.js';
 import { assertV3ImportPayload } from './profileSchema.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
@@ -424,7 +424,7 @@ function closeDialogAndHandToNative(ctx: CardsContext, file: File): void {
     handFileToNativePresetImport(file);
 }
 
-/** 把已解析的导入内容并入指定目标预设（取名 → 锁基线 → 合并去重 → 落盘 → 刷新；卡片/头部共用核心）。 */
+/** 把已解析的导入内容并入指定目标预设（风险确认 → 取名 → 锁基线 → 合并去重 → 落盘 → 刷新；卡片/头部共用核心）。 */
 async function mergeParsedToPreset(
     ctx: CardsContext,
     targetName: string,
@@ -433,6 +433,12 @@ async function mergeParsedToPreset(
     defaultName: string,
 ): Promise<boolean> {
     try {
+        // 跨预设风险确认：完整 preset 不同名或 v3 profile 来源不明时，用户确认后才继续
+        if (isCrossPresetImport(parsed, targetName)) {
+            const confirmed = await callGenericPopup(L('Cross-preset import warning'), POPUP_TYPE.CONFIRM);
+            if (!confirmed) return false;
+        }
+
         const profileName = await Popup.show.input(L('Configuration name:'), defaultName, defaultName);
         if (!profileName) return false;
 

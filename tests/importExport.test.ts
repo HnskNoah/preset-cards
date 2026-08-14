@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHeaderImport, extractProfilesFromPresetExport, mergeImportedProfiles } from '../src/importExport.js';
+import { classifyHeaderImport, extractProfilesFromPresetExport, isCrossPresetImport, mergeImportedProfiles } from '../src/importExport.js';
 import { makeBaseProfile, makeDeltaProfile } from '../src/profileActions.js';
 
 const baseProfile = makeBaseProfile({
@@ -190,5 +190,23 @@ describe('classifyHeaderImport', () => {
         expect(classifyHeaderImport({ formatVersion: 1, kind: 'prompt_snapshot', id: 'x', name: 'Old', prompts: [] })).toBe('native');
         expect(classifyHeaderImport({ name: 'P', extensions: { preset_cards: { profiles: 'nope' } } })).toBe('native');
         expect(classifyHeaderImport({})).toBe('native');
+    });
+});
+
+describe('isCrossPresetImport', () => {
+    it('same-name full preset export needs no cross-preset confirmation', () => {
+        const preset = { name: 'A', prompts: [], extensions: { preset_cards: { profiles: [baseProfile] } } };
+        expect(isCrossPresetImport(preset, 'A')).toBe(false);
+    });
+
+    it('different-name full preset export needs confirmation (may be another preset or renamed)', () => {
+        const preset = { name: 'B', prompts: [], extensions: { preset_cards: { profiles: [baseProfile] } } };
+        expect(isCrossPresetImport(preset, 'A')).toBe(true);
+        expect(isCrossPresetImport({ prompts: [], extensions: { preset_cards: { profiles: [baseProfile] } } }, 'A')).toBe(true);
+    });
+
+    it('v3 profile payloads always need confirmation (no source preset identity)', () => {
+        expect(isCrossPresetImport({ kind: 'prompt_base', formatVersion: 3, id: 'b1', name: 'Base', prompts: [] }, 'A')).toBe(true);
+        expect(isCrossPresetImport({ kind: 'prompt_tree', formatVersion: 3, profiles: [baseProfile] }, 'A')).toBe(true);
     });
 });
