@@ -9,6 +9,7 @@ import type {
     V4ProfileNode,
 } from '../domain/types.js';
 import { snapshotPromptState } from '../../promptState.js';
+import { addProfileNode, createPresetCardsFile } from './v4.js';
 
 /** 把 v4 节点导出为 v3 profiles（隐藏 root 不导出；根 profile → Base，非根 → Delta）。 */
 export function toV3Profiles(file: PresetCardsFile): (PromptBaseProfile | PromptDeltaProfile)[] {
@@ -80,3 +81,29 @@ function orderEntries(promptOrder: unknown): { identifier: string; enabled?: boo
 }
 
 type PromptStateChangeLike = { identifier: string; [key: string]: unknown };
+
+/** 把单个 v3 Base 还原为 v4 文件：root 保存导入时快照，Base 成为根 profile 节点。 */
+export function fromV3BaseProfile(base: PromptBaseProfile, key: string): PresetCardsFile {
+    const restored = baseToSnapshot(base);
+    const file = createPresetCardsFile(restored, key);
+    return addProfileNode(file, {
+        id: base.id,
+        name: base.name,
+        presetSnapshot: restored,
+    });
+}
+
+/** v3 Base entries → v4 完整快照（prompts + prompt_order；mounted 进 order）。 */
+export function baseToSnapshot(base: PromptBaseProfile): PresetSnapshot {
+    const prompts = base.prompts.map((e) => ({
+        identifier: e.identifier,
+        ...(e.fields ? { ...e.fields } : {}),
+    }));
+    const order = base.prompts
+        .filter((e) => e.mounted)
+        .map((e) => ({ identifier: e.identifier, enabled: e.enabled }));
+    return {
+        prompts,
+        prompt_order: [{ character_id: 100001, order }],
+    };
+}
