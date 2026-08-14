@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildV3Export } from '../src/core/importexport/export.js';
+import { buildV3Export, sanitizeExport } from '../src/core/importexport/export.js';
 import { addProfileNode, createPresetCardsFile } from '../src/core/codec/v4.js';
 
 describe('core import/export: buildV3Export', () => {
@@ -28,5 +28,26 @@ describe('core import/export: buildV3Export', () => {
             enabled: true,
             fields: { content: 'A' },
         });
+    });
+});
+
+describe('core import/export: sanitizeExport', () => {
+    it('removes sensitive top-level keys without mutating the source', () => {
+        const source = {
+            name: 'P',
+            reverse_proxy: 'http://secret',
+            proxy_password: 'pw',
+            temperature: 0.8,
+            extensions: { other: 1 },
+        };
+
+        const clean = sanitizeExport(source, ['reverse_proxy', 'proxy_password']);
+
+        expect(clean).not.toHaveProperty('reverse_proxy');
+        expect(clean).not.toHaveProperty('proxy_password');
+        expect(clean.temperature).toBe(0.8);
+        expect(clean.extensions).toEqual({ other: 1 });
+        // 原对象不变
+        expect(source.reverse_proxy).toBe('http://secret');
     });
 });

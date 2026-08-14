@@ -24,3 +24,10 @@ export function buildV3Export(file: PresetCardsFile): V3Export {
         },
     };
 }
+
+/** 深拷贝并剔除顶层敏感键（连接/凭据等）；不修改原对象。 */
+export function sanitizeExport<T extends Record<string, unknown>>(source: T, sensitiveKeys: string[]): T {
+    const clean = structuredClone(source);
+    for (const key of sensitiveKeys) delete clean[key];
+    return clean;
+}
