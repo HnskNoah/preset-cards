@@ -47,4 +47,31 @@ describe('EditorStore', () => {
         expect(store.getState().staged.changes).toEqual([]);
         expect(store.getState().dirty).toBe(false);
     });
+
+    it('stages a full mounted order and clears it when matching the snapshot order', () => {
+        const twoPromptSnapshot: PresetSnapshot = {
+            name: 'P',
+            prompts: [
+                { identifier: 'a', content: 'A', enabled: true },
+                { identifier: 'b', content: 'B', enabled: true },
+            ],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }, { identifier: 'b', enabled: true }] }],
+        };
+        const store = createEditorStore({
+            nodeId: 'A',
+            snapshot: twoPromptSnapshot,
+            staged: { changes: [] },
+            undoStack: [],
+            redoStack: [],
+            dirty: false,
+        });
+
+        store.dispatch({ type: 'REORDER', order: ['b', 'a'] });
+        expect(store.getState().staged.order).toEqual(['b', 'a']);
+        expect(store.getState().dirty).toBe(true);
+
+        store.dispatch({ type: 'REORDER', order: ['a', 'b'] });
+        expect(store.getState().staged.order).toBeUndefined();
+        expect(store.getState().dirty).toBe(false);
+    });
 });

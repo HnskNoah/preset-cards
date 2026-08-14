@@ -22,6 +22,7 @@ export interface EditorState {
 export type EditorCommand =
     | { type: 'EDIT'; identifier: string; fields: Record<string, unknown> }
     | { type: 'TOGGLE'; identifier: string; enabled: boolean }
+    | { type: 'REORDER'; order: string[] }
     | { type: 'UNDO' }
     | { type: 'REDO' }
     | { type: 'COMMIT' };
@@ -53,6 +54,18 @@ export function createEditorStore(initial: EditorState): EditorStore {
                 const currentEnabled = findEnabled(current.snapshot, command.identifier);
                 const changes = toggleEnabled(current.staged.changes, command.identifier, command.enabled, currentEnabled);
                 const staged: EditorDiff = { ...current.staged, changes };
+                return {
+                    ...current,
+                    staged,
+                    undoStack: [...current.undoStack, current.staged],
+                    redoStack: [],
+                    dirty: isDirty(staged),
+                };
+            }
+            case 'REORDER': {
+                const staged: EditorDiff = { ...current.staged };
+                if (sameOrder(command.order, current.snapshot)) delete staged.order;
+                else staged.order = command.order;
                 return {
                     ...current,
                     staged,
@@ -114,6 +127,21 @@ function findEnabled(snapshot: PresetSnapshot, identifier: string): boolean {
         if (entry) return entry.enabled ?? true;
     }
     return true;
+}
+
+/** 命令顺序是否与快照当前 mounted 顺序一致（一致时净零）。 */
+function sameOrder(order: string[], snapshot: PresetSnapshot): boolean {
+    const current = orderEntries(snapshot);
+    return order.length === current.length && order.every((id, i) => id === current[i]);
+}
+
+function orderEntries(snapshot: PresetSnapshot): string[] {
+    const orderList = Array.isArray(snapshot.prompt_order) ? snapshot.prompt_order : [];
+    for (const item of orderList) {
+        if (!item || !Array.isArray(item.order)) continue;
+        return (item.order as { identifier: string }[]).map((o) => o.identifier);
+    }
+    return [];
 }
 
 /** 设置 enabled 差异；与当前真值一致时净零移除。 */
