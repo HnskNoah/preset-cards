@@ -12,6 +12,7 @@ import {
     type PromptProfileEntry,
 } from './meta.js';
 import { makeBaseProfile, makeDeltaProfile } from './profileActions.js';
+import { assertV3ImportPayload } from './profileSchema.js';
 export function chooseProfileSaveTarget(): Promise<'update' | 'create' | null> {
     return chooseFromOptions(L('Save changes to'), [
         [L('Update current profile'), 'update'],
@@ -298,4 +299,22 @@ export function mergeImportedProfiles(
     }
 
     return { profiles, warnings };
+}
+
+export type HeaderImportKind = 'preset' | 'v3profile' | 'native';
+
+/**
+ * 头部导入类型判定（三连）：
+ * - 完整 preset（extensions['preset_cards'].profiles 为数组，含空数组）→ 'preset'
+ * - v3 profile 载荷（单 base / 单 delta / prompt_tree）→ 'v3profile'
+ * - 其余（普通 ST 预设 / v1/v2 / 损坏或未知格式）→ 'native'（回退 ST 原生导入）
+ */
+export function classifyHeaderImport(parsed: Record<string, unknown>): HeaderImportKind {
+    if (Array.isArray(extractProfilesFromPresetExport(parsed))) return 'preset';
+    try {
+        assertV3ImportPayload(parsed);
+        return 'v3profile';
+    } catch {
+        return 'native';
+    }
 }

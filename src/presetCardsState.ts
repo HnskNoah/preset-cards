@@ -12,7 +12,7 @@ import { applyProfileToPreset, resolveProfileModel } from './promptToggle.js';
 import { buildNewBaseProfile } from './profileMutators.js';
 import { lockDefaultSnapshot } from './presetSnapshot.js';
 import { applyBufferedEdits, clearBufferedForName } from './presetBuffers.js';
-import { mergeImportedProfiles, extractProfilesFromPresetExport } from './importExport.js';
+import { chooseFromOptions, classifyHeaderImport, extractProfilesFromPresetExport, mergeImportedProfiles } from './importExport.js';
 import { assertV3ImportPayload } from './profileSchema.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
@@ -365,12 +365,11 @@ export async function showConciseProfilesModal(ctx: CardsContext, card: JQuery<H
     callGenericPopup(container, POPUP_TYPE.TEXT, '', { wide: false, large: false });
 }
 
-/** 导入 profile 文件：读取 → JSON 校验 → 取名 → 合并 → 落盘 → 刷新。file input 由调用方提供。 */
-export async function importProfileFile(ctx: CardsContext, name: string, idx: number, file: File): Promise<void> {
-    let parsed: Record<string, any>;
+/** 解析并校验导入文件内容（完整 preset 或 v3 profile），出错时已 toast 并返回 null。 */
+async function parseImportFile(file: File): Promise<Record<string, any> | null> {
     try {
         const text = await file.text();
-        parsed = JSON.parse(text) as Record<string, any>;
+        const parsed = JSON.parse(text) as Record<string, any>;
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
             throw new Error('Imported configuration is not a JSON object');
         }
@@ -379,30 +378,149 @@ export async function importProfileFile(ctx: CardsContext, name: string, idx: nu
         if (!extractProfilesFromPresetExport(parsed)) {
             assertV3ImportPayload(parsed);
         }
+        return parsed;
+    } catch (err) {
+        console.error(err);
+        toastr.error(L('Failed to parse configuration file'));
+        return null;
+    }
+}
+
+/** 选择 json 文件（promise 化；用户取消选择时事件不触发，不再 resolve）。 */
+export function pickJsonFile(): Promise<File | null> {
+    return new Promise((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = () => {
+            const file = input.files?.[0] ?? null;
+            resolve(file);
+        };
+        input.click();
+    });
+}
+
+/** 把已选文件交给 ST 原生 preset 导入（合成 input 事件注入同文件，避免用户二次选择）。 */
+function handFileToNativePresetImport(file: File): void {
+    const input = document.getElementById('openai_preset_import_file') as HTMLInputElement | null;
+    if (!input) {
+        toastr.error(L('Failed to hand off to SillyTavern import'));
+        return;
+    }
+    try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (err) {
+        console.error(err);
+        toastr.error(L('Failed to hand off to SillyTavern import'));
+    }
+}
+
+/** 关闭插件弹窗并把文件交给 ST 原生导入（还原 / 回退路径）。 */
+function closeDialogAndHandToNative(ctx: CardsContext, file: File): void {
+    ctx.dialog.closest('.popup').find('.popup-controls .menu_button').click();
+    handFileToNativePresetImport(file);
+}
+
+/** 把已解析的导入内容并入指定目标预设（取名 → 锁基线 → 合并去重 → 落盘 → 刷新；卡片/头部共用核心）。 */
+async function mergeParsedToPreset(
+    ctx: CardsContext,
+    targetName: string,
+    targetIdx: number,
+    parsed: Record<string, any>,
+    defaultName: string,
+): Promise<boolean> {
+    try {
+        const profileName = await Popup.show.input(L('Configuration name:'), defaultName, defaultName);
+        if (!profileName) return false;
+
+        const preset = openai_settings[targetIdx] as Preset;
+        // 首次导入：先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked）
+        await lockDefaultSnapshot(preset, targetName, targetIdx);
+        const lockedMeta = readMeta(preset);
+        const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
+        for (const warning of warnings) toastr.warning(warning);
+        // 副本模式事务：持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
+        const ok = await persistMetaTransaction(lockedMeta, (m) => ({ ...m, profiles }), targetName, targetIdx);
+        if (!ok) return false;
+        toastr.success(L('Configuration saved'));
+        await refreshGrid(ctx, { applyBackgrounds: true });
+        return true;
+    } catch (err) {
+        console.error(err);
+        toastr.error(L('Failed to save preset metadata'));
+        return false;
+    }
+}
+
+/** 选择并入目标预设（列出全部现有预设；同名候选排首位；无预设时 toast 并返回 null）。 */
+async function chooseTargetPreset(preferredFirst?: string): Promise<{ name: string; idx: number } | null> {
+    const names = Object.keys(openai_setting_names);
+    if (names.length === 0) {
+        toastr.warning(L('No presets available to merge into'));
+        return null;
+    }
+    const candidates = preferredFirst ? [preferredFirst, ...names.filter((n) => n !== preferredFirst)] : names;
+    const name = await chooseFromOptions<string>(L('Select target preset'), candidates.map((n) => [n, n]));
+    if (!name) return null;
+    return { name, idx: openai_setting_names[name] };
+}
+
+/** 导入 profile 文件（卡片「导入配置」入口）：目标 = 当前卡片对应预设。 */
+export async function importProfileFile(ctx: CardsContext, name: string, idx: number, file: File): Promise<void> {
+    const parsed = await parseImportFile(file);
+    if (!parsed) return;
+    const ok = await mergeParsedToPreset(ctx, name, idx, parsed, file.name.replace(/\.json$/i, ''));
+    if (!ok) return;
+    ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');
+}
+
+/** 头部「导入预设」入口：插件接管文件读取并按类型分流——完整 preset 并入/还原、v3 profile 选预设并入、其余回退 ST 原生。 */
+export async function importPresetFromHeader(ctx: CardsContext): Promise<void> {
+    const file = await pickJsonFile();
+    if (!file) return;
+
+    let parsed: Record<string, any>;
+    try {
+        parsed = JSON.parse(await file.text());
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('Imported configuration is not a JSON object');
+        }
     } catch (err) {
         console.error(err);
         toastr.error(L('Failed to parse configuration file'));
         return;
     }
-    try {
-        let defaultName = file.name.replace(/\.json$/i, '');
-        const profileName = await Popup.show.input(L('Configuration name:'), defaultName, defaultName);
-        if (!profileName) return;
+    const defaultName = file.name.replace(/\.json$/i, '');
+    const kind = classifyHeaderImport(parsed);
 
-        const preset = openai_settings[idx] as Preset;
-        // 首次导入：先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked）
-        await lockDefaultSnapshot(preset, name, idx);
-        const lockedMeta = readMeta(preset);
-        const { profiles, warnings } = mergeImportedProfiles(parsed, lockedMeta.profiles, profileName, lockedMeta);
-        for (const warning of warnings) toastr.warning(warning);
-        // 副本模式事务：持久化 nextMeta，成功后才写回活 meta（失败重试不重复导入）
-        const ok = await persistMetaTransaction(lockedMeta, (m) => ({ ...m, profiles }), name, idx);
-        if (!ok) return;
-        toastr.success(L('Configuration saved'));
-        await refreshGrid(ctx, { applyBackgrounds: true });
-        ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).find('.preset_card_profile_group').addClass('expanded');
-    } catch (err) {
-        console.error(err);
-        toastr.error(L('Failed to save preset metadata'));
+    if (kind === 'preset') {
+        // 完整 preset 文件：并入现有预设（去重重建节点），或作为新预设导入（ST 原生还原）
+        const choice = await chooseFromOptions<string>(L('Import preset'), [
+            [L('Merge into existing preset'), 'merge'],
+            [L('Import as new preset'), 'restore'],
+        ]);
+        if (!choice) return;
+        if (choice === 'restore') {
+            closeDialogAndHandToNative(ctx, file);
+            return;
+        }
+        const target = await chooseTargetPreset(defaultName); // 同名候选排首位
+        if (!target) return;
+        await mergeParsedToPreset(ctx, target.name, target.idx, parsed, defaultName);
+        return;
     }
+
+    if (kind === 'v3profile') {
+        // v3 profile 文件：选择目标预设并入
+        const target = await chooseTargetPreset();
+        if (!target) return;
+        await mergeParsedToPreset(ctx, target.name, target.idx, parsed, defaultName);
+        return;
+    }
+
+    // 其他（普通 ST 预设 / v1/v2 / 未知格式）：回退 ST 原生导入，不弹窗拦截
+    closeDialogAndHandToNative(ctx, file);
 }

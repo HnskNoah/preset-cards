@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractProfilesFromPresetExport, mergeImportedProfiles } from '../src/importExport.js';
+import { classifyHeaderImport, extractProfilesFromPresetExport, mergeImportedProfiles } from '../src/importExport.js';
 import { makeBaseProfile, makeDeltaProfile } from '../src/profileActions.js';
 
 const baseProfile = makeBaseProfile({
@@ -165,5 +165,30 @@ describe('mergeImportedProfiles deduplication & cross-file merge', () => {
         const result = mergeImportedProfiles(dupFile, [], 'Imported', {} as any);
         expect(result.profiles).toHaveLength(1);
         expect(skipWarning(result.warnings)).toBe(true);
+    });
+});
+
+describe('classifyHeaderImport', () => {
+    it('classifies full preset exports as preset (including empty profiles)', () => {
+        expect(classifyHeaderImport({ extensions: { preset_cards: { profiles: [baseProfile] } } })).toBe('preset');
+        expect(classifyHeaderImport({ extensions: { preset_cards: { profiles: [] } } })).toBe('preset');
+    });
+
+    it('classifies v3 profile payloads as v3profile (base / delta / tree)', () => {
+        expect(classifyHeaderImport({
+            kind: 'prompt_base', formatVersion: 3, id: 'b1', name: 'Base',
+            prompts: [{ identifier: 'a', mounted: true, enabled: true }],
+        })).toBe('v3profile');
+        expect(classifyHeaderImport({
+            kind: 'prompt_delta', formatVersion: 3, id: 'd1', name: 'D', baseId: 'b1', changes: [],
+        })).toBe('v3profile');
+        expect(classifyHeaderImport({ kind: 'prompt_tree', formatVersion: 3, profiles: [baseProfile] })).toBe('v3profile');
+    });
+
+    it('classifies plain ST presets / legacy / junk as native', () => {
+        expect(classifyHeaderImport({ name: 'P', prompts: [] })).toBe('native');
+        expect(classifyHeaderImport({ formatVersion: 1, kind: 'prompt_snapshot', id: 'x', name: 'Old', prompts: [] })).toBe('native');
+        expect(classifyHeaderImport({ name: 'P', extensions: { preset_cards: { profiles: 'nope' } } })).toBe('native');
+        expect(classifyHeaderImport({})).toBe('native');
     });
 });

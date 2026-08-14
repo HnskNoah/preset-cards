@@ -13,7 +13,7 @@ import { clearBufferedForName } from './presetBuffers.js';
 import { openProfileEditorPopup } from './profileEditor.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
-import { addBaseProfile, clearImageCacheAndRefresh, deletePresetByName, exportPresetFile, importProfileFile, loadProfile, refreshActiveCardSelection, refreshActivePresetUI, refreshGrid, reselectFirstPreset, showConciseProfilesModal } from './presetCardsState.js';
+import { addBaseProfile, clearImageCacheAndRefresh, deletePresetByName, exportPresetFile, importPresetFromHeader, importProfileFile, loadProfile, pickJsonFile, refreshActiveCardSelection, refreshActivePresetUI, refreshGrid, reselectFirstPreset, showConciseProfilesModal } from './presetCardsState.js';
 import { refreshCardInPlace } from './presetCardsRender.js';
 import type { CardsContext } from './presetCardsContext.js';
 
@@ -367,19 +367,12 @@ export function bindCardsHandlers(ctx: CardsContext): void {
     });
 
     // ---- Profiles: Import Configuration ----
-    ctx.dialog.on('click', '.preset_card_import_profile_btn', function (e) {
+    ctx.dialog.on('click', '.preset_card_import_profile_btn', async function (e) {
         e.stopPropagation();
         const { name, idx } = cardContext($(this));
-
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = async (event) => {
-            const file = (event.target as HTMLInputElement).files?.[0];
-            if (!file) return;
-            await importProfileFile(ctx, name, idx, file);
-        };
-        input.click();
+        const file = await pickJsonFile();
+        if (!file) return;
+        await importProfileFile(ctx, name, idx, file);
     });
 
     // ---- Profiles: Edit Configuration (open profile editor popup) ----
@@ -403,9 +396,8 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         );
     });
 
-    // ---- Import button（触发 ST 原生导入）----
-    ctx.dialog.on('click', '#preset_cards_import_btn', function () {
-        $('#openai_preset_import_file').trigger('click');
-        ctx.dialog.closest('.popup').find('.popup-controls .menu_button').click();
+    // ---- Import button（插件接管文件读取，按类型分流）----
+    ctx.dialog.on('click', '#preset_cards_import_btn', async function () {
+        await importPresetFromHeader(ctx);
     });
 }
