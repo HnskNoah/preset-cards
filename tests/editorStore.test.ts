@@ -29,4 +29,22 @@ describe('EditorStore', () => {
         expect(store.getState().staged.changes).toEqual([]);
         expect(store.getState().dirty).toBe(false);
     });
+
+    it('stages an enabled toggle and removes it when toggled back to the original value', () => {
+        const store = createEditorStore({
+            nodeId: 'A',
+            snapshot,
+            staged: { changes: [] },
+            undoStack: [],
+            redoStack: [],
+            dirty: false,
+        });
+
+        store.dispatch({ type: 'TOGGLE', identifier: 'a', enabled: false });
+        expect(store.getState().staged.changes).toEqual([{ identifier: 'a', enabled: false }]);
+
+        store.dispatch({ type: 'TOGGLE', identifier: 'a', enabled: true });
+        expect(store.getState().staged.changes).toEqual([]);
+        expect(store.getState().dirty).toBe(false);
+    });
 });

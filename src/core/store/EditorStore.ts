@@ -21,6 +21,7 @@ export interface EditorState {
 
 export type EditorCommand =
     | { type: 'EDIT'; identifier: string; fields: Record<string, unknown> }
+    | { type: 'TOGGLE'; identifier: string; enabled: boolean }
     | { type: 'UNDO' }
     | { type: 'REDO' }
     | { type: 'COMMIT' };
@@ -39,6 +40,18 @@ export function createEditorStore(initial: EditorState): EditorStore {
         switch (command.type) {
             case 'EDIT': {
                 const changes = mergeFieldChange(current.staged.changes, command.identifier, command.fields);
+                const staged: EditorDiff = { ...current.staged, changes };
+                return {
+                    ...current,
+                    staged,
+                    undoStack: [...current.undoStack, current.staged],
+                    redoStack: [],
+                    dirty: isDirty(staged),
+                };
+            }
+            case 'TOGGLE': {
+                const currentEnabled = findEnabled(current.snapshot, command.identifier);
+                const changes = toggleEnabled(current.staged.changes, command.identifier, command.enabled, currentEnabled);
                 const staged: EditorDiff = { ...current.staged, changes };
                 return {
                     ...current,
@@ -90,6 +103,29 @@ export function createEditorStore(initial: EditorState): EditorStore {
             return () => listeners.delete(listener);
         },
     };
+}
+
+/** 从快照 prompt_order 读取某 identifier 的当前 enabled 真值。 */
+function findEnabled(snapshot: PresetSnapshot, identifier: string): boolean {
+    const orderList = Array.isArray(snapshot.prompt_order) ? snapshot.prompt_order : [];
+    for (const item of orderList) {
+        if (!item || !Array.isArray(item.order)) continue;
+        const entry = (item.order as { identifier: string; enabled?: boolean }[]).find((o) => o.identifier === identifier);
+        if (entry) return entry.enabled ?? true;
+    }
+    return true;
+}
+
+/** 设置 enabled 差异；与当前真值一致时净零移除。 */
+function toggleEnabled(
+    changes: PromptStateChange[],
+    identifier: string,
+    enabled: boolean,
+    currentEnabled: boolean,
+): PromptStateChange[] {
+    const rest = changes.filter((c) => c.identifier !== identifier);
+    if (enabled === currentEnabled) return rest;
+    return [...rest, { identifier, enabled }];
 }
 
 /** 合并某 identifier 的值字段变更：已有 change 则合并 fields，否则新增。 */
