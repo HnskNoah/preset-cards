@@ -20,7 +20,7 @@
 - **派生 / 重命名 / 删除（级联）**：profile 支持派生、行内重命名与删除；删除时递归收集全部派生后代并确认后级联删除。
 - **元数据编辑**：描述、适用模型标签（渲染厂商 Logo）、背景图 URL，支持背景图 IndexedDB 缓存与一键清理。
 - **锁定态只读查看**：锁定后隐藏重置 / 提交按钮，点击 prompt 可进入只读查看（表单禁用、无保存），取消按钮显示为返回。
-- **中文界面**：读取 ST 全局语言设置自动切换中英文（内置中英词典，无需改动 ST 的 i18n）。
+- **中文界面**：`L()` 用 ST 的 `getCurrentLocale()` 判定语言（回退链 = `localStorage['language']` → `navigator.language` → `en`，与 ST 完全一致），命中内置中英词典即切换中文；未显式设置语言时也跟随浏览器语言，不会默认误判英文。
 
 ## 安装与构建
 
@@ -125,6 +125,9 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `tests/promptState.test.ts` | 挂载状态快照 / delta 差异 / 顺序重排 |
 | `tests/importExport.test.ts` | 导入导出：`extractProfilesFromPresetExport` / `mergeImportedProfiles` / 完整 preset 提取 |
 | `tests/migrate-to-v3.test.ts` | v1/v2 → v3 迁移工具 |
+| `tests/i18n.test.ts` | `L()` 语言判定：显式 zh/en、浏览器语言回退（`navigator.language`）、词典缺键 |
+| `tests/nameWrap.test.ts` | `isRepeatedRunName`：重复字符串检测阈值、空白忽略 |
+| `tests/profileEditorContext.test.ts` | `buildBreadcrumb` / `truncateBreadcrumbName`：父链折叠、名字压缩、防环 |
 
 > 新增逻辑（尤其纯数据变换层）应尽量作为纯函数测试，而非 DOM 弹窗测试；mocks 提供 `addPreset` 等辅助注册预设。
 
@@ -146,5 +149,6 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/profileMutators.ts` / `src/profileActions.ts` | profile 数据变换与派生 / 级联删除 |
 | `src/importExport.ts` / `src/profileSchema.ts` | 导入导出与 v3 载荷校验 |
 | `src/presetList.ts` / `src/profileTree.ts` | 卡片与弹窗共用的条目视图、派生关系森林 |
-| `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、中英词典、常量 |
+| `src/nameWrap.ts` | 名字换行策略：`applyNameWrap` 消费 `presetList.ts` 的 `isRepeatedRunName`（超长重复串检测），对名字元素加 `.pc-name-nowrap` 保留省略号 |
+| `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、ST 语言判定 `L()`、中英词典、常量 |
 | `tools/migrate-to-v3.ts` | v1/v2 → v3 迁移 CLI |

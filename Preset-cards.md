@@ -24,7 +24,7 @@
 - **v1（原生 JS）**：早期实现，profile 为「整个预设对象深拷贝快照」存于 `profile.settings`，加载时 `Object.assign` 拍回设置——无 Base/Delta 派生、无稀疏差异。
 - **v2**：引入 base/delta 概念，但为全量快照 / 非稀疏差异存储。
 - **v3（当前，TypeScript + Vite）**：重构为模块化 TS 架构（`src/` 下按职责拆分，见 README「源码结构」），引入稀疏差异、父链解析、Profile 编辑器、会话缓冲单向数据流。**v1/v2 旧数据仅原样保留在 metadata，不显示、不应用、不导入**；旧文件须用 `tools/migrate-to-v3.ts` 转换。
-- **当前实现已包含**：Profile 编辑器弹窗、会话缓冲（`sessionEdits`）+ Commit 落盘、拖拽重排纳入 staged diff、`defaultSnapshot` 出厂基线、快捷应用路径 `fastApply.ts`、对外 API `window.presetCards`。这些在 README「功能特性」「第三方集成」均有完整描述。
+- **当前实现已包含**：Profile 编辑器弹窗、会话缓冲（`sessionEdits`）+ Commit 落盘、拖拽重排纳入 staged diff、`defaultSnapshot` 出厂基线、快捷应用路径 `fastApply.ts`、对外 API `window.presetCards`、名字自动换行（超长重复串保留省略号）、面包屑祖先链压缩折叠、`L()` 跟随 ST 语言回退链。这些在 README「功能特性」「第三方集成」均有完整描述。
 
 ## 构建与安装
 
