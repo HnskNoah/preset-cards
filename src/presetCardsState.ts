@@ -400,7 +400,7 @@ export function pickJsonFile(): Promise<File | null> {
     });
 }
 
-/** 把已选文件交给 ST 原生 preset 导入（合成 input 事件注入同文件，避免用户二次选择）。 */
+/** 把已选文件交给 ST 原生 preset 导入（合成 input 事件注入同文件，避免用户二次选择；环境不支持时降级为原生文件选择）。 */
 function handFileToNativePresetImport(file: File): void {
     const input = document.getElementById('openai_preset_import_file') as HTMLInputElement | null;
     if (!input) {
@@ -408,13 +408,17 @@ function handFileToNativePresetImport(file: File): void {
         return;
     }
     try {
+        if (typeof DataTransfer === 'undefined') throw new Error('DataTransfer unavailable');
         const dt = new DataTransfer();
         dt.items.add(file);
         input.files = dt.files;
+        if (input.files?.[0] !== file) throw new Error('Programmatic file assignment failed');
         input.dispatchEvent(new Event('input', { bubbles: true }));
     } catch (err) {
-        console.error(err);
-        toastr.error(L('Failed to hand off to SillyTavern import'));
+        // 合成事件不可用时降级为原生文件选择（用户需重新选一次文件），保证 ST 原生导入仍可用
+        console.error('preset-cards: handoff to ST native import failed, falling back to picker', err);
+        toastr.info(L('Please select the file again for the built-in import'));
+        input.click();
     }
 }
 

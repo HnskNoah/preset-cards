@@ -100,6 +100,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'No presets available to merge into': '没有可并入的预设',
     'Failed to hand off to SillyTavern import': '无法交给 ST 原生导入',
     'Cross-preset import warning': '导入文件可能属于其他预设。跨预设导入可能导致配置不完整。确认继续导入？',
+    'Please select the file again for the built-in import': '当前环境不支持自动交接，请重新选择文件进行内置导入',
     'Failed to parse configuration file': '无法解析配置文件',
     'Concise Mode': '简洁模式',
     'No configurations saved for this preset': '该预设没有配置快照',
