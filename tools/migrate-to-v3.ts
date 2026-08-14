@@ -14,6 +14,8 @@
  *   - v2 base/delta profile（`formatVersion: 2`）
  *   - v3 prompt_tree 文件（`kind: "prompt_tree"`，升级内部 v2 条目）
  *   - 纯 preset 导出（预设本体 JSON，含 prompts 数组）
+ *   - 完整 preset JSON（含 extensions['preset_cards']）：profiles 全部为 v3 时原样透传；
+ *     含 v1/v2 profiles 时仅迁移旧条目，预设本体与 v3 条目保留
  */
 
 import * as fs from 'node:fs';
@@ -357,6 +359,36 @@ export function migrateFile(input: Record<string, any>): Record<string, any> {
     // v3 格式：无需迁移
     if (input.formatVersion === 3) {
         return input;
+    }
+
+    // 完整 preset 导出（含 extensions['preset_cards'] 的 profiles）：
+    // - profiles 全部为 v3 → 原样透传（本体携带全部参数，prompt_tree 会丢本体，直接透传保证体验一致）
+    // - 含 v1/v2 profiles → 迁移旧条目（v2 转 v3；v1 快照转 archive base + delta），本体与 v3 条目保留，仍输出完整 preset 形状
+    if (input && typeof input === 'object' && !input.kind) {
+        const presetCards = input.extensions?.preset_cards;
+        const profiles = Array.isArray(presetCards?.profiles) ? presetCards.profiles : undefined;
+        if (profiles && profiles.some((p: any) => p && (p.kind === 'prompt_base' || p.kind === 'prompt_delta'))) {
+            const needsMigrate = profiles.some((p: any) => p?.formatVersion === 2 || p?.formatVersion === 1);
+            if (!needsMigrate) {
+                return input;
+            }
+            const migrated: any[] = [];
+            for (const p of profiles) {
+                if (p?.kind === 'prompt_base' && p.formatVersion === 2) migrated.push(migrateV2Base(p));
+                else if (p?.kind === 'prompt_delta' && p.formatVersion === 2) migrated.push(migrateV2Delta(p));
+                else migrated.push(p);
+            }
+            return {
+                ...input,
+                extensions: {
+                    ...input.extensions,
+                    preset_cards: {
+                        ...presetCards,
+                        profiles: migrated,
+                    },
+                },
+            };
+        }
     }
 
     // 纯预设本体（有 prompts 数组，无 profile 包装）

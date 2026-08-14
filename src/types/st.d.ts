@@ -18,6 +18,8 @@ declare module '@sillytavern/scripts/extensions' {
 
 declare module '@sillytavern/scripts/i18n' {
     export function t(strings: TemplateStringsArray, ...values: unknown[]): string;
+    export function translate(text: string, key?: string): string;
+    export function getCurrentLocale(): string;
 }
 
 declare module '@sillytavern/scripts/utils' {

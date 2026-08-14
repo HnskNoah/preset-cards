@@ -9,6 +9,7 @@ import { buildPromptEditForm } from './editModal.js';
 import { buildBreadcrumb } from './profileEditorContext.js';
 import { applyUndoState, computeReorder, undoMount, undoReorderItem, stagedItems } from './profileEditorState.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
+import { applyNameWrap } from './nameWrap.js';
 
 function cssEscape(s: string): string {
     return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -53,6 +54,7 @@ export function applyBufferOverlay(ctx: EditorContext): void {
             entry.addClass('dirty');
         }
     });
+    applyNameWrap(ctx.dialog);
 }
 
 /** 按搜索词过滤卡片。 */
@@ -193,6 +195,7 @@ export function renderRightPane(ctx: EditorContext, snapshot?: EditorSnapshot): 
     editArea.hide();
     diffArea.show();
     renderStagedPane(ctx, snapshot);
+    applyNameWrap(ctx.dialog);
 }
 
 /** 内联编辑表单（PC 右栏 / 手机全宽覆盖）：复用 editModal 的表单构造，保存写会话缓冲。 */
@@ -206,6 +209,7 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
 
     const header = $('<div class="pc-editor-header"></div>');
     header.append($('<h3></h3>').text(prompt.name ?? identifier));
+    applyNameWrap(header);
     const actions = $('<div class="pc-editor-actions"></div>');
 
     const prevSession = ctx.sessionEdits.get(bufferKey(ctx.name, identifier));
@@ -291,6 +295,7 @@ export function refreshEntryRow(ctx: EditorContext, identifier: string, snapshot
     row.toggleClass('disabled', !enabled);
     row.toggleClass('dirty', ctx.sessionEdits.has(key) || ctx.pendingToggles.has(key) || ctx.pendingClears.has(key) || ctx.pendingMounts.has(key) || ctx.reorderedIds.has(identifier));
     row.toggleClass('persistent', !!view?.hasPersistentDiff);
+    applyNameWrap(row);
 }
 
 /** staged 计数 + commit 按钮禁用态。 */
@@ -373,6 +378,7 @@ export async function renderDialog(ctx: EditorContext): Promise<void> {
     renderRightPane(ctx, snapshot);
     setupSortable(ctx);
     refreshCounts(ctx, snapshot);
+    applyNameWrap(ctx.dialog);
 }
 
 /** 搜索索引：由 entries 重建（一次构建，applySearch 只读缓存）。 */

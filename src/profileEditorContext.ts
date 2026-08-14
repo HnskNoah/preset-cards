@@ -142,10 +142,19 @@ export interface BreadcrumbItem {
     isCurrent: boolean;
 }
 
-// 构建三段式面包屑「父 ▸ 当前 ▸ 子」：父取当前节点直接上级（沿 baseId 链向上收集，取最近一个），
+/** 非当前节点名字压缩为「开头 + …」（当前节点完整显示）。 */
+export function truncateBreadcrumbName(name: string, max: number): string {
+    if (!name) return '';
+    return name.length > max ? name.slice(0, max) + '…' : name;
+}
+
+// 构建三段式面包屑「父 ▸ 当前 ▸ 子」：父取祖先链的两端（最祖先 + 最近父，中间层级折叠省略），
 // 子取当前节点第一个直接派生（meta.profiles 中 baseId 指向当前 id 的 delta）。无父/无子则对应段省略。
+// 非当前节点名字压缩为「开头 + …」（TRUNCATE_MAX），当前节点完整显示。
 // title 保留完整派生链（全部祖先 ▸ 当前 ▸ 子），hover 时不丢信息。
 // 防环：visited 记录已访问 id，成环数据不致死循环。
+const TRUNCATE_MAX = 12;
+
 export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile, meta: PresetMeta): { items: BreadcrumbItem[]; title: string } {
     const chain: { name: string; id: string }[] = [];
     const visited = new Set<string>();
@@ -163,7 +172,9 @@ export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile,
     }
 
     const ancestors = chain.slice(0, -1);
-    const parent = ancestors.length > 0 ? ancestors[ancestors.length - 1] : undefined;
+    const rootAncestor = ancestors.length > 0 ? ancestors[0] : undefined; // 最祖先
+    const parent = ancestors.length > 0 ? ancestors[ancestors.length - 1] : undefined; // 最近父
+    const hasIntermediate = ancestors.length > 2; // 两端之间有被折叠的中间层
     const child = (Array.isArray(meta.profiles) ? meta.profiles : []).find(
         (candidate) => isPromptDeltaProfile(candidate) && String(candidate.baseId) === String(profile.id),
     );
@@ -176,8 +187,16 @@ export function buildBreadcrumb(profile: PromptBaseProfile | PromptDeltaProfile,
     ].join(' ▸ ');
 
     const items: BreadcrumbItem[] = [];
-    if (parent) items.push({ name: parent.name, isCurrent: false });
+    if (rootAncestor) {
+        items.push({ name: truncateBreadcrumbName(rootAncestor.name, TRUNCATE_MAX), isCurrent: false });
+        if (hasIntermediate) items.push({ name: '…', isCurrent: false });
+        if (parent && parent.id !== rootAncestor.id) {
+            items.push({ name: truncateBreadcrumbName(parent.name, TRUNCATE_MAX), isCurrent: false });
+        }
+    } else if (parent) {
+        items.push({ name: truncateBreadcrumbName(parent.name, TRUNCATE_MAX), isCurrent: false });
+    }
     items.push({ name: profile.name, isCurrent: true });
-    if (childName) items.push({ name: childName, isCurrent: false });
+    if (childName) items.push({ name: truncateBreadcrumbName(childName, TRUNCATE_MAX), isCurrent: false });
     return { items, title };
 }
