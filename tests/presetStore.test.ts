@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createPresetStore, filterPresets } from '../src/core/store/PresetStore.js';
+import { buildPresetEntries, createPresetStore, filterPresets } from '../src/core/store/PresetStore.js';
 import type { PresetEntry } from '../src/core/store/PresetStore.js';
+import { addProfileNode, createPresetCardsFile } from '../src/core/codec/v4.js';
 
 const presets: PresetEntry[] = [
     { name: 'Alpha', profileCount: 2, isActive: true },
@@ -41,5 +42,16 @@ describe('PresetStore', () => {
         store.dispatch({ type: 'CLEAR_SELECT' });
         expect(store.getState().selectedIds.size).toBe(0);
         expect(seen).toEqual(['change', 'change', 'change', 'change']);
+    });
+
+    it('builds preset entries from a v4 file with profile counts and active marker', () => {
+        const preset = { name: 'P', prompts: [], prompt_order: [] };
+        let file = createPresetCardsFile(preset, 'key-1');
+        file = addProfileNode(file, { id: 'A', name: 'A', presetSnapshot: preset });
+        file = addProfileNode(file, { id: 'B', name: 'B', parentId: 'A', presetSnapshot: preset });
+
+        const entries = buildPresetEntries(file, 'key-1');
+
+        expect(entries).toEqual([{ name: 'P', profileCount: 2, isActive: true }]);
     });
 });

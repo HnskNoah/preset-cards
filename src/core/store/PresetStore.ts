@@ -1,6 +1,6 @@
 // core/store PresetStore：卡片页浏览态（预设列表、搜索、批选、激活选中）。
 // 零 ST 依赖、纯 reducer；UI/controller 订阅并 dispatch。
-import type { V4ProfileNode } from '../domain/types.js';
+import type { PresetCardsFile, V4ProfileNode } from '../domain/types.js';
 
 export interface PresetEntry {
     name: string;
@@ -13,6 +13,16 @@ export function filterPresets(presets: PresetEntry[], query: string): PresetEntr
     const q = query.trim().toLowerCase();
     if (!q) return presets;
     return presets.filter((p) => p.name.toLowerCase().includes(q));
+}
+
+/** 从 v4 文件生成预设视图条目（名称/归属 profile 数/是否激活）。 */
+export function buildPresetEntries(file: PresetCardsFile, activeKey?: string): PresetEntry[] {
+    const rootName = file.nodes.find((n) => n.id === 'root')?.presetSnapshot.name;
+    return file.presets.map((p) => ({
+        name: p.name ?? rootName ?? `preset-${p.key}`,
+        profileCount: p.profileIds.length,
+        isActive: p.key === activeKey,
+    }));
 }
 
 export interface PresetStoreState {
