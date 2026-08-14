@@ -4,14 +4,13 @@ import { PROMPT_FIELD_KEYS } from '../domain/schema.js';
 import type { PresetSnapshot, PromptProfileEntry, PromptStateChange } from '../domain/types.js';
 import { diffPromptState, snapshotPromptState } from '../../promptState.js';
 
+/** diff 结构对齐 v3 Delta 磁盘形状：changes = 差异集，order = 完整 mounted 顺序（可选，与父一致时省略）。 */
 export interface PresetDiff {
-    /** prompts 层差异（挂载/开关/顺序/值字段），语义对齐 v3 Delta.changes。 */
-    prompts?: PromptStateChange[];
-    /** 完整 mounted 顺序；与父链一致时不输出。 */
+    changes: PromptStateChange[];
     order?: string[];
 }
 
-/** 计算 child 相对 parent 的差异集（当前覆盖 prompts 层，顶层设置/扩展差异后续切片）。 */
+/** 计算 child 相对 parent 的差异集（v3 兼容；顶层设置/扩展差异后续切片）。 */
 export function diffSnapshot(parent: PresetSnapshot, child: PresetSnapshot): PresetDiff {
     const parentEntries = entriesWithFields(
         Array.isArray(parent.prompts) ? parent.prompts : [],
@@ -23,10 +22,7 @@ export function diffSnapshot(parent: PresetSnapshot, child: PresetSnapshot): Pre
     );
     const childUnused = childEntries.unusedIds;
     const { changes, order } = diffPromptState(childEntries.entries, parentEntries.entries, childUnused);
-    const diff: PresetDiff = {};
-    if (changes.length > 0) diff.prompts = changes;
-    if (order !== undefined) diff.order = order;
-    return diff;
+    return order !== undefined ? { changes, order } : { changes };
 }
 
 /** 采集挂载态 + 白名单值字段的完整 entries（snapshotPromptState 本身不采集 fields）。 */

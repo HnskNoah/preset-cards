@@ -21,7 +21,7 @@ describe('core diff: diffSnapshot', () => {
 
         const diff = diffSnapshot(parent, child);
 
-        expect(diff.prompts).toEqual([
+        expect(diff.changes).toEqual([
             { identifier: 'a', fields: { content: 'B' } },
         ]);
     });
@@ -34,8 +34,23 @@ describe('core diff: diffSnapshot', () => {
 
         const diff = diffSnapshot(parent, child);
 
-        expect(diff.prompts).toEqual([
+        expect(diff.changes).toEqual([
             { identifier: 'a', enabled: false },
         ]);
+    });
+
+    it('stores the full mounted order when prompt order changes', () => {
+        const parent = preset();
+        const child = preset({
+            prompts: [
+                { identifier: 'a', content: 'A', enabled: true },
+                { identifier: 'b', content: 'B', enabled: true },
+            ],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'b', enabled: true }, { identifier: 'a', enabled: true }] }],
+        });
+
+        const diff = diffSnapshot(parent, child);
+
+        expect(diff.order).toEqual(['b', 'a']);
     });
 });
