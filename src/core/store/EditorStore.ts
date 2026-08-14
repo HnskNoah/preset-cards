@@ -23,6 +23,7 @@ export type EditorCommand =
     | { type: 'EDIT'; identifier: string; fields: Record<string, unknown> }
     | { type: 'TOGGLE'; identifier: string; enabled: boolean }
     | { type: 'REORDER'; order: string[] }
+    | { type: 'RESET' }
     | { type: 'UNDO' }
     | { type: 'REDO' }
     | { type: 'COMMIT' };
@@ -74,6 +75,8 @@ export function createEditorStore(initial: EditorState): EditorStore {
                     dirty: isDirty(staged),
                 };
             }
+            case 'RESET':
+                return { ...current, staged: { changes: [] }, undoStack: [], redoStack: [], dirty: false };
             case 'UNDO': {
                 if (current.undoStack.length === 0) return current;
                 const staged = current.undoStack[current.undoStack.length - 1];

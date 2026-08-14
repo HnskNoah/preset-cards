@@ -88,4 +88,25 @@ describe('EditorStore', () => {
         ]);
         expect(next.temperature).toBe(1.2);
     });
+
+    it('resets staged edits, undo/redo stacks, and dirty flag', () => {
+        const store = createEditorStore({
+            nodeId: 'A',
+            snapshot,
+            staged: { changes: [] },
+            undoStack: [],
+            redoStack: [],
+            dirty: false,
+        });
+        store.dispatch({ type: 'TOGGLE', identifier: 'a', enabled: false });
+        store.dispatch({ type: 'EDIT', identifier: 'a', fields: { content: 'B' } });
+        expect(store.getState().dirty).toBe(true);
+
+        store.dispatch({ type: 'RESET' });
+
+        expect(store.getState().staged).toEqual({ changes: [] });
+        expect(store.getState().undoStack).toEqual([]);
+        expect(store.getState().redoStack).toEqual([]);
+        expect(store.getState().dirty).toBe(false);
+    });
 });
