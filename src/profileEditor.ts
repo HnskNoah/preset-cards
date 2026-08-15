@@ -1,9 +1,14 @@
 import { POPUP_TYPE, Popup, callGenericPopup } from '@sillytavern/scripts/popup';
+import { openai_settings } from '@sillytavern/scripts/openai';
 import { L } from './i18n.js';
 import { createEditorContext, type ProfileEditorDeps } from './profileEditorContext.js';
 import { bindEditorHandlers } from './profileEditorHandlers.js';
 import { renderDialog } from './profileEditorRender.js';
 import { clearSessionBuffers, stagedItems } from './profileEditorState.js';
+import { getProfile, readMeta } from './meta.js';
+import { resolveProfilePrompts } from './promptToggle.js';
+import { createEditorStore } from './core/store/EditorStore.js';
+import { entriesToSnapshot } from './core/codec/snapshotEntries.js';
 
 export type { ProfileEditorDeps };
 
@@ -19,6 +24,8 @@ export async function openProfileEditorPopup(
     profileId: string,
 ): Promise<void> {
     const ctx = createEditorContext(deps, name, idx, profileId);
+    // P4：编辑器会话拥有 EditorStore（初始快照 = 当前 profile 的 v4 快照，staged 空）
+    ctx.editorStore = createEditorStore(initialEditorState(ctx, profileId));
     bindEditorHandlers(ctx);
 
     await renderDialog(ctx);
@@ -45,4 +52,24 @@ export async function openProfileEditorPopup(
             clearSessionBuffers(ctx);
         }
     }
+}
+
+/** 编辑器初始状态：当前 profile 的 v4 快照（全量解析）为基线，staged 空。 */
+function initialEditorState(
+    ctx: ReturnType<typeof createEditorContext>,
+    profileId: string,
+): Parameters<typeof createEditorStore>[0] {
+    const preset = openai_settings[ctx.idx] as any;
+    const meta = readMeta(preset);
+    const profile = getProfile(meta, profileId);
+    const entries = profile ? resolveProfilePrompts(profile, meta.profiles as any) : [];
+    return {
+        nodeId: profileId,
+        snapshot: entriesToSnapshot(entries),
+        staged: { changes: [] },
+        undoStack: [],
+        redoStack: [],
+        dirty: false,
+        readOnly: false,
+    };
 }

@@ -5,6 +5,7 @@ import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile } from '
 import { bufferKey, bufferPrefix, type PromptEditBuffer } from './presetBuffers.js';
 import { findOrderList, resolvePromptOrderTarget } from './promptToggle.js';
 import { buildOrderCtxFromOrder, buildProfileEntries, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
+import type { EditorStore } from './core/store/EditorStore.js';
 
 
 /** 弹窗依赖：缓冲 Map 与刷新回调由 presetCards 闭包注入。 */
@@ -64,6 +65,8 @@ export interface EditorContext {
     committing: boolean;
     /** clear 时快照的会话编辑（undo clear 时恢复：session 恢复 + toggle 恢复）。 */
     clearedEdits: Map<string, { session?: PromptEditBuffer; toggle?: boolean }>;
+    /** P4：编辑器会话 store（staged diff 单一来源，逐步接管现状 Map/闭包）。 */
+    editorStore?: EditorStore;
 }
 
 /** 创建弹窗上下文：完成全部状态初始化（含打开时 prompt_order 快照与 sessionOrder 种子）。 */
