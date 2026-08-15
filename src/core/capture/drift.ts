@@ -151,7 +151,11 @@ export function applyPromptDriftToProfile(
         }
         for (const id of drift.deleted) {
             const e = byId.get(id);
-            if (e) e.mounted = false;
+            if (e) {
+                // 删除 = unmount + 禁用：渲染层开关读 enabled，仅 mounted:false 会仍显示为开
+                e.mounted = false;
+                e.enabled = false;
+            }
         }
         for (const a of drift.added) {
             if (!byId.has(a.identifier)) {
@@ -206,7 +210,8 @@ export function applyPromptDriftToProfile(
         };
         for (const c of drift.changedFields) upsert({ identifier: c.identifier, fields: c.fields });
         for (const c of drift.enabledChanges) upsert({ identifier: c.identifier, enabled: c.enabled });
-        for (const id of drift.deleted) upsert({ identifier: id, mounted: false });
+        // 删除 = unmount + 禁用（渲染层开关读 enabled）
+        for (const id of drift.deleted) upsert({ identifier: id, mounted: false, enabled: false });
         for (const a of drift.added) upsert({
             identifier: a.identifier,
             mounted: true,

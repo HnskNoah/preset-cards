@@ -36,8 +36,20 @@ export async function openPresetCards(): Promise<void> {
 
     bindCardsHandlers(ctx);
 
-    // 注册链路：原生切换(PRESET_CHANGED)同步卡片高亮——激活 profile 投影或切回普通预设都刷新选中态
-    onActiveProfileChangedBySwitch(() => refreshActiveCardSelection(ctx));
+    // 注册链路：原生切换(PRESET_CHANGED)同步卡片高亮——
+    // 激活 profile 投影 → 高亮其父预设卡片 + profile 行(投影预设本身不进卡片列表,不能按活动名找卡片);
+    // 切回普通预设 → 按当前活动名刷新选中态
+    onActiveProfileChangedBySwitch((ref) => {
+        if (!ref) {
+            refreshActiveCardSelection(ctx);
+            return;
+        }
+        ctx.dialog.find('.preset_card').removeClass('selected');
+        const card = ctx.dialog.find(`.preset_card[data-preset-name="${ref.presetName}"]`);
+        card.addClass('selected');
+        card.find('.preset_card_profile_row.active').removeClass('active');
+        card.find(`.preset_card_profile_row[data-profile-id="${ref.profileId}"]`).addClass('active');
+    });
 
     // 初始 UI：计数、背景图、展开当前激活 profile 的祖先链
     const countEl = dialog.find('#preset_cards_count');

@@ -72,7 +72,9 @@ describe('applyPromptDriftToProfile (base)', () => {
         const p1 = next.prompts.find((e) => e.identifier === 'p1')!;
         expect(p1.fields).toEqual({ content: 'v2' });
         expect(p1.enabled).toBe(false);
-        expect(next.prompts.find((e) => e.identifier === 'pDeleted')!.mounted).toBe(false);
+        const pDeleted = next.prompts.find((e) => e.identifier === 'pDeleted')!;
+        expect(pDeleted.mounted).toBe(false);
+        expect(pDeleted.enabled).toBe(false); // 删除 = unmount + 禁用（渲染开关读 enabled）
         expect(next.prompts.find((e) => e.identifier === 'p3')).toMatchObject({ mounted: true, enabled: true, fields: { content: 'new' } });
         // mounted 顺序 = 运行时顺序
         expect(next.prompts.filter((e) => e.mounted).map((e) => e.identifier)).toEqual(['p1', 'p3', 'p2']);
@@ -108,6 +110,7 @@ describe('applyPromptDriftToProfile (delta)', () => {
         expect(p1.enabled).toBe(false);
         const del = next.changes.find((c) => c.identifier === 'pDeleted')!;
         expect(del.mounted).toBe(false);
+        expect(del.enabled).toBe(false); // 删除 = unmount + 禁用
         const added = next.changes.find((c) => c.identifier === 'p3')!;
         expect(added).toMatchObject({ mounted: true, enabled: true, fields: { content: 'new' } });
         expect(next.order).toEqual(['p1', 'p3', 'p2']);
