@@ -52,26 +52,21 @@ export function initPresetCapture(): void {
     });
 }
 
-/** 门 + 捕获：活动预设是注册 profile 时，把运行时漂移捕获回 profile。返回是否发生变更（含持久化成功）。
- * 调试：每个离开点都打日志（临时诊断，问题定位后移除）。 */
+/** 门 + 捕获：活动预设是注册 profile 时，把运行时漂移捕获回 profile。返回是否发生变更（含持久化成功）。 */
 export async function captureIfRegistered(): Promise<boolean> {
-    const log = (reason: string) => console.log(`preset-cards: capture skip (${reason})`);
-    if (capturing) { log('capturing'); return false; }
+    if (capturing) return false;
     const activeName = oai_settings.preset_settings_openai;
-    if (typeof activeName !== 'string') { log('no active preset'); return false; }
+    if (typeof activeName !== 'string') return false;
     const idx = openai_setting_names[activeName];
-    if (idx === undefined) { log(`not in registry: ${activeName}`); return false; }
+    if (idx === undefined) return false;
     const record = openai_settings[idx] as Record<string, any> | undefined;
-    if (!record) { log('no record'); return false; }
+    if (!record) return false;
     const marker = readPresetMarker(record);
-    if (!marker || marker.kind !== 'profile' || !marker.parentKey || !marker.profileId) {
-        log(`active preset not a registered profile: ${activeName}`);
-        return false;
-    }
+    if (!marker || marker.kind !== 'profile' || !marker.parentKey || !marker.profileId) return false;
     const parentIdx = openai_setting_names[marker.parentKey];
-    if (parentIdx === undefined) { log(`parent missing: ${marker.parentKey}`); return false; }
+    if (parentIdx === undefined) return false;
     const parent = openai_settings[parentIdx] as Preset | undefined;
-    if (!parent || !Array.isArray(oai_settings.prompts)) { log('no parent or runtime prompts'); return false; }
+    if (!parent || !Array.isArray(oai_settings.prompts)) return false;
 
     capturing = true;
     try {
@@ -80,13 +75,7 @@ export async function captureIfRegistered(): Promise<boolean> {
         const top = topLevelKeysDiffer(oai_settings as any, record)
             ? computeTopLevelDrift(parent, marker.profileId, oai_settings as any)
             : {};
-        console.log('preset-cards: capture drift', JSON.stringify({
-            changed: drift.changedFields.length, enabled: drift.enabledChanges.length,
-            order: drift.order !== undefined, deleted: drift.deleted,
-            unmounted: drift.unmounted, remounted: drift.remounted.map((r) => r.identifier),
-            added: drift.added.map((a) => a.identifier), top: Object.keys(top),
-        }));
-        if (isEmptyPromptDrift(drift) && Object.keys(top).length === 0) { log('no drift'); return false; }
+        if (isEmptyPromptDrift(drift) && Object.keys(top).length === 0) return false;
 
         // 材料恢复（池删除）/ 新增入父池：dormant prompt 定义进父预设 prompts[]（不挂载，仅池）。
         // ST 摘除（unmounted）的 prompt 池仍在，无需恢复。
@@ -112,7 +101,7 @@ export async function captureIfRegistered(): Promise<boolean> {
 
         // 捕获回 profile 并持久化（副本事务；成功后 onMetaPersisted → syncPresetRegistrations 刷新注册记录）
         const meta = readMeta(parent);
-        const ok = await persistMetaTransaction(meta, (m) => {
+        return await persistMetaTransaction(meta, (m) => {
             const profiles = Array.isArray(m.profiles) ? m.profiles : [];
             const target = profiles.find((p) => String(p.id) === String(marker.profileId));
             if (!target || (!isPromptBaseProfile(target) && !isPromptDeltaProfile(target))) return m;
@@ -122,8 +111,6 @@ export async function captureIfRegistered(): Promise<boolean> {
             if (top.model) next.model = top.model;
             return { ...m, profiles: profiles.map((p) => (String(p.id) === String(marker.profileId) ? next as PresetProfile : p)) };
         }, marker.parentKey, parentIdx);
-        console.log(`preset-cards: capture persist ${ok ? 'ok' : 'FAILED'}`);
-        return ok;
     } finally {
         capturing = false;
     }
