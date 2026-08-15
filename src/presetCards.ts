@@ -9,8 +9,9 @@ import { createCardsContext } from './presetCardsContext.js';
 import { bindCardsHandlers } from './presetCardsHandlers.js';
 import { applyNameWrap } from './nameWrap.js';
 import { createPresetStore, type PresetEntry } from './core/store/PresetStore.js';
-import { refreshActiveCardSelection } from './presetCardsState.js';
+import { refreshActiveCardSelection, refreshGrid } from './presetCardsState.js';
 import { onActiveProfileChangedBySwitch } from './presetRegistration.js';
+import { onCaptureApplied } from './presetCapture.js';
 
 /** 打开 preset-cards 卡片页弹窗。 */
 export async function openPresetCards(): Promise<void> {
@@ -49,6 +50,12 @@ export async function openPresetCards(): Promise<void> {
         card.addClass('selected');
         card.find('.preset_card_profile_row.active').removeClass('active');
         card.find(`.preset_card_profile_row[data-profile-id="${ref.profileId}"]`).addClass('active');
+    });
+
+    // 保存捕获(原生 PM 编辑)成功后刷新卡片页：profile 条目列表显示最新挂载/开关态,
+    // 避免看到删除/编辑前的旧渲染(捕获为后台 fire-and-forget,不主动重渲染)
+    onCaptureApplied(() => {
+        void refreshGrid(ctx);
     });
 
     // 初始 UI：计数、背景图、展开当前激活 profile 的祖先链

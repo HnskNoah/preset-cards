@@ -26,10 +26,29 @@ import {
 /** 防重入：捕获期间再次 SETTINGS_UPDATED 直接跳过（等待本次落盘后再对账）。 */
 let capturing = false;
 
+/** 捕获成功且发生了变更后的通知（UI 刷新用：卡片页订阅后重渲染，避免显示删除前旧状态）。 */
+type CaptureAppliedListener = () => void;
+const captureAppliedListeners = new Set<CaptureAppliedListener>();
+export function onCaptureApplied(listener: CaptureAppliedListener): () => void {
+    captureAppliedListeners.add(listener);
+    return () => { captureAppliedListeners.delete(listener); };
+}
+
 /** 初始化保存捕获：监听 SETTINGS_UPDATED（ST 保存落盘成功后触发；原生 PM 每次编辑都以它收尾）。init.ts 调用。 */
 export function initPresetCapture(): void {
     eventSource.on(event_types.SETTINGS_UPDATED, () => {
-        void captureIfRegistered().catch((err) => console.error('preset-cards: capture failed', err));
+        void captureIfRegistered()
+            .then((changed) => {
+                if (!changed) return;
+                for (const listener of [...captureAppliedListeners]) {
+                    try {
+                        listener();
+                    } catch (err) {
+                        console.error('preset-cards: capture applied listener failed', err);
+                    }
+                }
+            })
+            .catch((err) => console.error('preset-cards: capture failed', err));
     });
 }
 
