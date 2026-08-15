@@ -103,7 +103,8 @@ export async function captureIfRegistered(): Promise<boolean> {
             }
         }
 
-        // 捕获回 profile 并持久化（副本事务；成功后 onMetaPersisted → syncPresetRegistrations 刷新注册记录）
+        // 捕获回 profile 并持久化（副本事务；成功后 onMetaPersisted → syncPresetRegistrations 刷新注册记录）。
+        // silent：捕获是后台同步,失败不 toast(避免在无关 ST 操作时弹出误导性错误)
         const meta = readMeta(parent);
         return await persistMetaTransaction(meta, (m) => {
             const profiles = Array.isArray(m.profiles) ? m.profiles : [];
@@ -114,7 +115,7 @@ export async function captureIfRegistered(): Promise<boolean> {
             if (top.extra) next.extra = top.extra;
             if (top.model) next.model = top.model;
             return { ...m, profiles: profiles.map((p) => (String(p.id) === String(marker.profileId) ? next as PresetProfile : p)) };
-        }, marker.parentKey, parentIdx);
+        }, marker.parentKey, parentIdx, { silent: true });
     } finally {
         capturing = false;
     }

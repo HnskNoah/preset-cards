@@ -145,19 +145,21 @@ export function saveMetaMerged(presetName: string, presetIndex: number, meta: Pr
 }
 
 /** 统一「副本 → 变换 → 持久化 → 写回活 meta」事务：失败时不污染内存与磁盘，返回是否成功。
- * transform 不得修改传入的 meta（副本模式）；成功后 Object.assign 写回活 meta（保持对象身份）。 */
+ * transform 不得修改传入的 meta（副本模式）；成功后 Object.assign 写回活 meta（保持对象身份）。
+ * opts.silent = true 时失败不 toast（后台同步路径，如保存捕获——失败只记日志，不打扰用户）。 */
 export async function persistMetaTransaction(
     meta: PresetMeta,
     transform: (m: PresetMeta) => PresetMeta,
     name: string,
     idx: number,
+    opts?: { silent?: boolean },
 ): Promise<boolean> {
     const nextMeta = transform(meta);
     try {
         await saveMeta(name, idx, nextMeta);
     } catch (err) {
         console.error('Persist preset metadata failed', err);
-        toastr.error(L('Failed to save preset metadata'));
+        if (!opts?.silent) toastr.error(L('Failed to save preset metadata'));
         return false;
     }
     Object.assign(meta, nextMeta);
