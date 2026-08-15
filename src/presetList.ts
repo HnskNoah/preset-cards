@@ -5,7 +5,7 @@ import { findOrderList, resolveProfilePrompts, resolvePromptOrderTarget } from '
 import { getActiveProfile } from './activeProfile.js';
 import { L } from './i18n.js';
 import { buildProfileForest, buildProfileNested, type NestedProfileNode } from './profileTree.js';
-import { PRESET_CARDS_MARKER } from './core/storage/marker.js';
+import { PRESET_CARDS_MARKER, readPresetMarker } from './core/storage/marker.js';
 
 export interface ModelChip {
     label: string;
@@ -216,6 +216,18 @@ export function buildPresetList(): PresetCardModel[] {
 
         const isActive = name === currentPresetName;
 
+        // 注册链路：当前活动预设若是注册 profile 投影，其父预设卡片视为激活（投影不进卡片列表，
+        // 直接按活动名匹配必然落空）
+        let activeCardName = currentPresetName;
+        if (typeof currentPresetName === 'string' && currentPresetName !== name) {
+            const activeIdx = openai_setting_names[currentPresetName];
+            if (activeIdx !== undefined) {
+                const marker = readPresetMarker(openai_settings[activeIdx]);
+                if (marker && marker.kind === 'profile' && marker.parentKey) activeCardName = marker.parentKey;
+            }
+        }
+        const isCardActive = name === activeCardName;
+
         // 顺序编辑目标条目：global → 100001；character → 活动角色 id（策略感知，见 promptToggle）。
         const orderCtx = buildProfileOrderCtx(preset, isActive);
 
@@ -266,7 +278,7 @@ export function buildPresetList(): PresetCardModel[] {
         presets.push({
             name,
             index,
-            isActive,
+            isActive: isCardActive,
             temperature: preset['temperature'] != null ? String(preset['temperature']) : '',
             topP: preset['top_p'] != null ? String(preset['top_p']) : '',
             topK: preset['top_k'] != null ? String(preset['top_k']) : '',
