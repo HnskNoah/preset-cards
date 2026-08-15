@@ -5,10 +5,13 @@
 //   - 全量注册快照构建（applyProfileToPreset 克隆体 → 完整 preset 记录，含 sampling/extra/model）
 //   - syncPresetRegistrations 对账（新增/重写/孤儿注销），订阅 meta 持久化自动触发
 import { saveSettingsDebounced, getRequestHeaders } from '@sillytavern/script';
+import { eventSource, event_types } from '@sillytavern/scripts/events';
 import { openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
 import { readMeta, onMetaPersisted, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
+import { setActiveProfile } from './activeProfile.js';
 import { applyProfileToPreset } from './promptToggle.js';
+import { readPresetMarker } from './core/storage/marker.js';
 import {
     findRegisteredPreset,
     findRegistrationsByParent,
@@ -179,4 +182,83 @@ export function refreshRegisteredSnapshot(presetName: string, preset: Preset, pr
         naming: placeholderNaming,
     });
     return result.name;
+}
+
+// ─── 切片 2：激活同步 ────────────────────────────────────────────────
+
+/** 按父预设名 + profileId 解析最新注册记录（父预设缺失返回 undefined）。 */
+export function resolveFreshRegisteredRecord(presetName: string, profileId: string): Record<string, any> | undefined {
+    const idx = openai_setting_names[presetName];
+    if (idx === undefined) return undefined;
+    const parentPreset = openai_settings[idx] as Preset | undefined;
+    if (!parentPreset) return undefined;
+    return buildRegisteredSnapshots(parentPreset).find((s) => s.profileId === String(profileId))?.snapshot;
+}
+
+/** 从预设记录推导激活 profile 引用（纯函数）：profile 投影 → { presetName: 父预设名, profileId }；否则 undefined。 */
+export function deriveActiveProfileRef(
+    presetName: string,
+    preset: Record<string, any> | undefined,
+): { presetName: string; profileId: string } | undefined {
+    const marker = readPresetMarker(preset);
+    if (!marker || marker.kind !== 'profile' || !marker.profileId) return undefined;
+    return { presetName: marker.parentKey ?? presetName, profileId: marker.profileId };
+}
+
+/**
+ * 激活即最新解析：OAI_PRESET_CHANGED_BEFORE 钩子（ST 原生下拉与卡片 fastApply 都会触发）。
+ * 传入预设带 profile marker → 沿父链重新解析，应用前覆盖 arg.preset + 写回 openai_settings[索引]
+ * （保持注册记录新鲜）；无 marker → 不动。与 initPresetOrderNormalization 并列注册。
+ */
+export function initRegisteredPresetActivation(): void {
+    eventSource.on(event_types.OAI_PRESET_CHANGED_BEFORE, (arg: any) => {
+        try {
+            const preset = arg?.preset as Record<string, any> | undefined;
+            if (!preset) return;
+            const marker = readPresetMarker(preset);
+            if (!marker || marker.kind !== 'profile' || !marker.parentKey || !marker.profileId) return;
+            const fresh = resolveFreshRegisteredRecord(marker.parentKey, marker.profileId);
+            if (!fresh) return;
+            // 应用前覆盖传入记录（native 路径是克隆；fastApply 路径即数组记录本体）
+            Object.assign(preset, fresh);
+            // 写回存储记录（保持注册记录新鲜 + 落盘）
+            const storedIdx = typeof arg.presetName === 'string' ? openai_setting_names[arg.presetName] : undefined;
+            if (storedIdx !== undefined) {
+                openai_settings[storedIdx] = fresh;
+                saveSettingsDebounced();
+            }
+        } catch (err) {
+            console.error('preset-cards: before-hook re-resolve failed', err);
+        }
+    });
+}
+
+/** 原生切换激活了 profile（或清空）的通知；卡片高亮/外部扩展订阅。 */
+export type ActiveProfileSwitchListener = (ref: { presetName: string; profileId: string } | undefined) => void;
+const activeProfileSwitchListeners = new Set<ActiveProfileSwitchListener>();
+export function onActiveProfileChangedBySwitch(listener: ActiveProfileSwitchListener): () => void {
+    activeProfileSwitchListeners.add(listener);
+    return () => { activeProfileSwitchListeners.delete(listener); };
+}
+
+/**
+ * PRESET_CHANGED 观察者：只同步 activeProfile + 通知，绝不重复应用（ST 已应用快照）。
+ * 激活 profile 投影 → setActiveProfile(父预设名, profileId) + 通知；普通预设 → 清空。
+ */
+export function initRegisteredPresetObserver(): void {
+    eventSource.on(event_types.PRESET_CHANGED, (arg: any) => {
+        try {
+            const presetName = arg?.name as string | undefined;
+            if (typeof presetName !== 'string') return;
+            const idx = openai_setting_names[presetName];
+            const ref = deriveActiveProfileRef(presetName, idx !== undefined ? openai_settings[idx] : undefined);
+            if (ref) setActiveProfile(ref);
+            else setActiveProfile(undefined);
+            for (const listener of [...activeProfileSwitchListeners]) {
+                listener(ref);
+            }
+        } catch (err) {
+            console.error('preset-cards: preset-changed observer failed', err);
+        }
+    });
 }

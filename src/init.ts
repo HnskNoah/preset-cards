@@ -3,9 +3,9 @@ import { SlashCommand } from '@sillytavern/scripts/slash-commands/SlashCommand';
 import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCommandParser';
 import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
-import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
+import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, notifyProfileChanged, onProfileChanged } from './presetCardsState.js';
 import { initPresetOrderNormalization } from './fastApply.js';
-import { initPresetRegistration } from './presetRegistration.js';
+import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredPresetObserver, onActiveProfileChangedBySwitch } from './presetRegistration.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
 
 export function refresh(): void {
@@ -28,6 +28,12 @@ export function init(): void {
     initActiveProfile();
     initPresetOrderNormalization();
     initPresetRegistration();
+    initRegisteredPresetActivation();
+    initRegisteredPresetObserver();
+    // 原生切换激活 profile 时,与所有加载路径(卡片行/concise/API)统一通知外部扩展
+    onActiveProfileChangedBySwitch((ref) => {
+        if (ref) notifyProfileChanged(ref);
+    });
 
     // 对外入口：供其它扩展（如 ST-Quicker-Api 便捷方案）加载 preset-cards 的 profile
     window.presetCards = exposePresetCardsApi();

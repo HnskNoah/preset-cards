@@ -34,7 +34,7 @@ export function onProfileChanged(listener: ProfileChangedListener): () => void {
     return () => { profileChangedListeners.delete(listener); };
 }
 
-function notifyProfileChanged(ref: { presetName: string; profileId: string }): void {
+export function notifyProfileChanged(ref: { presetName: string; profileId: string }): void {
     for (const listener of [...profileChangedListeners]) {
         try {
             listener(ref);
@@ -43,7 +43,6 @@ function notifyProfileChanged(ref: { presetName: string; profileId: string }): v
         }
     }
 }
-
 /** 刷新当前活动预设的运行态：从内存 openai_settings 重载已保存状态（profile 编辑/重置后调用），
  * 走快路径 fastApplyPreset（内部含 render），不再触发原生 change 慢路径。 */
 export function refreshActivePresetUI(presetName: string): void {

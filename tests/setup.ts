@@ -1,5 +1,6 @@
 import { beforeEach } from 'vitest';
 import { resetOpenaiMock } from './mocks/openai.js';
+import { resetEventSource } from './mocks/events.js';
 
 // 浏览器全局最小 stub：纯逻辑测试不触碰 DOM，但部分模块在调用路径会引用 toastr/localStorage。
 globalThis.localStorage = globalThis.localStorage ?? {
@@ -45,5 +46,6 @@ globalThis.$ = globalThis.$ ?? function () {
 
 beforeEach(() => {
     resetOpenaiMock();
+    resetEventSource();
     (globalThis.localStorage as Storage).clear();
 });

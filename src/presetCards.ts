@@ -9,6 +9,8 @@ import { createCardsContext } from './presetCardsContext.js';
 import { bindCardsHandlers } from './presetCardsHandlers.js';
 import { applyNameWrap } from './nameWrap.js';
 import { createPresetStore, type PresetEntry } from './core/store/PresetStore.js';
+import { refreshActiveCardSelection } from './presetCardsState.js';
+import { onActiveProfileChangedBySwitch } from './presetRegistration.js';
 
 /** 打开 preset-cards 卡片页弹窗。 */
 export async function openPresetCards(): Promise<void> {
@@ -33,6 +35,9 @@ export async function openPresetCards(): Promise<void> {
     }
 
     bindCardsHandlers(ctx);
+
+    // 注册链路：原生切换(PRESET_CHANGED)同步卡片高亮——激活 profile 投影或切回普通预设都刷新选中态
+    onActiveProfileChangedBySwitch(() => refreshActiveCardSelection(ctx));
 
     // 初始 UI：计数、背景图、展开当前激活 profile 的祖先链
     const countEl = dialog.find('#preset_cards_count');

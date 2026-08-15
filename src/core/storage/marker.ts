@@ -37,7 +37,7 @@ export function readPresetKey(preset: Record<string, any>): string | undefined {
 }
 
 /** 读取完整 marker；无合法 marker 时返回 undefined。 */
-export function readPresetMarker(preset: Record<string, any>): PresetCardsMarker | undefined {
+export function readPresetMarker(preset: Record<string, any> | undefined): PresetCardsMarker | undefined {
     const marker = preset?.extensions?.preset_cards;
     if (!marker || typeof marker !== 'object' || marker.marker !== PRESET_CARDS_MARKER) return undefined;
     return marker as PresetCardsMarker;
