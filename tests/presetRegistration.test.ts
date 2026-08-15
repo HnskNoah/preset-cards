@@ -118,6 +118,9 @@ describe('切片 2：激活同步', () => {
         const fresh = resolveFreshRegisteredRecord('Midnight', 'A');
         expect(fresh?.prompts[0].content).toBe('v2');
         expect(fresh?.temperature).toBe(0.7);
+        // 关键回归：必须返回投影记录（带 marker），不能是裸快照（裸快照会抹掉 marker）
+        expect(readPresetMarker(fresh)?.kind).toBe('profile');
+        expect(readPresetMarker(fresh)?.profileId).toBe('A');
         expect(resolveFreshRegisteredRecord('Nobody', 'A')).toBeUndefined();
     });
 
@@ -169,5 +172,8 @@ describe('切片 2：激活同步', () => {
 
         expect(arg.preset.prompts[0].content).toBe('v2');            // 应用前已覆盖为最新解析
         expect(openai_settings[regIdx].prompts[0].content).toBe('v2'); // 存储记录同步新鲜
+        // 关键回归：写回存储的记录必须保留 marker（否则卡片排除/捕获门失效）
+        expect(readPresetMarker(openai_settings[regIdx])?.kind).toBe('profile');
+        expect(readPresetMarker(arg.preset)?.kind).toBe('profile');
     });
 });

@@ -11,7 +11,8 @@ import { readMeta, onMetaPersisted, isPromptBaseProfile, isPromptDeltaProfile } 
 import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { setActiveProfile } from './activeProfile.js';
 import { applyProfileToPreset } from './promptToggle.js';
-import { readPresetMarker } from './core/storage/marker.js';
+import { buildProfileMarker, readPresetMarker } from './core/storage/marker.js';
+import { buildProjectedPreset } from './core/storage/project.js';
 import {
     findRegisteredPreset,
     findRegistrationsByParent,
@@ -186,13 +187,19 @@ export function refreshRegisteredSnapshot(presetName: string, preset: Preset, pr
 
 // ─── 切片 2：激活同步 ────────────────────────────────────────────────
 
-/** 按父预设名 + profileId 解析最新注册记录（父预设缺失返回 undefined）。 */
+/** 按父预设名 + profileId 解析最新**投影**注册记录（带身份 marker；父预设缺失返回 undefined）。
+ * 必须返回投影记录而非裸快照：裸快照的 extensions.preset_cards 是父 meta 容器,
+ * 写回存储会抹掉 marker → 卡片排除失败 + 捕获门读不到 marker。 */
 export function resolveFreshRegisteredRecord(presetName: string, profileId: string): Record<string, any> | undefined {
     const idx = openai_setting_names[presetName];
     if (idx === undefined) return undefined;
     const parentPreset = openai_settings[idx] as Preset | undefined;
     if (!parentPreset) return undefined;
-    return buildRegisteredSnapshots(parentPreset).find((s) => s.profileId === String(profileId))?.snapshot;
+    const s = buildRegisteredSnapshots(parentPreset).find((x) => x.profileId === String(profileId));
+    if (!s) return undefined;
+    return buildProjectedPreset(s.snapshot, buildProfileMarker(
+        presetName, s.profileId, s.profileName, presetName,
+    ));
 }
 
 /** 从预设记录推导激活 profile 引用（纯函数）：profile 投影 → { presetName: 父预设名, profileId }；否则 undefined。 */
