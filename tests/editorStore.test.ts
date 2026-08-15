@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyStagedToSnapshot, createEditorStore } from '../src/core/store/EditorStore.js';
+import { applyStagedToSnapshot, createEditorStore, deriveEditorView } from '../src/core/store/EditorStore.js';
 import type { PresetSnapshot } from '../src/core/domain/types.js';
 
 const snapshot: PresetSnapshot = {
@@ -108,5 +108,29 @@ describe('EditorStore', () => {
         expect(store.getState().undoStack).toEqual([]);
         expect(store.getState().redoStack).toEqual([]);
         expect(store.getState().dirty).toBe(false);
+    });
+});
+
+describe('EditorStore derived view (right-panel staged)', () => {
+    const base = { nodeId: 'A', snapshot, staged: { changes: [] }, undoStack: [], redoStack: [], dirty: false };
+
+    it('derives empty staged view initially', () => {
+        const store = createEditorStore(base);
+        const view = deriveEditorView(store.getState());
+        expect(view.stagedChanges).toEqual([]);
+        expect(view.orderChanged).toBe(false);
+        expect(view.topLevelKeys).toEqual([]);
+        expect(view.dirty).toBe(false);
+    });
+
+    it('derives staged change entries, order flag, and top-level keys', () => {
+        const store = createEditorStore(base);
+        store.dispatch({ type: 'TOGGLE', identifier: 'a', enabled: false });
+        store.dispatch({ type: 'REORDER', order: ['a', 'b'] });
+
+        const view = deriveEditorView(store.getState());
+        expect(view.stagedChanges).toEqual([{ identifier: 'a', enabled: false }]);
+        expect(view.orderChanged).toBe(true);
+        expect(view.dirty).toBe(true);
     });
 });

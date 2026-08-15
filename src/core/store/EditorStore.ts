@@ -9,6 +9,23 @@ export interface EditorDiff {
     topLevel?: Record<string, unknown>;
 }
 
+/** 编辑器右栏 staged 面板的派生视图（P4：UI 由 store 状态投影）。 */
+export interface EditorView {
+    stagedChanges: PromptStateChange[];
+    orderChanged: boolean;
+    topLevelKeys: string[];
+    dirty: boolean;
+}
+
+export function deriveEditorView(state: EditorState): EditorView {
+    return {
+        stagedChanges: state.staged.changes,
+        orderChanged: state.staged.order !== undefined,
+        topLevelKeys: Object.keys(state.staged.topLevel ?? {}),
+        dirty: state.dirty,
+    };
+}
+
 export interface EditorState {
     nodeId: string;
     snapshot: PresetSnapshot;
