@@ -82,12 +82,14 @@ export async function captureIfRegistered(): Promise<boolean> {
             : {};
         console.log('preset-cards: capture drift', JSON.stringify({
             changed: drift.changedFields.length, enabled: drift.enabledChanges.length,
-            order: drift.order !== undefined, deleted: drift.deleted, added: drift.added.map((a) => a.identifier),
-            top: Object.keys(top),
+            order: drift.order !== undefined, deleted: drift.deleted,
+            unmounted: drift.unmounted, remounted: drift.remounted.map((r) => r.identifier),
+            added: drift.added.map((a) => a.identifier), top: Object.keys(top),
         }));
         if (isEmptyPromptDrift(drift) && Object.keys(top).length === 0) { log('no drift'); return false; }
 
-        // 材料恢复（删除）/ 新增入父池：dormant prompt 定义进父预设 prompts[]（不挂载，仅池）
+        // 材料恢复（池删除）/ 新增入父池：dormant prompt 定义进父预设 prompts[]（不挂载，仅池）。
+        // ST 摘除（unmounted）的 prompt 池仍在，无需恢复。
         const parentPrompts = Array.isArray(parent.prompts) ? parent.prompts : (parent.prompts = []);
         const known = new Set(
             parentPrompts.map((p: any) => p?.identifier).filter((id: unknown): id is string => typeof id === 'string'),
@@ -140,7 +142,8 @@ function topLevelKeysDiffer(runtime: Record<string, any>, record: Record<string,
     return false;
 }
 
-/** 采样/extra/模型漂移：相对「排除本 profile 的父链解析态」（base 相对出厂基线）。 */
+/** 采样/extra/模型漂移：判定用「运行时 vs profile 当前生效值」（变了才算），
+ * 存储用 v3 diff（相对排除本 profile 的父链基线，base 相对出厂基线）。 */
 function computeTopLevelDrift(
     parent: Preset,
     profileId: string,
@@ -153,23 +156,24 @@ function computeTopLevelDrift(
     const parentOf = isPromptDeltaProfile(profile)
         ? profiles.find((p) => String(p.id) === String(profile.baseId))
         : undefined;
+    const baselineSampling = parentOf ? resolveEffectiveSampling(parentOf, profiles, meta.defaultSampling) : meta.defaultSampling;
+    const baselineExtra = parentOf ? resolveEffectiveExtra(parentOf, profiles, meta.defaultExtra) : meta.defaultExtra;
 
     const out: { sampling?: PromptSampling; extra?: Record<string, any>; model?: PromptModel } = {};
-    const sampling = diffSampling(
-        captureSampling(runtime),
-        parentOf ? resolveEffectiveSampling(parentOf, profiles, meta.defaultSampling) : meta.defaultSampling,
-    );
-    if (sampling && Object.keys(sampling).length > 0) out.sampling = sampling;
-
-    const extra = diffExtra(
-        captureExtra(runtime),
-        parentOf ? resolveEffectiveExtra(parentOf, profiles, meta.defaultExtra) : meta.defaultExtra,
-    );
-    if (extra && Object.keys(extra).length > 0) out.extra = extra;
-
+    // 判定：运行时 vs profile 当前生效值（变了才算）
+    const currentSampling = resolveEffectiveSampling(profile, profiles, meta.defaultSampling);
+    const samplingDiff = diffSampling(captureSampling(runtime), currentSampling);
+    if (samplingDiff && Object.keys(samplingDiff).length > 0) {
+        out.sampling = diffSampling(captureSampling(runtime), baselineSampling) ?? undefined;
+    }
+    const currentExtra = resolveEffectiveExtra(profile, profiles, meta.defaultExtra);
+    const extraDiff = diffExtra(captureExtra(runtime), currentExtra);
+    if (extraDiff && Object.keys(extraDiff).length > 0) {
+        out.extra = diffExtra(captureExtra(runtime), baselineExtra) ?? undefined;
+    }
     const model = captureModel(runtime);
-    const modelBase = parentOf ? resolveProfileModel(parentOf, profiles) : meta.defaultModel;
-    if (model && (!modelBase || model.source !== modelBase.source || model.name !== modelBase.name)) {
+    const currentModel = resolveProfileModel(profile, profiles);
+    if (model && (!currentModel || model.source !== currentModel.source || model.name !== currentModel.name)) {
         out.model = model;
     }
     return out;

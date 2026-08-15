@@ -40,7 +40,61 @@ describe('computePromptDrift', () => {
         expect(drift.enabledChanges).toEqual([{ identifier: 'p1', enabled: false }]);
         expect(drift.order).toEqual(['p1', 'p3', 'p2']);
         expect(drift.deleted).toEqual(['pDeleted']);
+        expect(drift.unmounted).toEqual([]);
+        expect(drift.remounted).toEqual([]);
         expect(drift.added).toEqual([{ identifier: 'p3', definition: expect.objectContaining({ content: 'new' }) }]);
+        expect(isEmptyPromptDrift(drift)).toBe(false);
+    });
+
+    it('classifies ST detach (removed from order, pool kept) as unmounted, not enabled change', () => {
+        const detachRecord = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'pX', content: 'x' },
+            ],
+            prompt_order: [{ name: 'main', order: [
+                { identifier: 'p1', enabled: true },
+                { identifier: 'pX', enabled: false },
+            ] }],
+        };
+        // 运行时：pX 从 order 摘除，但池里还在
+        const detachRuntime = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'pX', content: 'x' },
+            ],
+            prompt_order: [{ name: 'main', order: [{ identifier: 'p1', enabled: true }] }],
+        };
+
+        const drift = computePromptDrift(detachRuntime as any, detachRecord as any);
+        expect(drift.unmounted).toEqual(['pX']);   // 摘除 → unmount
+        expect(drift.enabledChanges).toEqual([]);  // 不得误判为 enabled:true
+        expect(drift.deleted).toEqual([]);         // 池还在,不是删除
+        expect(drift.order).toEqual(['p1']);
+        expect(isEmptyPromptDrift(drift)).toBe(false);
+    });
+
+    it('classifies re-adding a detached prompt (back in order) as remounted', () => {
+        const baseRecord = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'pX', content: 'x' },
+            ],
+            prompt_order: [{ name: 'main', order: [{ identifier: 'p1', enabled: true }] }],
+        };
+        const remountRuntime = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'pX', content: 'x' },
+            ],
+            prompt_order: [{ name: 'main', order: [
+                { identifier: 'p1', enabled: true },
+                { identifier: 'pX', enabled: false },
+            ] }],
+        };
+
+        const drift = computePromptDrift(remountRuntime as any, baseRecord as any);
+        expect(drift.remounted).toEqual([{ identifier: 'pX', enabled: false }]);
         expect(isEmptyPromptDrift(drift)).toBe(false);
     });
 
@@ -79,6 +133,53 @@ describe('applyPromptDriftToProfile (base)', () => {
         // mounted 顺序 = 运行时顺序
         expect(next.prompts.filter((e) => e.mounted).map((e) => e.identifier)).toEqual(['p1', 'p3', 'p2']);
         expect(next.unusedIds).toContain('pDeleted');
+    });
+
+    it('applies ST detach as unmount and re-add as remount', () => {
+        const detachBase: PromptBaseProfile = {
+            formatVersion: 3,
+            kind: 'prompt_base',
+            id: 'B',
+            name: 'x',
+            prompts: [
+                { identifier: 'p1', mounted: true, enabled: true },
+                { identifier: 'pX', mounted: true, enabled: false },
+            ],
+            unusedIds: [],
+        };
+        const detachRecord = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'pX', content: 'x' },
+            ],
+            prompt_order: [{ name: 'main', order: [
+                { identifier: 'p1', enabled: true },
+                { identifier: 'pX', enabled: false },
+            ] }],
+        };
+        const detachRuntime = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'pX', content: 'x' },
+            ],
+            prompt_order: [{ name: 'main', order: [{ identifier: 'p1', enabled: true }] }],
+        };
+        const drift = computePromptDrift(detachRuntime as any, detachRecord as any);
+        const next = applyPromptDriftToProfile(detachBase, drift) as PromptBaseProfile;
+        const pX = next.prompts.find((e) => e.identifier === 'pX')!;
+        expect(pX.mounted).toBe(false);
+        expect(pX.enabled).toBe(false);
+        expect(next.unusedIds).toContain('pX');
+        // mounted 顺序不再含 pX
+        expect(next.prompts.filter((e) => e.mounted).map((e) => e.identifier)).not.toContain('pX');
+
+        // 重新挂载
+        const remountRuntime = structuredClone(detachRecord);
+        const remountDrift = computePromptDrift(remountRuntime as any, detachRuntime as any);
+        const remounted = applyPromptDriftToProfile(next, remountDrift) as PromptBaseProfile;
+        const pX2 = remounted.prompts.find((e) => e.identifier === 'pX')!;
+        expect(pX2.mounted).toBe(true);
+        expect(remounted.unusedIds ?? []).not.toContain('pX');
     });
 
     it('no-op when no drift', () => {

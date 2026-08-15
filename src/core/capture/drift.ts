@@ -14,12 +14,16 @@ import type {
 export interface PromptDrift {
     /** 值字段漂移（仅白名单键，与记录不同的运行时值）。 */
     changedFields: { identifier: string; fields: PromptFields }[];
-    /** 开关漂移（运行时 enabled 真值）。 */
+    /** 开关漂移（双方都在 order 中的条目；运行时 enabled 真值）。 */
     enabledChanges: { identifier: string; enabled: boolean }[];
     /** 运行时挂载顺序；与记录一致时为 undefined。 */
     order: string[] | undefined;
-    /** 记录有、运行时无的 identifier（→ unmount + 材料留池）。 */
+    /** 记录池有、运行时池无的 identifier（池删除 → unmount + 材料留池）。 */
     deleted: string[];
+    /** 双方池都有、但记录 order 有而运行时 order 无的 identifier（ST 摘除/detach → unmount）。 */
+    unmounted: string[];
+    /** 记录 order 无而运行时 order 有的 identifier（重新挂载 → mounted:true）。 */
+    remounted: { identifier: string; enabled: boolean }[];
     /** 运行时新增（记录无）的 identifier 与定义（→ 父池 + 挂载条目）。 */
     added: { identifier: string; definition: Record<string, any> }[];
 }
@@ -29,6 +33,8 @@ export function isEmptyPromptDrift(drift: PromptDrift): boolean {
         && drift.enabledChanges.length === 0
         && drift.order === undefined
         && drift.deleted.length === 0
+        && drift.unmounted.length === 0
+        && drift.remounted.length === 0
         && drift.added.length === 0;
 }
 
@@ -95,7 +101,9 @@ function diffFields(recordDef: any, runtimeDef: any): PromptFields | undefined {
     return changed ? fields : undefined;
 }
 
-/** 计算运行时 vs 注册记录 的 prompt 级漂移。 */
+/** 计算运行时 vs 注册记录 的 prompt 级漂移。
+ * 关键语义：ST 的「Remove」= detach（从 order 摘除、池保留）→ 识别为 unmounted；
+ * 池删除（handleDeletePrompt）→ deleted；重新挂载（append）→ remounted。 */
 export function computePromptDrift(
     runtime: { prompts?: any[]; prompt_order?: any[] },
     record: { prompts?: any[]; prompt_order?: any[] },
@@ -104,30 +112,47 @@ export function computePromptDrift(
     const rc = promptMap(record.prompts);
     const rtEnabled = enabledMap(runtime.prompt_order);
     const rcEnabled = enabledMap(record.prompt_order);
+    const rtOrder = mountedOrder(runtime.prompt_order);
+    const rcOrder = mountedOrder(record.prompt_order);
+    const rtOrderSet = new Set(rtOrder);
+    const rcOrderSet = new Set(rcOrder);
 
     const changedFields: PromptDrift['changedFields'] = [];
     const enabledChanges: PromptDrift['enabledChanges'] = [];
     const deleted: string[] = [];
+    const unmounted: string[] = [];
+    const remounted: PromptDrift['remounted'] = [];
     for (const [id, recordDef] of rc) {
         const runtimeDef = rt.get(id);
         if (!runtimeDef) {
             deleted.push(id);
             continue;
         }
+        const inRtOrder = rtOrderSet.has(id);
+        const inRcOrder = rcOrderSet.has(id);
+        if (inRcOrder && !inRtOrder) {
+            // ST detach：从 order 摘除（池保留）→ unmount，不再做 enabled 判定（避免默认 true 误写）
+            unmounted.push(id);
+            continue;
+        }
+        if (!inRcOrder && inRtOrder) {
+            remounted.push({ identifier: id, enabled: rtEnabled.get(id) ?? true });
+            continue;
+        }
         const fields = diffFields(recordDef, runtimeDef);
         if (fields) changedFields.push({ identifier: id, fields });
-        const re = rtEnabled.get(id) ?? true;
-        const ce = rcEnabled.get(id) ?? true;
-        if (re !== ce) enabledChanges.push({ identifier: id, enabled: re });
+        if (inRtOrder && inRcOrder) {
+            const re = rtEnabled.get(id) ?? true;
+            const ce = rcEnabled.get(id) ?? true;
+            if (re !== ce) enabledChanges.push({ identifier: id, enabled: re });
+        }
     }
     const added: PromptDrift['added'] = [];
     for (const [id, def] of rt) {
         if (!rc.has(id)) added.push({ identifier: id, definition: structuredClone(def) });
     }
-    const rtOrder = mountedOrder(runtime.prompt_order);
-    const rcOrder = mountedOrder(record.prompt_order);
     const order = sameOrder(rtOrder, rcOrder) ? undefined : rtOrder;
-    return { changedFields, enabledChanges, order, deleted, added };
+    return { changedFields, enabledChanges, order, deleted, unmounted, remounted, added };
 }
 
 /** 把漂移回写进 v3 profile（base/delta），返回新 profile（不改原对象）。 */
@@ -149,12 +174,19 @@ export function applyPromptDriftToProfile(
             const e = byId.get(c.identifier);
             if (e) e.enabled = c.enabled;
         }
-        for (const id of drift.deleted) {
+        for (const id of [...drift.deleted, ...drift.unmounted]) {
             const e = byId.get(id);
             if (e) {
-                // 删除 = unmount + 禁用：渲染层开关读 enabled，仅 mounted:false 会仍显示为开
+                // 删除/摘除 = unmount + 禁用：渲染层开关读 enabled，仅 mounted:false 会仍显示为开
                 e.mounted = false;
                 e.enabled = false;
+            }
+        }
+        for (const r of drift.remounted) {
+            const e = byId.get(r.identifier);
+            if (e) {
+                e.mounted = true;
+                e.enabled = r.enabled;
             }
         }
         for (const a of drift.added) {
@@ -182,12 +214,19 @@ export function applyPromptDriftToProfile(
         } else {
             next.prompts = prompts;
         }
-        if (drift.deleted.length > 0) {
+        const detachedIds = [...drift.deleted, ...drift.unmounted];
+        if (detachedIds.length > 0) {
             const existing = new Set(Array.isArray(next.unusedIds) ? next.unusedIds : []);
-            for (const id of drift.deleted) {
+            for (const id of detachedIds) {
                 if (byId.has(id) && !existing.has(id)) existing.add(id);
             }
             next.unusedIds = [...existing];
+        }
+        if (drift.remounted.length > 0) {
+            const remountedIds = new Set(drift.remounted.map((r) => r.identifier));
+            if (Array.isArray(next.unusedIds)) {
+                next.unusedIds = next.unusedIds.filter((id) => !remountedIds.has(id));
+            }
         }
         return next;
     }
@@ -210,8 +249,11 @@ export function applyPromptDriftToProfile(
         };
         for (const c of drift.changedFields) upsert({ identifier: c.identifier, fields: c.fields });
         for (const c of drift.enabledChanges) upsert({ identifier: c.identifier, enabled: c.enabled });
-        // 删除 = unmount + 禁用（渲染层开关读 enabled）
-        for (const id of drift.deleted) upsert({ identifier: id, mounted: false, enabled: false });
+        // 删除/摘除 = unmount + 禁用（渲染层开关读 enabled）
+        for (const id of [...drift.deleted, ...drift.unmounted]) {
+            upsert({ identifier: id, mounted: false, enabled: false });
+        }
+        for (const r of drift.remounted) upsert({ identifier: r.identifier, mounted: true, enabled: r.enabled });
         for (const a of drift.added) upsert({
             identifier: a.identifier,
             mounted: true,
