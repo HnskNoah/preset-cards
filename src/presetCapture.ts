@@ -7,6 +7,7 @@ import { openai_settings, openai_setting_names, oai_settings, settingsToUpdate }
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
 import type { Preset, PresetProfile, PromptBaseProfile, PromptDeltaProfile, PromptModel, PromptSampling } from './meta.js';
 import { resolvePromptOrderTarget } from './promptOrder.js';
+import { L } from './i18n.js';
 import { readPresetMarker } from './core/storage/marker.js';
 import {
     applyPromptDriftToProfile,
@@ -104,7 +105,7 @@ export async function captureIfRegistered(): Promise<boolean> {
         }
 
         // 捕获回 profile 并持久化（副本事务；成功后 onMetaPersisted → syncPresetRegistrations 刷新注册记录）。
-        // silent：捕获是后台同步,失败不 toast(避免在无关 ST 操作时弹出误导性错误)
+        // toastMessage：失败时明确告知是「配置捕获同步」失败(而非用户在操作的功能报错)
         const meta = readMeta(parent);
         return await persistMetaTransaction(meta, (m) => {
             const profiles = Array.isArray(m.profiles) ? m.profiles : [];
@@ -115,7 +116,7 @@ export async function captureIfRegistered(): Promise<boolean> {
             if (top.extra) next.extra = top.extra;
             if (top.model) next.model = top.model;
             return { ...m, profiles: profiles.map((p) => (String(p.id) === String(marker.profileId) ? next as PresetProfile : p)) };
-        }, marker.parentKey, parentIdx, { silent: true });
+        }, marker.parentKey, parentIdx, { toastMessage: L('Failed to sync captured profile changes') });
     } finally {
         capturing = false;
     }

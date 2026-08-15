@@ -175,6 +175,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'Activate this unused prompt?': '激活此未使用的 prompt？',
     'This prompt is in the unused list. It may not be intended for activation and its usability after activation is not guaranteed.': '该 prompt 位于未使用列表中，可能并非设计为可激活项，激活后的可用性不作保证。',
     'Failed to save preset metadata': '保存预设元数据失败',
+    'Failed to sync captured profile changes': '配置捕获同步失败（原生编辑可能未写入 profile）',
 };
 
 export interface ModelDef {
