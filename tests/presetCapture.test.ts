@@ -163,3 +163,38 @@ describe('initPresetCapture', () => {
         expect(profile.prompts.find((e: any) => e.identifier === 'p1').fields).toEqual({ content: 'v2' });
     });
 });
+
+describe('NEW-1：ST 预设键 ↔ 设置键映射', () => {
+    it('maps preset-key to settings-key in top-level compare (no extra flood)', async () => {
+        // 模拟真实 ST 映射：预设键 temperature ↔ 设置键 temp_openai（settingsToUpdate）
+        const { settingsToUpdate } = await import('./mocks/openai.js');
+        const orig = settingsToUpdate['temperature'];
+        settingsToUpdate['temperature'] = ['#temp_openai', 'temp_openai', false, false];
+        try {
+            const parentIdx = addPreset('Midnight', parentFixture()); // temperature: 0.7
+            syncPresetRegistrations('Midnight', parentIdx);
+
+            // 激活投影：运行时 = 注册记录克隆（设置键空间 temp_openai），再改一个 prompt 内容触发捕获
+            const regIdx = openai_setting_names['Midnight - 战斗版'];
+            const record = openai_settings[regIdx];
+            Object.assign(oai_settings, structuredClone(record));
+            oai_settings.preset_settings_openai = 'Midnight - 战斗版';
+            oai_settings.temp_openai = 0.7;
+            oai_settings.prompts = (oai_settings.prompts as any[]).map((p: any) =>
+                p.identifier === 'p1' ? { ...p, content: 'v2' } : p,
+            );
+
+            await captureIfRegistered();
+
+            const parent = openai_settings[parentIdx] as Record<string, any>;
+            const profile = readMeta(parent as any).profiles[0] as any;
+            // 键空间映射下温度一致 → 无顶层漂移 → extra 不得被灌入设置键名/采样键
+            expect(profile.extra ?? {}).not.toHaveProperty('temp_openai');
+            expect(Object.keys(profile.extra ?? {})).not.toContain('temperature');
+            // prompt 漂移仍正常捕获
+            expect(profile.prompts.find((e: any) => e.identifier === 'p1').fields).toEqual({ content: 'v2' });
+        } finally {
+            settingsToUpdate['temperature'] = orig;
+        }
+    });
+});

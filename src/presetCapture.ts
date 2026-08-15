@@ -13,15 +13,15 @@ import {
     isEmptyPromptDrift,
 } from './core/capture/drift.js';
 import {
-    captureExtra,
     captureModel,
-    captureSampling,
     diffExtra,
     diffSampling,
     resolveEffectiveExtra,
     resolveEffectiveSampling,
     resolveProfileModel,
+    EXTRA_EXCLUDED_KEYS,
 } from './promptToggle.js';
+import { SAMPLING_KEYS } from './constants.js';
 
 /** 防重入：捕获期间再次 SETTINGS_UPDATED 直接跳过（等待本次落盘后再对账）。 */
 let capturing = false;
@@ -120,16 +120,49 @@ export async function captureIfRegistered(): Promise<boolean> {
 }
 
 /** 顶层键（采样/extra/模型等，排除 prompts/order/extensions/连接键）运行时与注册记录是否不同。
- * 只比较记录（已应用基线）中存在的键：运行态操作键（如 preset_settings_openai）不参与。 */
+ * 只比较记录（已应用基线）中存在的键；ST 预设键名 ≠ 设置键名（temperature→temp_openai 等,
+ * settingsToUpdate 映射），运行时按设置键取值比较（NEW-1：否则恒真 → 首次捕获把整个运行时
+ * 快照灌进 profile.extra）。 */
 function topLevelKeysDiffer(runtime: Record<string, any>, record: Record<string, any>): boolean {
     const excluded = new Set(['prompts', 'prompt_order', 'extensions']);
-    for (const key of Object.keys(record)) {
-        if (excluded.has(key)) continue;
-        const meta = settingsToUpdate[key];
+    for (const presetKey of Object.keys(record)) {
+        if (excluded.has(presetKey)) continue;
+        const meta = settingsToUpdate[presetKey];
         if (meta && meta[3]) continue; // is_connection 键不捕获
-        if (runtime[key] !== record[key]) return true;
+        const settingsKey = meta ? meta[1] : presetKey;
+        if (runtime[settingsKey] !== record[presetKey]) return true;
     }
     return false;
+}
+
+/** 从运行时（设置键空间）采集采样快照，键名转回预设键空间（profile 采样存预设键）。 */
+function runtimeSampling(runtime: Record<string, any>): PromptSampling | null {
+    const out: PromptSampling = {};
+    for (const presetKey of SAMPLING_KEYS) {
+        const meta = settingsToUpdate[presetKey];
+        const settingsKey = meta ? meta[1] : presetKey;
+        const value = runtime[settingsKey];
+        if (value !== undefined) (out as Record<string, unknown>)[presetKey] = value;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+}
+
+/** 运行时 extras：排除「预设键≠设置键」的设置键（如 temp_openai，由 sampling/映射处理），
+ * 避免把设置键名当 extra 键灌进 profile。 */
+function runtimeExtra(runtime: Record<string, any>): Record<string, any> | null {
+    const settingsKeysDiffering = new Set(
+        Object.entries(settingsToUpdate)
+            .filter(([presetKey, meta]) => meta[1] !== presetKey)
+            .map(([, meta]) => meta[1]),
+    );
+    const extra: Record<string, any> = {};
+    for (const [key, value] of Object.entries(runtime)) {
+        if (SAMPLING_KEYS.some((k) => k === key)) continue;
+        if (settingsKeysDiffering.has(key)) continue;
+        if (EXTRA_EXCLUDED_KEYS.has(key)) continue;
+        extra[key] = value;
+    }
+    return Object.keys(extra).length > 0 ? extra : null;
 }
 
 /** 采样/extra/模型漂移：判定用「运行时 vs profile 当前生效值」（变了才算），
@@ -150,16 +183,16 @@ function computeTopLevelDrift(
     const baselineExtra = parentOf ? resolveEffectiveExtra(parentOf, profiles, meta.defaultExtra) : meta.defaultExtra;
 
     const out: { sampling?: PromptSampling; extra?: Record<string, any>; model?: PromptModel } = {};
-    // 判定：运行时 vs profile 当前生效值（变了才算）
+    // 判定：运行时 vs profile 当前生效值（变了才算；键空间用运行时采样/extra 转换）
     const currentSampling = resolveEffectiveSampling(profile, profiles, meta.defaultSampling);
-    const samplingDiff = diffSampling(captureSampling(runtime), currentSampling);
+    const samplingDiff = diffSampling(runtimeSampling(runtime), currentSampling);
     if (samplingDiff && Object.keys(samplingDiff).length > 0) {
-        out.sampling = diffSampling(captureSampling(runtime), baselineSampling) ?? undefined;
+        out.sampling = diffSampling(runtimeSampling(runtime), baselineSampling) ?? undefined;
     }
     const currentExtra = resolveEffectiveExtra(profile, profiles, meta.defaultExtra);
-    const extraDiff = diffExtra(captureExtra(runtime), currentExtra);
+    const extraDiff = diffExtra(runtimeExtra(runtime), currentExtra);
     if (extraDiff && Object.keys(extraDiff).length > 0) {
-        out.extra = diffExtra(captureExtra(runtime), baselineExtra) ?? undefined;
+        out.extra = diffExtra(runtimeExtra(runtime), baselineExtra) ?? undefined;
     }
     const model = captureModel(runtime);
     const currentModel = resolveProfileModel(profile, profiles);

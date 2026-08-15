@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { saveMeta, saveMetaMerged } from '../src/meta.js';
+import { saveMeta, saveMetaMerged, onMetaPersisted, readMeta, persistMetaTransaction } from '../src/meta.js';
 import { addPreset, openai_setting_names, openai_settings } from './mocks/openai.js';
 
 beforeEach(() => {
@@ -12,6 +12,29 @@ afterEach(() => {
 });
 
 describe('saveMeta 持久化统一机制', () => {
+    it('onMetaPersisted 在 persistMetaTransaction 成功后触发', async () => {
+        addPreset('Midnight', { name: 'Midnight', prompts: [], extensions: { preset_cards: { profiles: [] } } });
+        const idx = 0;
+        const meta = readMeta(openai_settings[idx] as any);
+        const seen: [string, number][] = [];
+        onMetaPersisted((n, i) => seen.push([n, i]));
+
+        const ok = await persistMetaTransaction(meta, (m) => ({ ...m, description: 'x' }), 'Midnight', idx);
+        expect(ok).toBe(true);
+        expect(seen).toEqual([['Midnight', 0]]);
+    });
+
+    it('saveMetaMerged（编辑器提交路径）也触发 onMetaPersisted → 注册对账（L17）', async () => {
+        addPreset('Midnight', { name: 'Midnight', prompts: [], extensions: { preset_cards: { profiles: [] } } });
+        const idx = 0;
+        const meta = readMeta(openai_settings[idx] as any);
+        const seen: [string, number][] = [];
+        onMetaPersisted((n, i) => seen.push([n, i]));
+
+        await saveMetaMerged('Midnight', idx, { ...meta, description: 'y' });
+        expect(seen).toEqual([['Midnight', 0]]);
+    });
+
     it('合并窗口内多次保存合并为一次，末次 meta 胜出', async () => {
         vi.useFakeTimers();
         addPreset('P', { prompts: [], extensions: {} });
