@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildPresetEntries, createPresetStore, deriveCardView, filterPresets } from '../src/core/store/PresetStore.js';
 import type { PresetEntry } from '../src/core/store/PresetStore.js';
-import { addProfileNode, createPresetCardsFile } from '../src/core/codec/v4.js';
+import type { PresetCardsFile } from '../src/core/domain/types.js';
 
 const presets: PresetEntry[] = [
     { name: 'Alpha', profileCount: 2, isActive: true },
@@ -46,9 +46,15 @@ describe('PresetStore', () => {
 
     it('builds preset entries from a v4 file with profile counts and active marker', () => {
         const preset = { name: 'P', prompts: [], prompt_order: [] };
-        let file = createPresetCardsFile(preset, 'key-1');
-        file = addProfileNode(file, { id: 'A', name: 'A', presetSnapshot: preset });
-        file = addProfileNode(file, { id: 'B', name: 'B', parentId: 'A', presetSnapshot: preset });
+        const file: PresetCardsFile = {
+            version: 4,
+            presets: [{ key: 'key-1', profileIds: ['A', 'B'] }],
+            nodes: [
+                { id: 'root', name: 'root', presetSnapshot: preset },
+                { id: 'A', name: 'A', parentId: 'root', presetSnapshot: preset },
+                { id: 'B', name: 'B', parentId: 'A', presetSnapshot: preset },
+            ],
+        };
 
         const entries = buildPresetEntries(file, 'key-1');
 
