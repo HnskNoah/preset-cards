@@ -20,6 +20,7 @@ import { getCardsTemplateContext } from './presetList.js';
 import type { CardsContext } from './presetCardsContext.js';
 import { clearImageCache, applyCachedBackgrounds } from './cache.js';
 import { applyNameWrap } from './nameWrap.js';
+import { findRegisteredPresetName, refreshRegisteredSnapshot, unregisterAllForPreset } from './presetRegistration.js';
 
 /** profile 加载事件订阅回调。 */
 export type ProfileChangedListener = (ref: { presetName: string; profileId: string }) => void;
@@ -113,6 +114,13 @@ export async function deletePresetByName(
     // 服务器确认成功：移除下拉、清索引、活动预设置空/重选
     $(`#settings_preset_openai option[value="${value}"]`).remove();
     delete openai_setting_names[nameToDelete];
+
+    // 注册链路：删除父预设 → 注销其名下全部 profile 注册（服务端 + 本地）；失败不阻断删除
+    try {
+        await unregisterAllForPreset(nameToDelete);
+    } catch (err) {
+        console.error('preset-cards: unregister registrations failed on preset delete', err);
+    }
 
     if (oai_settings.preset_settings_openai === nameToDelete) {
         oai_settings.preset_settings_openai = null;
@@ -208,13 +216,30 @@ export async function applyProfileToPresetByName(
     return true;
 }
 
-/** 加载 profile 到 preset（卡片行与 concise 弹窗共用）。 */
+/** 加载 profile 到 preset（卡片行与 concise 弹窗共用）。
+ * 注册链路：已注册的 profile → 刷新注册快照 + fastApply 注册预设（一步切换）；未注册 → 现有字段级路径。 */
 export async function loadProfile(
     ctx: CardsContext,
     name: string,
     idx: number,
     profileId: string,
 ): Promise<void> {
+    const regName = findRegisteredPresetName(profileId);
+    if (regName !== undefined) {
+        const preset = openai_settings[idx] as Preset;
+        refreshRegisteredSnapshot(name, preset, profileId);
+        const regIdx = openai_setting_names[regName];
+        if (regIdx !== undefined) {
+            setActiveProfile({ presetName: name, profileId: String(profileId) });
+            notifyProfileChanged({ presetName: name, profileId: String(profileId) });
+            toastr.success(L('Configuration loaded'));
+            void fastApplyPreset(regIdx, regName);
+            clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
+            await refreshGrid(ctx);
+            return;
+        }
+    }
+
     if (!await applyProfileToPresetByName(name, profileId)) return;
     toastr.success(L('Configuration loaded'));
     activatePreset(ctx, name, idx);

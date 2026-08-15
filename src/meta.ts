@@ -150,7 +150,23 @@ export async function persistMetaTransaction(
         return false;
     }
     Object.assign(meta, nextMeta);
+    // 注册链路同步钩子：profile 落盘成功后通知（presetRegistration 订阅；解耦避免 meta → registration 循环依赖）
+    for (const listener of [...metaPersistedListeners]) {
+        try {
+            listener(name, idx);
+        } catch (err) {
+            console.error('preset-cards: meta persisted listener failed', err);
+        }
+    }
     return true;
+}
+
+/** profile 元数据持久化成功回调（注册链路用）。返回退订函数。 */
+export type MetaPersistedListener = (name: string, idx: number) => void;
+const metaPersistedListeners = new Set<MetaPersistedListener>();
+export function onMetaPersisted(listener: MetaPersistedListener): () => void {
+    metaPersistedListeners.add(listener);
+    return () => { metaPersistedListeners.delete(listener); };
 }
 
 async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {

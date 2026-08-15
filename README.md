@@ -60,7 +60,7 @@ npm test           # 运行 vitest 单元测试
 ## 导入导出与旧版迁移
 
 - **导入（现状）**：两个入口，均并入 profiles——头部「导入预设」由插件接管文件读取并按类型分流：**完整 preset 文件**弹窗「并入现有预设（去重合并）/ 作为新预设导入（ST 原生还原）」，同名候选预设排在目标选择首位；**v3 profile 文件**（base / delta / prompt_tree）弹窗选择目标预设并入；**其余类型**（普通 ST 预设 / v1/v2 / 未知格式）回退 ST 原生导入。卡片「导入配置」为**手动并入**入口（目标 = 当前卡片预设，完整 preset 也只并 profiles）。**跨预设风险确认**：完整 preset 文件内预设名与目标预设名不同，或 v3 profile 无法确认来源预设时，会先弹「跨预设导入风险」确认窗，用户确认后才继续。**并入按内容指纹去重**：与现有（或本批已并入）条目内容相同（kind + 语义字段 + delta 父链指纹）的 profile 跳过并提示；同一预设分多次导出的不同 profile 可合并为同一棵树，共享父节点只并入一次。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 重映射到有效 id；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点（父内容与已有 profile 相同时直接挂到已有父）。v1/v2 需先迁移（见下）。
-- **导入（定稿已实现，2026-08-14）**：头部「导入预设」已由插件接管文件读取，按类型分流——完整 preset 弹窗并入或新建 / v3 profile 弹窗选预设并入 / 其余回退 ST 原生；卡片「导入配置」保留为**手动并入**入口（完整 preset 也接受，但明确只并 profiles）。设计稿见 `docs/current/architecture.md` 与 `docs/plans/import-flow-design.md`（docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供这些文件）。
+- **导入（定稿已实现，2026-08-14）**：头部「导入预设」已由插件接管文件读取，按类型分流——完整 preset 弹窗并入或新建 / v3 profile 弹窗选预设并入 / 其余回退 ST 原生；卡片「导入配置」保留为**手动并入**入口（完整 preset 也接受，但明确只并 profiles）。设计稿见 `docs/plans/import-flow-design.md`（已实现；docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供这些文件）。
 - **导出**：统一为导出完整 preset JSON（`exportPresetFile`），脱敏剔除 reverse_proxy / proxy_password / custom_url / azure / workers_ai 等连接与凭据字段。**卡片右上角 / 头部「导出全部」**导出全部 profiles；**单 profile「导出配置」**只导出该 profile 及其父链（`collectAncestorProfileIds`），父链外 profile 不导出。导入侧从该 JSON 的 `extensions['preset_cards']` 提取 profiles 并入当前预设。
 - **v1 / v2 迁移**：旧版 profile 文件**不会**在导入时自动迁移，需先用独立工具转换：
 
@@ -104,7 +104,16 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 
 `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。
 
-> **新架构定稿（未实施，见 `docs/current/architecture.md` 本地文档）**：v4 将改为「每个 profile 保存完整 preset 快照 + parentId 树 + 独立 diff」，存储迁移到独立 `preset-cards.json`（preset.extensions 只留特征值关联键），导出仍兼容 v3 文件形状。对外 API 将升级为 `listProfiles(presetName?)`（返回带 `presetName` + `profileName` 的 `ProfileRef[]`）与「切换并激活」语义的 `loadProfile`（加载 + 持久化 + 切 ST 当前预设 + 记 active + 发事件），`onProfileChanged` 回调参数同步升级。当前代码仍为上方 v3 API。
+## 注册链路（已决策，切片实施中）
+
+> v3 现状完全可用；新增方向 = 把 profile 投影为 ST **原生预设**，解决「profile 无法暴露给 ST 生态（原生 UI / 其他扩展）」的痛点。v4 独立文件存储设计已废弃（对应模块归档于分支 `archive/unused-core`）。
+
+- **投影 + marker**：profile 解析为全量快照 → `buildProjectedPreset` 投影为完整 ST preset 记录，身份 marker（`kind:'profile'` + profileId/profileName/parentKey）藏在 `extensions.preset_cards`。
+- **注册**：`openai_settings.push` + `openai_setting_names[注册名]=索引` + `saveSettingsDebounced()`，复用原生 `saveOpenAIPreset` 的「已有覆盖 / 新建 push」语义；注册名须唯一（候选 `父名 - profile名`，同父重名规则待切片 1 定案）。
+- **激活归一**：`OAI_PRESET_CHANGED_BEFORE` 钩子（ST 原生下拉与卡片点击都触发）读 marker → 沿父链重新解析 → 应用前覆盖记录，**激活永远 = 最新父链解析结果**。
+- **观察者**：`PRESET_CHANGED` 只同步 activeProfile / 卡片高亮 / 通知，绝不重复应用（ST 已应用）。
+- **保存捕获**：`SETTINGS_UPDATED`（ST 保存落盘后触发；原生 PromptManager 每次编辑都以它收尾）diff 运行时 vs 注册记录 → 差异自动捕获回 profile delta；删除 = `mounted:false` + 材料留池；新增 = 定义入父预设 prompts 池 + delta 挂载条目。
+- **切片**：1 基础链路（注册/反查/卡片走 fastApply/命名）→ 2 激活同步（BEFORE + PRESET_CHANGED）→ 3 保存捕获（SETTINGS_UPDATED）。详细设计与 ST 源码依赖清单（文件:行 + 代码摘录）见本地 `docs/current/architecture.md` §2–§6。
 
 ## 开发约定
 
@@ -130,6 +139,8 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `tests/i18n.test.ts` | `L()` 语言判定：显式 zh/en、浏览器语言回退（`navigator.language`）、词典缺键 |
 | `tests/nameWrap.test.ts` | `isRepeatedRunName`：重复字符串检测阈值、空白忽略 |
 | `tests/profileEditorContext.test.ts` | `buildBreadcrumb` / `truncateBreadcrumbName`：父链折叠、名字压缩、防环 |
+| `tests/presetStore.test.ts` / `tests/editorStore.test.ts` | core store 纯 reducer 与派生视图（卡片浏览态 / 编辑器 staged） |
+| `tests/projection.test.ts` / `tests/storageMarker.test.ts` / `tests/coreTypes.test.ts` | 投影 preset / 身份 marker 读写 / 领域类型谓词 |
 
 > 新增逻辑（尤其纯数据变换层）应尽量作为纯函数测试，而非 DOM 弹窗测试；mocks 提供 `addPreset` 等辅助注册预设。
 
@@ -153,4 +164,8 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/presetList.ts` / `src/profileTree.ts` | 卡片与弹窗共用的条目视图、派生关系森林 |
 | `src/nameWrap.ts` | 名字换行策略：`applyNameWrap` 消费 `presetList.ts` 的 `isRepeatedRunName`（超长重复串检测），对名字元素加 `.pc-name-nowrap` 保留省略号 |
 | `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、ST 语言判定 `L()`、中英词典、常量 |
+| `src/core/domain/{types,schema}.ts` | 领域类型与 v3 形状谓词（meta.ts / profileSchema.ts 重导出） |
+| `src/core/store/{PresetStore,EditorStore}.ts` | 卡片浏览态 store（P3 已接入）/ 编辑器 staged store（已挂载，交互未接入） |
+| `src/core/codec/snapshotEntries.ts` | 快照 ↔ entries 转换（编辑器 / 注册链路用） |
+| `src/core/storage/{project,marker}.ts` | profile 投影为 ST preset + 身份 marker（注册链路核心） |
 | `tools/migrate-to-v3.ts` | v1/v2 → v3 迁移 CLI |

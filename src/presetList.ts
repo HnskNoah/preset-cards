@@ -1,10 +1,11 @@
 import { oai_settings, openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
-import { AVAILABLE_MODELS, LOGO_BASE, MODEL_KEYS, SOURCE_LABELS, SOURCE_LOGO_MAP } from './constants.js';
+import { AVAILABLE_MODELS, EXTENSION_KEY, LOGO_BASE, MODEL_KEYS, SOURCE_LABELS, SOURCE_LOGO_MAP } from './constants.js';
 import { isPromptBaseProfile, isPromptDeltaProfile, readMeta, type Preset, type PresetMeta, type PresetProfile, type PromptBaseProfile, type PromptDeltaProfile } from './meta.js';
 import { findOrderList, resolveProfilePrompts, resolvePromptOrderTarget } from './promptToggle.js';
 import { getActiveProfile } from './activeProfile.js';
 import { L } from './i18n.js';
 import { buildProfileForest, buildProfileNested, type NestedProfileNode } from './profileTree.js';
+import { PRESET_CARDS_MARKER } from './core/storage/marker.js';
 
 export interface ModelChip {
     label: string;
@@ -207,6 +208,11 @@ export function buildPresetList(): PresetCardModel[] {
     for (const [name, index] of Object.entries(openai_setting_names)) {
         const preset = openai_settings[index] as Preset | undefined;
         if (!preset) continue;
+
+        // 注册链路：投影预设（extensions.preset_cards 仅为 marker，无元数据容器）不进卡片列表——
+        // 卡片列表展示 profile 树，投影预设只活在 ST 原生下拉
+        const ext = preset.extensions?.[EXTENSION_KEY];
+        if (ext && typeof ext === 'object' && (ext as Record<string, any>).marker === PRESET_CARDS_MARKER) continue;
 
         const isActive = name === currentPresetName;
 

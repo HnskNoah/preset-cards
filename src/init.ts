@@ -5,6 +5,7 @@ import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
 import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, onProfileChanged } from './presetCardsState.js';
 import { initPresetOrderNormalization } from './fastApply.js';
+import { initPresetRegistration } from './presetRegistration.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
 
 export function refresh(): void {
@@ -26,6 +27,7 @@ export function exposePresetCardsApi(): PresetCardsApi {
 export function init(): void {
     initActiveProfile();
     initPresetOrderNormalization();
+    initPresetRegistration();
 
     // 对外入口：供其它扩展（如 ST-Quicker-Api 便捷方案）加载 preset-cards 的 profile
     window.presetCards = exposePresetCardsApi();
