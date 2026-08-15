@@ -9,6 +9,7 @@ export const event_types: Record<string, string> = {
     OAI_PRESET_CHANGED_AFTER: 'oai-preset-changed-after',
     PRESET_CHANGED: 'preset-changed',
     PRESET_DELETED: 'preset-deleted',
+    SETTINGS_UPDATED: 'settings-updated',
 };
 
 export const eventSource = {

@@ -6,6 +6,7 @@ import { getActiveProfile, initActiveProfile } from './activeProfile.js';
 import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, notifyProfileChanged, onProfileChanged } from './presetCardsState.js';
 import { initPresetOrderNormalization } from './fastApply.js';
 import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredPresetObserver, onActiveProfileChangedBySwitch } from './presetRegistration.js';
+import { initPresetCapture } from './presetCapture.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
 
 export function refresh(): void {
@@ -30,6 +31,7 @@ export function init(): void {
     initPresetRegistration();
     initRegisteredPresetActivation();
     initRegisteredPresetObserver();
+    initPresetCapture();
     // 原生切换激活 profile 时,与所有加载路径(卡片行/concise/API)统一通知外部扩展
     onActiveProfileChangedBySwitch((ref) => {
         if (ref) notifyProfileChanged(ref);
