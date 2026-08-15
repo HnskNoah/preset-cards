@@ -6,7 +6,7 @@ describe('storage marker: preset key feature value', () => {
         const preset: Record<string, any> = { name: 'P', extensions: { other: 1 } };
 
         const stamped = stampPresetKey(preset, 'key-1');
-        expect(stamped.extensions.preset_cards).toEqual({ marker: 'preset-cards-v4', key: 'key-1' });
+        expect(stamped.extensions.preset_cards).toEqual({ marker: 'preset-cards-v4', key: 'key-1', kind: 'preset' });
         expect(stamped.extensions.other).toBe(1);
 
         expect(readPresetKey(stamped)).toBe('key-1');
