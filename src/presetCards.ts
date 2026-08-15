@@ -1,12 +1,14 @@
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { POPUP_TYPE, callGenericPopup } from '@sillytavern/scripts/popup';
+import { oai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_NAME } from './constants.js';
 import { L } from './i18n.js';
-import { buildPresetList, getCardsTemplateContext } from './presetList.js';
+import { buildPresetList, getCardsTemplateContext, type PresetCardModel } from './presetList.js';
 import { applyCachedBackgrounds } from './cache.js';
 import { createCardsContext } from './presetCardsContext.js';
 import { bindCardsHandlers } from './presetCardsHandlers.js';
 import { applyNameWrap } from './nameWrap.js';
+import { createPresetStore, type PresetEntry } from './core/store/PresetStore.js';
 
 /** 打开 preset-cards 卡片页弹窗。 */
 export async function openPresetCards(): Promise<void> {
@@ -15,7 +17,16 @@ export async function openPresetCards(): Promise<void> {
 
     applyNameWrap(dialog);
 
-    const ctx = createCardsContext(dialog, buildPresetList());
+    const presets = buildPresetList();
+    const presetStore = createPresetStore({
+        presets: toPresetEntries(presets),
+        search: '',
+        selectedIds: new Set<string>(),
+        activeName: oai_settings.preset_settings_openai,
+        isBatchMode: false,
+        nodes: [],
+    });
+    const ctx = createCardsContext(dialog, presets, presetStore);
     if (ctx.isConciseMode) {
         dialog.addClass('preset_cards_concise_mode');
         dialog.find('#preset_cards_concise_btn').addClass('active');
@@ -34,4 +45,13 @@ export async function openPresetCards(): Promise<void> {
         large: true,
         allowVerticalScrolling: true,
     });
+}
+
+/** 完整卡片模型 → 浏览态条目（store 用，UI 渲染仍用完整模型）。 */
+function toPresetEntries(presets: PresetCardModel[]): PresetEntry[] {
+    return presets.map((p) => ({
+        name: p.name,
+        profileCount: p.profiles?.length ?? 0,
+        isActive: p.isActive,
+    }));
 }

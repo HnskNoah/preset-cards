@@ -232,12 +232,15 @@ export async function refreshGrid(ctx: CardsContext, opts?: { applyBackgrounds?:
     applyNameWrap(ctx.dialog);
     if (query) ctx.dialog.find('#preset_cards_search').val(query);
     if (ctx.isConciseMode) ctx.dialog.find('#preset_cards_concise_btn').addClass('active');
-    // 批量模式 UI 恢复：模板重建后重挂 batch class / 按钮可见性 / 已选高亮
-    if (ctx.isBatchMode) {
+    // 批量模式 UI 恢复：模板重建后重挂 batch class / 按钮可见性 / 已选高亮（浏览态单一来源 = store）
+    const bs = ctx.presetStore.getState();
+    ctx.isBatchMode = bs.isBatchMode;
+    ctx.batchSelectedCards = new Set(bs.selectedIds);
+    if (bs.isBatchMode) {
         ctx.dialog.toggleClass('preset_cards_batch_mode', true);
         ctx.dialog.find('#preset_cards_multiselect_btn').addClass('active');
         ctx.dialog.find('#preset_cards_batch_delete_btn').removeClass('hidden');
-        for (const selName of ctx.batchSelectedCards) {
+        for (const selName of bs.selectedIds) {
             ctx.dialog.find(`.preset_card[data-preset-name="${selName}"]`).addClass('batch_selected');
         }
     }

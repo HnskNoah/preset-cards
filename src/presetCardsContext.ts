@@ -1,9 +1,12 @@
 import type { PromptEditBuffer } from './presetBuffers.js';
+import type { PresetStore } from './core/store/PresetStore.js';
 
 /** preset-cards 卡片页弹窗的共享状态（替代巨型函数裸闭包捕获）。 */
 export interface CardsContext {
     // DOM（元素身份必须稳定，render 只 html() 重建内容）
     dialog: JQuery<HTMLElement>;
+    // 浏览态 store（P3：搜索/批选/激活的单一来源）
+    presetStore: PresetStore;
     // 会话可变状态
     presets: import('./presetList.js').PresetCardModel[];
     isBatchMode: boolean;
@@ -21,9 +24,11 @@ export interface CardsContext {
 export function createCardsContext(
     dialog: JQuery<HTMLElement>,
     presets: import('./presetList.js').PresetCardModel[],
+    presetStore: PresetStore,
 ): CardsContext {
     return {
         dialog,
+        presetStore,
         presets,
         isBatchMode: false,
         batchSelectedCards: new Set<string>(),

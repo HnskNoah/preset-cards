@@ -22,6 +22,20 @@ function updateCount(ctx: CardsContext, visible: number, total: number): void {
     el.text(visible === total ? `${total} ${L('presets')}` : `${visible} / ${total}`);
 }
 
+/** P3：把浏览态 store 派生到卡片页 DOM（批量按钮/class/已选高亮），并同步 ctx 兼容字段。 */
+function applyBatchView(ctx: CardsContext): void {
+    const s = ctx.presetStore.getState();
+    ctx.isBatchMode = s.isBatchMode;
+    ctx.batchSelectedCards = new Set(s.selectedIds);
+    ctx.dialog.find('#preset_cards_multiselect_btn').toggleClass('active', s.isBatchMode);
+    ctx.dialog.toggleClass('preset_cards_batch_mode', s.isBatchMode);
+    ctx.dialog.find('#preset_cards_batch_delete_btn').toggleClass('hidden', !s.isBatchMode);
+    ctx.dialog.find('.preset_card').removeClass('batch_selected');
+    for (const name of s.selectedIds) {
+        ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).addClass('batch_selected');
+    }
+}
+
 /** 从事件目标提取 profile 行上下文（row + card + profileId + name + idx）。 */
 function rowContext(el: JQuery<HTMLElement>): { card: JQuery<HTMLElement>; profileId: string; name: string; idx: number } {
     const row = el.closest('.preset_card_profile_row');
@@ -49,6 +63,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
     // ---- Search ----
     ctx.dialog.on('input', '#preset_cards_search', function () {
         const q = String($(this).val()).toLowerCase().trim();
+        ctx.presetStore.dispatch({ type: 'SET_SEARCH', query: q });
         let vis = 0;
         ctx.dialog.find('.preset_card').each(function () {
             const name = String($(this).data('preset-name')).toLowerCase();
@@ -100,19 +115,15 @@ export function bindCardsHandlers(ctx: CardsContext): void {
 
         const name = $(this).attr('data-preset-name') as string;
         if (ctx.isBatchMode) {
-            if (ctx.batchSelectedCards.has(name)) {
-                ctx.batchSelectedCards.delete(name);
-                $(this).removeClass('batch_selected');
-            } else {
-                ctx.batchSelectedCards.add(name);
-                $(this).addClass('batch_selected');
-            }
+            ctx.presetStore.dispatch({ type: 'TOGGLE_SELECT', name });
+            applyBatchView(ctx);
             return;
         }
 
         const idx = $(this).data('preset-index') as number;
         ctx.dialog.find('.preset_card').removeClass('selected');
         $(this).addClass('selected');
+        ctx.presetStore.dispatch({ type: 'SET_ACTIVE', name });
         void fastApplyPreset(idx, name);
         toastr.success(`${t`Switched to`} ${name}`);
     });
@@ -175,30 +186,26 @@ export function bindCardsHandlers(ctx: CardsContext): void {
 
     // ---- Multi-select toggle ----
     ctx.dialog.on('click', '#preset_cards_multiselect_btn', function () {
-        ctx.isBatchMode = !ctx.isBatchMode;
-        $(this).toggleClass('active', ctx.isBatchMode);
-        ctx.dialog.toggleClass('preset_cards_batch_mode', ctx.isBatchMode);
-        if (ctx.isBatchMode) {
-            ctx.dialog.find('#preset_cards_batch_delete_btn').removeClass('hidden');
-        } else {
-            ctx.dialog.find('#preset_cards_batch_delete_btn').addClass('hidden');
-            ctx.batchSelectedCards.clear();
-            ctx.dialog.find('.preset_card').removeClass('batch_selected');
+        ctx.presetStore.dispatch({ type: 'TOGGLE_BATCH_MODE' });
+        if (!ctx.presetStore.getState().isBatchMode) {
+            ctx.presetStore.dispatch({ type: 'CLEAR_SELECT' });
         }
+        applyBatchView(ctx);
     });
 
     // ---- Batch Delete button ----
     ctx.dialog.on('click', '#preset_cards_batch_delete_btn', async function () {
-        if (ctx.batchSelectedCards.size === 0) {
+        const selected = [...ctx.presetStore.getState().selectedIds];
+        if (selected.length === 0) {
             toastr.info(t`No presets selected`);
             return;
         }
-        const confirm = await callGenericPopup(t`Delete ${ctx.batchSelectedCards.size} presets? This action is irreversible.`, POPUP_TYPE.CONFIRM);
+        const confirm = await callGenericPopup(t`Delete ${selected.length} presets? This action is irreversible.`, POPUP_TYPE.CONFIRM);
         if (!confirm) return;
 
         let activeDeleted = false;
         let deletedCount = 0;
-        for (const nameToDelete of ctx.batchSelectedCards) {
+        for (const nameToDelete of selected) {
             if (openai_setting_names[nameToDelete] === undefined) continue;
             const wasActive = oai_settings.preset_settings_openai === nameToDelete;
             const deleted = await deletePresetByName(ctx, nameToDelete, {
@@ -216,13 +223,12 @@ export function bindCardsHandlers(ctx: CardsContext): void {
             toastr.success(t`${deletedCount} presets deleted`);
             ctx.dialog.find('#preset_cards_search').trigger('input');
         }
-        // Exit batch mode（直接调状态，不用合成 click）
-        ctx.isBatchMode = false;
-        ctx.dialog.find('#preset_cards_multiselect_btn').removeClass('active');
-        ctx.dialog.toggleClass('preset_cards_batch_mode', false);
-        ctx.dialog.find('#preset_cards_batch_delete_btn').addClass('hidden');
-        ctx.batchSelectedCards.clear();
-        ctx.dialog.find('.preset_card').removeClass('batch_selected');
+        // Exit batch mode（直接走 store，不用合成 click）
+        ctx.presetStore.dispatch({ type: 'CLEAR_SELECT' });
+        if (ctx.presetStore.getState().isBatchMode) {
+            ctx.presetStore.dispatch({ type: 'TOGGLE_BATCH_MODE' });
+        }
+        applyBatchView(ctx);
     });
 
     // ---- Profiles: Add Configuration (Save Base Profile) ----
