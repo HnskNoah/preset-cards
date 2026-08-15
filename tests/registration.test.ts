@@ -10,6 +10,8 @@ import {
 } from '../src/core/registration/register.js';
 import type { PresetSnapshot } from '../src/core/domain/types.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
+import { buildProfileMarker } from '../src/core/storage/marker.js';
+import { buildProjectedPreset } from '../src/core/storage/project.js';
 
 const snapshot: PresetSnapshot = {
     name: 'Midnight',
@@ -114,6 +116,23 @@ describe('registerProfileAsPreset', () => {
 
         expect(Object.keys(registry.list())).toEqual(['Midnight - 战斗版', 'Midnight - 日常版']);
     });
+
+    it('follows profile renames in the registered preset name (L9)', () => {
+        const registry = memoryRegistry();
+        registerProfileAsPreset(registry, {
+            parentPresetName: 'Midnight', profileId: 'A', profileName: '战斗版', parentKey: 'Midnight',
+            snapshot, naming: fixedNaming(),
+        });
+
+        const result = registerProfileAsPreset(registry, {
+            parentPresetName: 'Midnight', profileId: 'A', profileName: '战斗版v2', parentKey: 'Midnight',
+            snapshot, naming: fixedNaming(),
+        });
+
+        expect(result).toEqual({ mode: 'rewritten', name: 'Midnight - 战斗版v2' });
+        expect(Object.keys(registry.list())).toEqual(['Midnight - 战斗版v2']);
+        expect(readPresetMarker(registry.list()['Midnight - 战斗版v2'])?.profileName).toBe('战斗版v2');
+    });
 });
 
 describe('findProfilePresetName', () => {
@@ -126,6 +145,30 @@ describe('findProfilePresetName', () => {
 
         expect(findProfilePresetName(registry, 'A')).toBe('Midnight - 战斗版');
         expect(findProfilePresetName(registry, 'nope')).toBeUndefined();
+    });
+
+    it('scopes lookup by parentKey — same profileId under another parent must not cross-match', () => {
+        const registry = memoryRegistry();
+        registerProfileAsPreset(registry, {
+            parentPresetName: 'Midnight', profileId: 'A', profileName: '战斗版', parentKey: 'Midnight',
+            snapshot, naming: fixedNaming(),
+        });
+        // 跨预设同 id（如 ST 原生导入 verbatim 保留 id）：Dawn 下也有 profileId A
+        const dawnRecord = buildProjectedPreset(snapshot, buildProfileMarker('Dawn', 'A', '晨曦', 'Dawn'));
+        registry.upsert('Dawn - 晨曦', dawnRecord);
+
+        expect(findProfilePresetName(registry, 'A', 'Midnight')).toBe('Midnight - 战斗版');
+        expect(findProfilePresetName(registry, 'A', 'Dawn')).toBe('Dawn - 晨曦');
+        expect(findProfilePresetName(registry, 'A')).toBe('Midnight - 战斗版'); // 不限定取首个
+
+        // 重写时必须限定 parentKey：Dawn 下注册 A 不得覆盖 Midnight 的投影
+        const result = registerProfileAsPreset(registry, {
+            parentPresetName: 'Dawn', profileId: 'A', profileName: '晨曦', parentKey: 'Dawn',
+            snapshot, naming: fixedNaming(),
+        });
+        expect(result).toEqual({ mode: 'rewritten', name: 'Dawn - 晨曦' });
+        expect(findProfilePresetName(registry, 'A', 'Midnight')).toBe('Midnight - 战斗版');
+        expect(readPresetMarker(registry.list()['Midnight - 战斗版'])?.profileName).toBe('战斗版');
     });
 });
 

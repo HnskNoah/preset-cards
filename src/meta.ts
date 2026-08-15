@@ -118,7 +118,18 @@ export function saveMeta(presetName: string, presetIndex: number, meta: PresetMe
         timer: setTimeout(() => {
             mergePending.delete(presetName);
             const tail = tailByPreset.get(presetName) ?? Promise.resolve();
-            const run = tail.then(() => doSaveMeta(presetName, pending.presetIndex, pending.meta));
+            const run = tail.then(async () => {
+                await doSaveMeta(presetName, pending.presetIndex, pending.meta);
+                // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
+                // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
+                for (const listener of [...metaPersistedListeners]) {
+                    try {
+                        listener(presetName, pending.presetIndex);
+                    } catch (err) {
+                        console.error('preset-cards: meta persisted listener failed', err);
+                    }
+                }
+            });
             tailByPreset.set(presetName, run.then(() => undefined, () => undefined));
             run.then(resolveFn, rejectFn);
         }, MERGE_WINDOW_MS),
@@ -150,14 +161,7 @@ export async function persistMetaTransaction(
         return false;
     }
     Object.assign(meta, nextMeta);
-    // 注册链路同步钩子：profile 落盘成功后通知（presetRegistration 订阅；解耦避免 meta → registration 循环依赖）
-    for (const listener of [...metaPersistedListeners]) {
-        try {
-            listener(name, idx);
-        } catch (err) {
-            console.error('preset-cards: meta persisted listener failed', err);
-        }
-    }
+    // 注册链路同步钩子已在 saveMeta 成功路径统一触发（本事务也走 saveMeta），此处不重复。
     return true;
 }
 

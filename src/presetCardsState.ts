@@ -223,14 +223,13 @@ export async function loadProfile(
     idx: number,
     profileId: string,
 ): Promise<void> {
-    const regName = findRegisteredPresetName(profileId);
+    const regName = findRegisteredPresetName(profileId, name);
     if (regName !== undefined) {
         const preset = openai_settings[idx] as Preset;
         refreshRegisteredSnapshot(name, preset, profileId);
         const regIdx = openai_setting_names[regName];
         if (regIdx !== undefined) {
-            setActiveProfile({ presetName: name, profileId: String(profileId) });
-            notifyProfileChanged({ presetName: name, profileId: String(profileId) });
+            // activeProfile/通知由 PRESET_CHANGED 观察者统一处理（fastApply 内部 emit,避免双重通知 L18）
             toastr.success(L('Configuration loaded'));
             void fastApplyPreset(regIdx, regName);
             clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);

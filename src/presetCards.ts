@@ -40,7 +40,7 @@ export async function openPresetCards(): Promise<void> {
     // 注册链路：原生切换(PRESET_CHANGED)同步卡片高亮——
     // 激活 profile 投影 → 高亮其父预设卡片 + profile 行(投影预设本身不进卡片列表,不能按活动名找卡片);
     // 切回普通预设 → 按当前活动名刷新选中态
-    onActiveProfileChangedBySwitch((ref) => {
+    const unsubHighlight = onActiveProfileChangedBySwitch((ref) => {
         if (!ref) {
             refreshActiveCardSelection(ctx);
             return;
@@ -54,7 +54,7 @@ export async function openPresetCards(): Promise<void> {
 
     // 保存捕获(原生 PM 编辑)成功后刷新卡片页：profile 条目列表显示最新挂载/开关态,
     // 避免看到删除/编辑前的旧渲染(捕获为后台 fire-and-forget,不主动重渲染)
-    onCaptureApplied(() => {
+    const unsubCapture = onCaptureApplied(() => {
         void refreshGrid(ctx);
     });
 
@@ -64,11 +64,14 @@ export async function openPresetCards(): Promise<void> {
     applyCachedBackgrounds(dialog);
     dialog.find('.preset_card_profile_row.active').parents('.preset_card_profile_group').addClass('expanded');
 
-    callGenericPopup(dialog, POPUP_TYPE.TEXT, '', {
+    await callGenericPopup(dialog, POPUP_TYPE.TEXT, '', {
         wide: true,
         large: true,
         allowVerticalScrolling: true,
     });
+    // 弹窗关闭后释放订阅（C5：模块级监听器退订函数不再丢弃）
+    unsubHighlight();
+    unsubCapture();
 }
 
 /** 完整卡片模型 → 浏览态条目（store 用，UI 渲染仍用完整模型）。 */

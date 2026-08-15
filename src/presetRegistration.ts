@@ -9,14 +9,13 @@ import { eventSource, event_types } from '@sillytavern/scripts/events';
 import { openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
 import { readMeta, onMetaPersisted, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
-import { setActiveProfile } from './activeProfile.js';
+import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { applyProfileToPreset } from './promptToggle.js';
 import { buildProfileMarker, readPresetMarker } from './core/storage/marker.js';
 import { buildProjectedPreset } from './core/storage/project.js';
 import {
     findRegisteredPreset,
     findRegistrationsByParent,
-    registerProfileAsPreset,
     registerProfileAsPresetIfChanged,
     type PresetRegistry,
     type PresetNaming,
@@ -52,6 +51,13 @@ export function createStRegistry(): PresetRegistry {
             return out;
         },
         upsert: (name, record) => {
+            // 服务端写预设文件：ST 预设为文件型存储（settings 保存 payload 不含 openai_settings 数组，
+            // 服务端 settings.js:236-239 从预设目录重建）——只改本地数组 reload 后投影会消失。
+            void fetch('/api/presets/save', {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                body: JSON.stringify({ apiId: 'openai', name, preset: record }),
+            }).catch((err) => console.error('preset-cards: register preset save failed', err));
             const idx = openai_setting_names[name];
             if (idx !== undefined) {
                 openai_settings[idx] = record;
@@ -118,6 +124,9 @@ export function buildRegisteredSnapshots(preset: Preset): RegisteredProfileSnaps
  * 内容未变时零写入（不触发 saveSettingsDebounced）。返回是否发生了变更。
  */
 export function syncPresetRegistrations(presetName: string, presetIndex: number): boolean {
+    // 父预设已被删除(原生删除会清 openai_setting_names;数组元素可能残留)时跳过对账,
+    // 避免在途 meta 保存的 onMetaPersisted 用残留记录重建孤儿投影(与 doSaveMeta 同守卫)
+    if (openai_setting_names[presetName] === undefined) return false;
     const preset = openai_settings[presetIndex] as Preset | undefined;
     if (!preset) return false;
     const registry = createStRegistry();
@@ -154,7 +163,8 @@ export async function unregisterAllForPreset(presetName: string): Promise<void> 
     if (owned.length > 0) saveSettingsDebounced();
 }
 
-/** 初始化：订阅 meta 持久化成功事件，自动对账注册。init.ts 调用一次。 */
+/** 初始化：订阅 meta 持久化成功事件，自动对账注册；并在设置加载后全量对账一次
+ * （reload 后服务端按预设文件重建 openai_settings,需要把已有 profile 重新注册为投影）。init.ts 调用一次。 */
 export function initPresetRegistration(): void {
     onMetaPersisted((name, idx) => {
         try {
@@ -163,18 +173,63 @@ export function initPresetRegistration(): void {
             console.error('preset-cards: sync registrations failed', err);
         }
     });
+    eventSource.on(event_types.SETTINGS_LOADED, () => {
+        try {
+            syncAllPresetRegistrations();
+        } catch (err) {
+            console.error('preset-cards: startup registration sync failed', err);
+        }
+    });
+    // ST 原生删除预设(openai.js onDeletePresetClick emit PRESET_DELETED):若删的是父预设,
+    // 其名下注册投影是独立预设文件,不会随之删除 → 清理(zombie 防残留);删注册投影本身则 no-op。
+    eventSource.on(event_types.PRESET_DELETED, (arg: any) => {
+        const name = typeof arg?.name === 'string' ? arg.name : undefined;
+        if (!name) return;
+        try {
+            void unregisterAllForPreset(name);
+        } catch (err) {
+            console.error('preset-cards: cleanup registrations on preset delete failed', err);
+        }
+    });
 }
 
-/** 反查注册名（供卡片点击走 fastApply 用）。 */
-export function findRegisteredPresetName(profileId: string): string | undefined {
-    return findRegisteredPreset(createStRegistry(), profileId)?.name;
+/** 全量对账（幂等；启动/reload 后调用）：存活预设的 profile 全部注册/重写；
+ * 再清扫孤儿——注册投影的父预设已不存在（原生/外部删除）时注销（防 zombie 跨 reload 残留）。 */
+export function syncAllPresetRegistrations(): void {
+    for (const [name, idx] of Object.entries(openai_setting_names)) {
+        try {
+            syncPresetRegistrations(name, idx);
+        } catch (err) {
+            console.error('preset-cards: sync registrations failed', err);
+        }
+    }
+    const registry = createStRegistry();
+    const live = new Set(Object.keys(openai_setting_names));
+    for (const [name, record] of Object.entries(registry.list())) {
+        const marker = readPresetMarker(record);
+        if (marker && marker.kind === 'profile' && marker.parentKey && !live.has(marker.parentKey)) {
+            try {
+                registry.remove(name);
+            } catch (err) {
+                console.error('preset-cards: orphan registration cleanup failed', err);
+            }
+        }
+    }
 }
 
-/** 切换前刷新单个 profile 的注册快照（注册链路：保证应用的是最新解析；原注册名不变）。 */
+/** 反查注册名（供卡片点击走 fastApply 用）。parentKey 限定可防跨预设同 id 误命中。 */
+export function findRegisteredPresetName(profileId: string, parentKey?: string): string | undefined {
+    return findRegisteredPreset(createStRegistry(), profileId, parentKey)?.name;
+}
+
+/** 切换前刷新单个 profile 的注册快照（注册链路：保证应用的是最新解析；原注册名不变）。
+ * 用 IfChanged 语义：内容未变时不重写、不触发 /api/presets/save（L19）。 */
 export function refreshRegisteredSnapshot(presetName: string, preset: Preset, profileId: string): string | undefined {
     const s = buildRegisteredSnapshots(preset).find((x) => x.profileId === String(profileId));
     if (!s) return undefined;
-    const result = registerProfileAsPreset(createStRegistry(), {
+    const registry = createStRegistry();
+    const existing = findRegisteredPreset(registry, profileId, presetName);
+    const result = registerProfileAsPresetIfChanged(registry, {
         parentPresetName: presetName,
         profileId: s.profileId,
         profileName: s.profileName,
@@ -182,7 +237,7 @@ export function refreshRegisteredSnapshot(presetName: string, preset: Preset, pr
         snapshot: s.snapshot,
         naming: placeholderNaming,
     });
-    return result.name;
+    return result ? result.name : existing?.name;
 }
 
 // ─── 切片 2：激活同步 ────────────────────────────────────────────────
@@ -259,8 +314,15 @@ export function initRegisteredPresetObserver(): void {
             if (typeof presetName !== 'string') return;
             const idx = openai_setting_names[presetName];
             const ref = deriveActiveProfileRef(presetName, idx !== undefined ? openai_settings[idx] : undefined);
-            if (ref) setActiveProfile(ref);
-            else setActiveProfile(undefined);
+            if (ref) {
+                setActiveProfile(ref);
+            } else {
+                // 字段级加载路径（applyProfileToPresetByName）把 profile 应用到父预设后,
+                // PRESET_CHANGED 落在父预设（无 marker）——若当前激活标记的 presetName 就是新活动名,
+                // 保留激活标记（父预设此刻就是该 profile 的状态），否则清空（切到无关预设）。
+                const active = getActiveProfile();
+                if (!(active && active.presetName === presetName)) setActiveProfile(undefined);
+            }
             for (const listener of [...activeProfileSwitchListeners]) {
                 listener(ref);
             }

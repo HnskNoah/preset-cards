@@ -43,13 +43,28 @@ export type RegisterResult =
     | { mode: 'rewritten'; name: string };
 
 /** 注册/重写 profile 的投影 preset：已注册（marker 反查命中）→ 原名重写，不调命名策略；
- * 未注册 → naming 生成唯一名后新增。返回实际生效的注册名。 */
+ * 未注册 → naming 生成唯一名后新增。profile 重命名（marker.profileName 变化）时注册名跟随
+ * （naming 重新取唯一名并迁移记录）。返回实际生效的注册名。 */
 export function registerProfileAsPreset(registry: PresetRegistry, opts: RegisterProfileOptions): RegisterResult {
-    const existing = findRegisteredPreset(registry, opts.profileId);
+    const existing = findRegisteredPreset(registry, opts.profileId, opts.parentKey);
     if (existing) {
-        registry.upsert(existing.name, buildProjectedPreset(opts.snapshot, buildProfileMarker(
+        const projected = buildProjectedPreset(opts.snapshot, buildProfileMarker(
             opts.parentKey, opts.profileId, opts.profileName, opts.parentPresetName,
-        )));
+        ));
+        const renamed = existing.marker.profileName !== opts.profileName;
+        if (renamed) {
+            const name = opts.naming.buildRegisteredName({
+                parentPresetName: opts.parentPresetName,
+                profileName: opts.profileName,
+                existingNames: new Set(Object.keys(registry.list()).filter((n) => n !== existing.name)),
+            });
+            if (name !== existing.name) {
+                registry.remove(existing.name);
+                registry.upsert(name, projected);
+                return { mode: 'rewritten', name };
+            }
+        }
+        registry.upsert(existing.name, projected);
         return { mode: 'rewritten', name: existing.name };
     }
 
@@ -64,19 +79,22 @@ export function registerProfileAsPreset(registry: PresetRegistry, opts: Register
     return { mode: 'created', name };
 }
 
-/** 按 profileId 反查已注册 preset 名（marker 扫描，与注册名格式无关）。 */
-export function findProfilePresetName(registry: PresetRegistry, profileId: string): string | undefined {
-    return findRegisteredPreset(registry, profileId)?.name;
+/** 按 profileId（可选限定父预设）反查已注册 preset 名（marker 扫描，与注册名格式无关）。 */
+export function findProfilePresetName(registry: PresetRegistry, profileId: string, parentKey?: string): string | undefined {
+    return findRegisteredPreset(registry, profileId, parentKey)?.name;
 }
 
-/** 按 profileId 反查注册条目（name + 完整 marker）。 */
+/** 按 profileId（可选限定父预设）反查注册条目（name + 完整 marker）。
+ * parentKey 限定可防跨预设同 profileId（如 ST 原生导入 verbatim 保留 id）错误命中。 */
 export function findRegisteredPreset(
     registry: PresetRegistry,
     profileId: string,
+    parentKey?: string,
 ): { name: string; marker: NonNullable<ReturnType<typeof readPresetMarker>> } | undefined {
     for (const [name, record] of Object.entries(registry.list())) {
         const marker = readPresetMarker(record);
-        if (marker && marker.kind === 'profile' && String(marker.profileId) === String(profileId)) {
+        if (marker && marker.kind === 'profile' && String(marker.profileId) === String(profileId)
+            && (parentKey === undefined || marker.parentKey === parentKey)) {
             return { name, marker };
         }
     }
@@ -112,7 +130,7 @@ export function registerProfileAsPresetIfChanged(
     registry: PresetRegistry,
     opts: RegisterProfileOptions,
 ): RegisterResult | null {
-    const existing = findRegisteredPreset(registry, opts.profileId);
+    const existing = findRegisteredPreset(registry, opts.profileId, opts.parentKey);
     if (existing) {
         const projected = buildProjectedPreset(opts.snapshot, buildProfileMarker(
             opts.parentKey, opts.profileId, opts.profileName, opts.parentPresetName,

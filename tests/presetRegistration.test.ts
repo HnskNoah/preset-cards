@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetOpenaiMock, addPreset, openai_settings, openai_setting_names } from './mocks/openai.js';
 import { eventSource, event_types } from './mocks/events.js';
 import {
@@ -10,6 +10,8 @@ import {
     deriveActiveProfileRef,
     initRegisteredPresetActivation,
     initRegisteredPresetObserver,
+    initPresetRegistration,
+    syncAllPresetRegistrations,
     onActiveProfileChangedBySwitch,
 } from '../src/presetRegistration.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
@@ -41,7 +43,15 @@ function samplePreset(): Record<string, any> {
     };
 }
 
-beforeEach(() => resetOpenaiMock());
+beforeEach(() => {
+    resetOpenaiMock();
+    // upsert/remove 现在会 POST /api/presets/save|delete（文件型持久化），stub 掉网络
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+});
 
 describe('buildRegisteredSnapshots', () => {
     it('resolves a full preset snapshot with the profile applied (sampling fields preserved)', () => {
@@ -103,6 +113,80 @@ describe('refreshRegisteredSnapshot', () => {
         expect(name).toBe('Midnight - 战斗版');
         const record = openai_settings[openai_setting_names[name!]];
         expect(record.prompts[0].content).toBe('v2');
+    });
+});
+
+describe('PRESET_DELETED cleanup', () => {
+    it('unregisters the parent preset\u2019s projections when deleted natively', async () => {
+        const idx = addPreset('Midnight', samplePreset());
+        syncPresetRegistrations('Midnight', idx);
+        expect(findRegisteredPresetName('A')).toBe('Midnight - 战斗版');
+
+        initPresetRegistration();
+        await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: 'Midnight' });
+
+        expect(findRegisteredPresetName('A')).toBeUndefined();
+    });
+});
+
+describe('syncAllPresetRegistrations', () => {
+    it('sweeps orphan projections whose parent preset is gone (startup cleanup)', () => {
+        const idx = addPreset('Midnight', samplePreset());
+        syncPresetRegistrations('Midnight', idx);
+        expect(findRegisteredPresetName('A')).toBe('Midnight - 战斗版');
+
+        // 父预设被原生删除：清 openai_setting_names,数组槽残留(与 ST 原生删除一致)
+        delete openai_setting_names['Midnight'];
+
+        syncAllPresetRegistrations();
+        expect(findRegisteredPresetName('A')).toBeUndefined();
+    });
+});
+
+describe('注册持久化与启动对账（C1）', () => {
+    it('SETTINGS_LOADED 触发全量对账：reload 后投影被重新注册', async () => {
+        initPresetRegistration();
+        addPreset('Midnight', samplePreset()); // 模拟 reload：数组只有父预设
+        expect(findRegisteredPresetName('A', 'Midnight')).toBeUndefined();
+
+        await eventSource.emit(event_types.SETTINGS_LOADED);
+
+        const regName = findRegisteredPresetName('A', 'Midnight');
+        expect(regName).toBe('Midnight - 战斗版');
+        expect(readPresetMarker(openai_settings[openai_setting_names[regName!]])?.kind).toBe('profile');
+    });
+
+    it('注册/重写投影时 POST /api/presets/save（文件型落盘，reload 不丢）', async () => {
+        initPresetRegistration();
+        addPreset('Midnight', samplePreset());
+        await eventSource.emit(event_types.SETTINGS_LOADED);
+
+        const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+        const saveCalls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).endsWith('/api/presets/save'));
+        expect(saveCalls.length).toBeGreaterThan(0);
+        const body = JSON.parse(saveCalls[0][1].body as string);
+        expect(body.name).toBe('Midnight - 战斗版');
+        expect(body.preset.extensions.preset_cards.marker).toBe('preset-cards-v4');
+    });
+});
+
+describe('原生删除清理（C2）', () => {
+    it('PRESET_DELETED 时注销投影并 POST /api/presets/delete（zombie 防残留）', async () => {
+        initPresetRegistration();
+        addPreset('Midnight', samplePreset());
+        await eventSource.emit(event_types.SETTINGS_LOADED);
+        expect(findRegisteredPresetName('A', 'Midnight')).toBe('Midnight - 战斗版');
+
+        // ST 原生删除(openai.js onDeletePresetClick)：只删 option + openai_setting_names,不动数组
+        delete openai_setting_names['Midnight'];
+        await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: 'Midnight' });
+        await new Promise((r) => setImmediate(r));
+
+        expect(findRegisteredPresetName('A', 'Midnight')).toBeUndefined();
+        expect(openai_setting_names['Midnight - 战斗版']).toBeUndefined();
+        const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+        const deleteCalls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).endsWith('/api/presets/delete'));
+        expect(deleteCalls.some((c: any[]) => JSON.parse(c[1].body as string).name === 'Midnight - 战斗版')).toBe(true);
     });
 });
 
@@ -175,5 +259,21 @@ describe('切片 2：激活同步', () => {
         // 关键回归：写回存储的记录必须保留 marker（否则卡片排除/捕获门失效）
         expect(readPresetMarker(openai_settings[regIdx])?.kind).toBe('profile');
         expect(readPresetMarker(arg.preset)?.kind).toBe('profile');
+    });
+
+    it('PRESET_CHANGED on the parent preset keeps activeProfile (field-level load path, C4)', async () => {
+        const idx = addPreset('Midnight', samplePreset());
+        syncPresetRegistrations('Midnight', idx);
+        initRegisteredPresetObserver();
+        // 字段级加载(applyProfileToPresetByName)后：激活在父预设,activeProfile 指向该 profile
+        setActiveProfile({ presetName: 'Midnight', profileId: 'A' });
+
+        await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'openai', name: 'Midnight' });
+        expect(getActiveProfile()).toEqual({ presetName: 'Midnight', profileId: 'A' }); // 保留
+
+        // 切到无关预设 → 清空
+        addPreset('Plain', { name: 'Plain', extensions: {} });
+        await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'openai', name: 'Plain' });
+        expect(getActiveProfile()).toBeUndefined();
     });
 });

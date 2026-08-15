@@ -75,6 +75,31 @@ describe('captureIfRegistered', () => {
         expect(await captureIfRegistered()).toBe(false);
     });
 
+    it('skips when the registered record has no prompts baseline (C6: no flood of added)', async () => {
+        const emptyParent = {
+            name: 'Midnight',
+            extensions: {
+                preset_cards: {
+                    description: '',
+                    models: [],
+                    bgImage: '',
+                    profiles: [{ formatVersion: 3, kind: 'prompt_base', id: 'A', name: '战斗版', prompts: [] }],
+                },
+            },
+        };
+        const parentIdx = addPreset('Midnight', emptyParent);
+        syncPresetRegistrations('Midnight', parentIdx);
+        // 激活投影(无 prompts)+ ST 重建了默认 prompts
+        oai_settings.preset_settings_openai = 'Midnight - 战斗版';
+        oai_settings.prompts = [{ identifier: 'p1', content: 'default' }];
+        oai_settings.prompt_order = [{ name: 'main', order: [{ identifier: 'p1', enabled: true }] }];
+
+        expect(await captureIfRegistered()).toBe(false); // 无基线 → 不把全部默认 prompt 当 added
+        // 父池未被灌入
+        const parent = openai_settings[parentIdx] as Record<string, any>;
+        expect(Array.isArray(parent.prompts) ? parent.prompts : []).toEqual([]);
+    });
+
     it('no-op when runtime matches the registered record', async () => {
         const parentIdx = addPreset('Midnight', parentFixture());
         syncPresetRegistrations('Midnight', parentIdx);

@@ -5,7 +5,7 @@ import { openPresetCards } from './presetCards.js';
 import { getActiveProfile, initActiveProfile } from './activeProfile.js';
 import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, notifyProfileChanged, onProfileChanged } from './presetCardsState.js';
 import { initPresetOrderNormalization } from './fastApply.js';
-import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredPresetObserver, onActiveProfileChangedBySwitch } from './presetRegistration.js';
+import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredPresetObserver, onActiveProfileChangedBySwitch, syncAllPresetRegistrations } from './presetRegistration.js';
 import { initPresetCapture } from './presetCapture.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
 
@@ -29,6 +29,12 @@ export function init(): void {
     initActiveProfile();
     initPresetOrderNormalization();
     initPresetRegistration();
+    // 启动/reload 全量对账（幂等）：服务端按预设文件重建数组,已有 profile 需重新注册为投影
+    try {
+        syncAllPresetRegistrations();
+    } catch (err) {
+        console.error('preset-cards: startup registration sync failed', err);
+    }
     initRegisteredPresetActivation();
     initRegisteredPresetObserver();
     initPresetCapture();

@@ -5,6 +5,7 @@ type Listener = (...args: any[]) => unknown;
 const listeners = new Map<string, Set<Listener>>();
 
 export const event_types: Record<string, string> = {
+    SETTINGS_LOADED: 'settings-loaded',
     OAI_PRESET_CHANGED_BEFORE: 'oai-preset-changed-before',
     OAI_PRESET_CHANGED_AFTER: 'oai-preset-changed-after',
     PRESET_CHANGED: 'preset-changed',

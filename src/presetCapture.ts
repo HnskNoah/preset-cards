@@ -67,6 +67,9 @@ export async function captureIfRegistered(): Promise<boolean> {
     if (parentIdx === undefined) return false;
     const parent = openai_settings[parentIdx] as Preset | undefined;
     if (!parent || !Array.isArray(oai_settings.prompts)) return false;
+    // 无基线守卫：注册记录无 prompts（父预设缺 prompts → 投影无 → PM 重建默认）时跳过 prompt 漂移,
+    // 避免把全部运行时默认 prompt 判为 added 全量写进 profile 并灌入父池（C6）
+    if (!Array.isArray(record.prompts) || record.prompts.length === 0) return false;
 
     capturing = true;
     try {
