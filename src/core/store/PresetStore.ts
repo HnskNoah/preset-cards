@@ -30,6 +30,7 @@ export interface PresetStoreState {
     search: string;
     selectedIds: Set<string>;
     activeName: string | null;
+    isBatchMode: boolean;
     nodes: V4ProfileNode[];
 }
 
@@ -37,7 +38,23 @@ export type PresetStoreCommand =
     | { type: 'SET_SEARCH'; query: string }
     | { type: 'SET_ACTIVE'; name: string | null }
     | { type: 'TOGGLE_SELECT'; name: string }
-    | { type: 'CLEAR_SELECT' };
+    | { type: 'CLEAR_SELECT' }
+    | { type: 'TOGGLE_BATCH_MODE' };
+
+/** 卡片页 UI 需要的派生视图：批量模式 + 可见名称(按搜索过滤) + 已选名称。 */
+export interface CardView {
+    isBatchMode: boolean;
+    visibleNames: string[];
+    selectedNames: string[];
+}
+
+export function deriveCardView(state: PresetStoreState): CardView {
+    return {
+        isBatchMode: state.isBatchMode,
+        visibleNames: filterPresets(state.presets, state.search).map((p) => p.name),
+        selectedNames: [...state.selectedIds],
+    };
+}
 
 export interface PresetStore {
     getState(): PresetStoreState;
@@ -63,6 +80,8 @@ export function createPresetStore(initial: PresetStoreState): PresetStore {
             }
             case 'CLEAR_SELECT':
                 return { ...current, selectedIds: new Set() };
+            case 'TOGGLE_BATCH_MODE':
+                return { ...current, isBatchMode: !current.isBatchMode };
             default:
                 return current;
         }

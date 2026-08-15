@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildPresetEntries, createPresetStore, filterPresets } from '../src/core/store/PresetStore.js';
+import { buildPresetEntries, createPresetStore, deriveCardView, filterPresets } from '../src/core/store/PresetStore.js';
 import type { PresetEntry } from '../src/core/store/PresetStore.js';
 import { addProfileNode, createPresetCardsFile } from '../src/core/codec/v4.js';
 
@@ -10,7 +10,7 @@ const presets: PresetEntry[] = [
 
 describe('PresetStore', () => {
     it('initializes with preset list and notifies subscribers on state change', () => {
-        const store = createPresetStore({ presets, search: '', selectedIds: new Set(), activeName: 'Alpha' });
+        const store = createPresetStore({ presets, search: '', selectedIds: new Set(), activeName: 'Alpha', isBatchMode: false });
         const seen: string[] = [];
         store.subscribe(() => seen.push('change'));
 
@@ -28,7 +28,7 @@ describe('PresetStore', () => {
     });
 
     it('toggles batch selection and clears it with notifications', () => {
-        const store = createPresetStore({ presets, search: '', selectedIds: new Set(), activeName: null });
+        const store = createPresetStore({ presets, search: '', selectedIds: new Set(), activeName: null, isBatchMode: false });
         const seen: string[] = [];
         store.subscribe(() => seen.push('change'));
 
@@ -53,5 +53,34 @@ describe('PresetStore', () => {
         const entries = buildPresetEntries(file, 'key-1');
 
         expect(entries).toEqual([{ name: 'P', profileCount: 2, isActive: true }]);
+    });
+});
+
+describe('PresetStore batch mode + derived view', () => {
+    const baseState = { presets, search: '', selectedIds: new Set<string>(), activeName: null, isBatchMode: false };
+
+    it('toggles batch mode with notifications', () => {
+        const store = createPresetStore(baseState);
+        const seen: string[] = [];
+        store.subscribe(() => seen.push('change'));
+
+        store.dispatch({ type: 'TOGGLE_BATCH_MODE' });
+        expect(store.getState().isBatchMode).toBe(true);
+        store.dispatch({ type: 'TOGGLE_BATCH_MODE' });
+        expect(store.getState().isBatchMode).toBe(false);
+        expect(seen).toEqual(['change', 'change']);
+    });
+
+    it('derives visible/selected names for the card UI from store state', () => {
+        const store = createPresetStore(baseState);
+        store.dispatch({ type: 'SET_SEARCH', query: 'al' });
+        store.dispatch({ type: 'TOGGLE_SELECT', name: 'Alpha' });
+        store.dispatch({ type: 'TOGGLE_BATCH_MODE' });
+
+        const view = deriveCardView(store.getState());
+
+        expect(view.isBatchMode).toBe(true);
+        expect(view.visibleNames).toEqual(['Alpha']);
+        expect(view.selectedNames).toEqual(['Alpha']);
     });
 });
