@@ -57,28 +57,53 @@ function promptMap(prompts: any[] | undefined): Map<string, any> {
     return map;
 }
 
-/** 首个 prompt_order 列表的 identifier → enabled 真值（缺省 true）。 */
-function enabledMap(orderList: any[] | undefined): Map<string, boolean> {
+/** 首个 prompt_order 列表的 identifier → enabled 真值（缺省 true）。
+ * targetId 指定时取对应 character_id 的列表（character 策略目标可能不是首个）；
+ * 无匹配列表时回退首个（防御性，防止目标列表不存在导致静默判空）。 */
+function enabledMap(orderList: any[] | undefined, targetId?: number | string): Map<string, boolean> {
     const map = new Map<string, boolean>();
     if (!Array.isArray(orderList)) return map;
+    let matched = false;
     for (const item of orderList) {
         if (!item || !Array.isArray(item.order)) continue;
+        if (targetId !== undefined && String(item.character_id) !== String(targetId)) continue;
+        matched = true;
         for (const o of item.order as { identifier: string; enabled?: boolean }[]) {
             if (o && typeof o.identifier === 'string') map.set(o.identifier, o.enabled ?? true);
         }
-        break; // 只取目标列表（首个）
+        break; // 只取目标列表
+    }
+    if (!matched && targetId !== undefined) {
+        // 目标列表缺失：回退首个列表（与缺省行为一致，避免误判全 unmounted/remounted）
+        for (const item of orderList) {
+            if (!item || !Array.isArray(item.order)) continue;
+            for (const o of item.order as { identifier: string; enabled?: boolean }[]) {
+                if (o && typeof o.identifier === 'string') map.set(o.identifier, o.enabled ?? true);
+            }
+            break;
+        }
     }
     return map;
 }
 
-/** 首个 prompt_order 列表的挂载 identifier 顺序。 */
-function mountedOrder(orderList: any[] | undefined): string[] {
+/** 首个 prompt_order 列表的挂载 identifier 顺序。targetId 指定时取对应 character_id 的列表；
+ * 无匹配列表时回退首个。 */
+function mountedOrder(orderList: any[] | undefined, targetId?: number | string): string[] {
     if (!Array.isArray(orderList)) return [];
     for (const item of orderList) {
         if (!item || !Array.isArray(item.order)) continue;
+        if (targetId !== undefined && String(item.character_id) !== String(targetId)) continue;
         return (item.order as { identifier: string }[])
             .filter((o) => o && typeof o.identifier === 'string')
             .map((o) => o.identifier);
+    }
+    if (targetId !== undefined) {
+        for (const item of orderList) {
+            if (!item || !Array.isArray(item.order)) continue;
+            return (item.order as { identifier: string }[])
+                .filter((o) => o && typeof o.identifier === 'string')
+                .map((o) => o.identifier);
+        }
     }
     return [];
 }
@@ -103,17 +128,19 @@ function diffFields(recordDef: any, runtimeDef: any): PromptFields | undefined {
 
 /** 计算运行时 vs 注册记录 的 prompt 级漂移。
  * 关键语义：ST 的「Remove」= detach（从 order 摘除、池保留）→ 识别为 unmounted；
- * 池删除（handleDeletePrompt）→ deleted；重新挂载（append）→ remounted。 */
+ * 池删除（handleDeletePrompt）→ deleted；重新挂载（append）→ remounted。
+ * targetId：character 策略下目标 prompt_order 列表的 character_id（缺省取首个列表）。 */
 export function computePromptDrift(
     runtime: { prompts?: any[]; prompt_order?: any[] },
     record: { prompts?: any[]; prompt_order?: any[] },
+    targetId?: number | string,
 ): PromptDrift {
     const rt = promptMap(runtime.prompts);
     const rc = promptMap(record.prompts);
-    const rtEnabled = enabledMap(runtime.prompt_order);
-    const rcEnabled = enabledMap(record.prompt_order);
-    const rtOrder = mountedOrder(runtime.prompt_order);
-    const rcOrder = mountedOrder(record.prompt_order);
+    const rtEnabled = enabledMap(runtime.prompt_order, targetId);
+    const rcEnabled = enabledMap(record.prompt_order, targetId);
+    const rtOrder = mountedOrder(runtime.prompt_order, targetId);
+    const rcOrder = mountedOrder(record.prompt_order, targetId);
     const rtOrderSet = new Set(rtOrder);
     const rcOrderSet = new Set(rcOrder);
 

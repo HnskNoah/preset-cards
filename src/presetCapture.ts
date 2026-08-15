@@ -6,6 +6,7 @@ import { eventSource, event_types } from '@sillytavern/scripts/events';
 import { openai_settings, openai_setting_names, oai_settings, settingsToUpdate } from '@sillytavern/scripts/openai';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
 import type { Preset, PresetProfile, PromptBaseProfile, PromptDeltaProfile, PromptModel, PromptSampling } from './meta.js';
+import { resolvePromptOrderTarget } from './promptOrder.js';
 import { readPresetMarker } from './core/storage/marker.js';
 import {
     applyPromptDriftToProfile,
@@ -73,7 +74,7 @@ export async function captureIfRegistered(): Promise<boolean> {
 
     capturing = true;
     try {
-        const drift = computePromptDrift(oai_settings as any, record);
+        const drift = computePromptDrift(oai_settings as any, record, resolvePromptOrderTarget());
         // 顶层（采样/extra/模型）漂移：仅当「运行时 vs 注册记录」确有差异才计算 v3 diff
         const top = topLevelKeysDiffer(oai_settings as any, record)
             ? computeTopLevelDrift(parent, marker.profileId, oai_settings as any)

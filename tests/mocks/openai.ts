@@ -14,6 +14,9 @@ export const settingsToUpdate: Record<string, [string, string, boolean, boolean]
     top_p: ['#top_p', 'top_p', false, false],
     top_k: ['#top_k', 'top_k', false, false],
     stream_openai2: ['#stream_openai2', 'stream_openai2', true, false],
+    // fastApplyPreset 依赖这两键把 prompts/order 拷贝进运行时（对齐真实 ST settingsToUpdate）
+    prompts: ['#prompt_manager', 'prompts', false, false],
+    prompt_order: ['#prompt_manager', 'prompt_order', false, false],
 };
 
 export const chat_completion_sources: Record<string, string> = {

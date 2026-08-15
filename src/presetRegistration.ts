@@ -6,11 +6,12 @@
 //   - syncPresetRegistrations 对账（新增/重写/孤儿注销），订阅 meta 持久化自动触发
 import { saveSettingsDebounced, getRequestHeaders } from '@sillytavern/script';
 import { eventSource, event_types } from '@sillytavern/scripts/events';
-import { openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
+import { openai_settings, openai_setting_names, oai_settings } from '@sillytavern/scripts/openai';
 import { readMeta, onMetaPersisted, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
 import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { applyProfileToPreset } from './promptToggle.js';
+import { fastApplyPreset } from './fastApply.js';
 import { buildProfileMarker, readPresetMarker } from './core/storage/marker.js';
 import { buildProjectedPreset } from './core/storage/project.js';
 import {
@@ -151,8 +152,25 @@ export function syncPresetRegistrations(presetName: string, presetIndex: number)
         });
         if (result !== null) touched = true;
     }
-    if (touched) saveSettingsDebounced();
+    if (touched) {
+        saveSettingsDebounced();
+        // NEW-2：对账刷新了投影记录后,若该父预设的投影正激活,立即重应用——
+        // 否则运行时停留在旧状态,下次 SETTINGS_UPDATED 捕获会把它当漂移回写,静默撤销
+        // 编辑器提交/插件侧改动(也顺带解决"捕获后运行时直到下次激活才更新"的缺口)
+        refreshProjectionRuntimeIfActive(presetName);
+    }
     return touched;
+}
+
+/** 若活动预设是某父预设的 profile 投影,重应用其最新记录（保持运行时与投影记录一致）。 */
+export function refreshProjectionRuntimeIfActive(parentPresetName: string): void {
+    const activeName = oai_settings.preset_settings_openai;
+    if (typeof activeName !== 'string') return;
+    const idx = openai_setting_names[activeName];
+    if (idx === undefined) return;
+    const marker = readPresetMarker(openai_settings[idx]);
+    if (!marker || marker.kind !== 'profile' || marker.parentKey !== parentPresetName) return;
+    void fastApplyPreset(idx, activeName);
 }
 
 /** 注销某父预设名下全部注册（删除父预设时调用；不抛错，失败仅本地清理）。 */

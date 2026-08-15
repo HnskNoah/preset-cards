@@ -98,6 +98,42 @@ describe('computePromptDrift', () => {
         expect(isEmptyPromptDrift(drift)).toBe(false);
     });
 
+    it('compares the target prompt_order list when targetId is given (multi-list, L12)', () => {
+        const runtime = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'p2', content: 'b' },
+            ],
+            prompt_order: [
+                { character_id: 100001, order: [{ identifier: 'p1', enabled: true }] }, // 非目标列表
+                { character_id: 42, order: [
+                    { identifier: 'p1', enabled: true },
+                    { identifier: 'p2', enabled: true },
+                ] }, // 目标列表:p2 被重新挂载
+            ],
+        };
+        const record = {
+            prompts: [
+                { identifier: 'p1', content: 'a' },
+                { identifier: 'p2', content: 'b' },
+            ],
+            prompt_order: [
+                { character_id: 100001, order: [{ identifier: 'p1', enabled: true }] },
+                { character_id: 42, order: [{ identifier: 'p1', enabled: true }] }, // 目标列表:p2 摘除
+            ],
+        };
+
+        // 不指定 targetId(旧行为):只比首个列表 → p2 的漂移静默丢失
+        const blind = computePromptDrift(runtime as any, record as any);
+        expect(blind.remounted).toEqual([]);
+        expect(isEmptyPromptDrift(blind)).toBe(true);
+
+        // 指定 targetId=42:目标列表的 p2 重挂载被识别
+        const drift = computePromptDrift(runtime as any, record as any, 42);
+        expect(drift.remounted).toEqual([{ identifier: 'p2', enabled: true }]);
+        expect(isEmptyPromptDrift(drift)).toBe(false);
+    });
+
     it('is empty when runtime matches record', () => {
         const same = structuredClone(record);
         const drift = computePromptDrift(same as any, record as any);

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { resetOpenaiMock, addPreset, openai_settings, openai_setting_names } from './mocks/openai.js';
+import { resetOpenaiMock, addPreset, openai_settings, openai_setting_names, oai_settings } from './mocks/openai.js';
 import { eventSource, event_types } from './mocks/events.js';
 import {
     buildRegisteredSnapshots,
@@ -12,6 +12,7 @@ import {
     initRegisteredPresetObserver,
     initPresetRegistration,
     syncAllPresetRegistrations,
+    refreshProjectionRuntimeIfActive,
     onActiveProfileChangedBySwitch,
 } from '../src/presetRegistration.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
@@ -140,6 +141,42 @@ describe('syncAllPresetRegistrations', () => {
 
         syncAllPresetRegistrations();
         expect(findRegisteredPresetName('A')).toBeUndefined();
+    });
+});
+
+describe('refreshProjectionRuntimeIfActive (NEW-2)', () => {
+    it('re-applies the projection when it is the active preset (runtime kept in sync)', async () => {
+        vi.stubGlobal('document', { querySelector: () => null }); // fastApplyPreset 的 DOM 写入兜底
+        try {
+            const idx = addPreset('Midnight', samplePreset());
+            syncPresetRegistrations('Midnight', idx);
+            const regName = 'Midnight - 战斗版';
+            const regIdx = openai_setting_names[regName];
+            // 激活投影：运行时 = 旧记录
+            oai_settings.preset_settings_openai = regName;
+            oai_settings.prompts = structuredClone((openai_settings[regIdx] as any).prompts);
+            oai_settings.prompt_order = structuredClone((openai_settings[regIdx] as any).prompt_order);
+
+            // 父预设 profile 内容变化(模拟编辑器提交) → 刷新投影记录
+            const preset = openai_settings[idx] as Record<string, any>;
+            preset.extensions.preset_cards.profiles[0].prompts[0].fields = { content: 'v2' };
+            refreshRegisteredSnapshot('Midnight', preset as any, 'A');
+
+            refreshProjectionRuntimeIfActive('Midnight');
+            await new Promise((r) => setImmediate(r)); // fastApply 为 void
+
+            expect((oai_settings.prompts as any[]).find((p: any) => p.identifier === 'p1').content).toBe('v2');
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('no-op when the projection is not the active preset', () => {
+        const idx = addPreset('Midnight', samplePreset());
+        syncPresetRegistrations('Midnight', idx);
+        oai_settings.preset_settings_openai = 'Midnight';
+        refreshProjectionRuntimeIfActive('Midnight'); // 不抛错即可(活动是父预设,非投影)
+        expect(oai_settings.preset_settings_openai).toBe('Midnight');
     });
 });
 

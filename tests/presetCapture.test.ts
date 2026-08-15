@@ -62,6 +62,8 @@ function applyUserEdit(): void {
 
 beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+    // 对账后 NEW-2 重应用会走 fastApplyPreset：DOM 写入兜底
+    vi.stubGlobal('document', { querySelector: () => null });
 });
 
 afterEach(() => {
