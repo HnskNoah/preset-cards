@@ -48,13 +48,13 @@ export function notifyProfileChanged(ref: { presetName: string; profileId: strin
 export function refreshActivePresetUI(presetName: string): void {
     if (oai_settings.preset_settings_openai === presetName) {
         const idx = openai_setting_names[presetName];
-        if (idx !== undefined) void fastApplyPreset(idx, presetName);
+        if (idx !== undefined) void fastApplyPreset(idx, presetName).catch((err) => console.error('preset-cards: fastApply failed', err));
     }
 }
 
 /** 激活 preset 并刷新运行态（走快路径 fastApplyPreset，不触发原生 change 慢路径）。 */
 export function activatePreset(ctx: CardsContext, name: string, idx: number): void {
-    void fastApplyPreset(idx, name);
+    void fastApplyPreset(idx, name).catch((err) => console.error('preset-cards: fastApply failed', err));
     refreshActiveCardSelection(ctx);
 }
 
@@ -63,7 +63,7 @@ export function reselectFirstPreset(): void {
     if (Object.keys(openai_setting_names).length) {
         const newActiveName = Object.keys(openai_setting_names)[0];
         oai_settings.preset_settings_openai = newActiveName;
-        void fastApplyPreset(openai_setting_names[newActiveName], newActiveName);
+        void fastApplyPreset(openai_setting_names[newActiveName], newActiveName).catch((err) => console.error('preset-cards: fastApply failed', err));
     }
 }
 
@@ -236,7 +236,7 @@ export async function loadProfile(
         if (regIdx !== undefined) {
             // activeProfile/通知由 PRESET_CHANGED 观察者统一处理（fastApply 内部 emit,避免双重通知 L18）
             toastr.success(L('Configuration loaded'));
-            void fastApplyPreset(regIdx, regName);
+            void fastApplyPreset(regIdx, regName).catch((err) => console.error('preset-cards: fastApply failed', err));
             clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
             await refreshGrid(ctx);
             return;

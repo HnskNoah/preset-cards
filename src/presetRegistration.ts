@@ -170,7 +170,7 @@ export function refreshProjectionRuntimeIfActive(parentPresetName: string): void
     if (idx === undefined) return;
     const marker = readPresetMarker(openai_settings[idx]);
     if (!marker || marker.kind !== 'profile' || marker.parentKey !== parentPresetName) return;
-    void fastApplyPreset(idx, activeName);
+    void fastApplyPreset(idx, activeName).catch((err) => console.error('preset-cards: fastApply failed', err));
 }
 
 /** 注销某父预设名下全部注册（删除父预设时调用；不抛错，失败仅本地清理）。 */

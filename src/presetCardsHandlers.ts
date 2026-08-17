@@ -124,7 +124,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         ctx.dialog.find('.preset_card').removeClass('selected');
         $(this).addClass('selected');
         ctx.presetStore.dispatch({ type: 'SET_ACTIVE', name });
-        void fastApplyPreset(idx, name);
+        void fastApplyPreset(idx, name).catch((err) => console.error('preset-cards: fastApply failed', err));
         toastr.success(`${t`Switched to`} ${name}`);
     });
 
