@@ -71,6 +71,8 @@ export interface PromptBaseProfile {
     extra?: Record<string, any>;
     /** 创建/更新时记录的模型快照；加载 profile 时沿父链解析并应用（链上无记录时回退出厂基线 defaultModel）。 */
     model?: PromptModel;
+    /** 扩展覆盖（mount/unmount/toggle）：相对父预设的差异。只存有 id 的数组条目增删与布尔开关。 */
+    extProfile?: ExtProfileOverride;
 }
 
 /** 派生 profile 的一条差异：挂载/开关/顺序/值字段差异（与 PromptStateChange 同构的兼容别名）。
@@ -100,6 +102,8 @@ export interface PromptDeltaProfile {
     extra?: Record<string, any>;
     /** 创建/更新时记录的模型快照；加载 profile 时沿父链解析并应用（链上无记录时回退出厂基线 defaultModel）。 */
     model?: PromptModel;
+    /** 扩展覆盖（mount/unmount/toggle）：相对父预设的差异。只存有 id 的数组条目增删与布尔开关。 */
+    extProfile?: ExtProfileOverride;
 }
 
 /** defaultSnapshot 条目：出厂基线（首次 add base 时锁定）。挂载态 + 开关 + 原始值字段。 */
@@ -109,6 +113,22 @@ export interface PromptDefaultSnapshotEntry {
     enabled: boolean;
     lastActiveIndex?: number;
     originalFields?: PromptFields;
+}
+
+/** 扩展 mount 条目：新增到数组的一项。 */
+export interface ExtMountEntry {
+    id: string;
+    definition: Record<string, any>;
+}
+
+/** 扩展覆盖：只存"相对父预设的差异"。mount/unmount 只用于有 id 的数组条目；toggle 用于布尔值。 */
+export interface ExtProfileOverride {
+    /** 新增的数组条目，按路径索引。路径如 "regex_scripts"、"SPreset.RegexBinding.regexes"。 */
+    extMounts?: Record<string, ExtMountEntry[]>;
+    /** 摘除的数组条目 id，按路径索引。 */
+    extUnmounts?: Record<string, string[]>;
+    /** 布尔开关覆盖，按完整路径索引。路径如 "regex_scripts.{id}.disabled"、"SPreset.ChatSquash.enabled"。 */
+    extToggles?: Record<string, boolean>;
 }
 
 /** v3 profile 联合类型（base / delta）。 */

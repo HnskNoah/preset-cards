@@ -24,6 +24,7 @@ import {
     EXTRA_EXCLUDED_KEYS,
 } from './promptToggle.js';
 import { SAMPLING_KEYS } from './constants.js';
+import { computeExtensionDrift } from './extCapture.js';
 
 /** 防重入：捕获期间再次 SETTINGS_UPDATED 直接跳过（等待本次落盘后再对账）。 */
 let capturing = false;
@@ -76,11 +77,9 @@ export async function captureIfRegistered(): Promise<boolean> {
     capturing = true;
     try {
         const drift = computePromptDrift(oai_settings as any, record, resolvePromptOrderTarget());
-        // 顶层（采样/extra/模型）漂移：仅当「运行时 vs 注册记录」确有差异才计算 v3 diff
-        const top = topLevelKeysDiffer(oai_settings as any, record)
-            ? computeTopLevelDrift(parent, marker.profileId, oai_settings as any)
-            : {};
-        if (isEmptyPromptDrift(drift) && Object.keys(top).length === 0) return false;
+        const top = computeTopLevelDrift(parent, marker.profileId, oai_settings as any, record);
+        const extDrift = computeExtensionDrift(oai_settings as any, parent);
+        if (isEmptyPromptDrift(drift) && Object.keys(top).length === 0 && !extDrift) return false;
 
         // 材料恢复（池删除）/ 新增入父池：dormant prompt 定义进父预设 prompts[]（不挂载，仅池）。
         // ST 摘除（unmounted）的 prompt 池仍在，无需恢复。
@@ -112,30 +111,29 @@ export async function captureIfRegistered(): Promise<boolean> {
             const target = profiles.find((p) => String(p.id) === String(marker.profileId));
             if (!target || (!isPromptBaseProfile(target) && !isPromptDeltaProfile(target))) return m;
             const next = applyPromptDriftToProfile(target, drift) as PromptBaseProfile | PromptDeltaProfile;
-            if (top.sampling) next.sampling = top.sampling;
-            if (top.extra) next.extra = top.extra;
-            if (top.model) next.model = top.model;
+            if (Object.hasOwn(top, 'sampling')) {
+                if (top.sampling) next.sampling = top.sampling;
+                else delete next.sampling;
+            }
+            if (Object.hasOwn(top, 'extra')) {
+                if (top.extra) next.extra = top.extra;
+                else delete next.extra;
+            }
+            if (Object.hasOwn(top, 'model')) {
+                if (top.model) next.model = top.model;
+                else delete next.model;
+            }
+            // 扩展覆盖（mount/unmount/toggle）：有变化时写入，无变化时清除
+            if (extDrift) {
+                (next as any).extProfile = extDrift;
+            } else {
+                delete (next as any).extProfile;
+            }
             return { ...m, profiles: profiles.map((p) => (String(p.id) === String(marker.profileId) ? next as PresetProfile : p)) };
         }, marker.parentKey, parentIdx, { toastMessage: L('Failed to sync captured profile changes') });
     } finally {
         capturing = false;
     }
-}
-
-/** 顶层键（采样/extra/模型等，排除 prompts/order/extensions/连接键）运行时与注册记录是否不同。
- * 只比较记录（已应用基线）中存在的键；ST 预设键名 ≠ 设置键名（temperature→temp_openai 等,
- * settingsToUpdate 映射），运行时按设置键取值比较（NEW-1：否则恒真 → 首次捕获把整个运行时
- * 快照灌进 profile.extra）。 */
-function topLevelKeysDiffer(runtime: Record<string, any>, record: Record<string, any>): boolean {
-    const excluded = new Set(['prompts', 'prompt_order', 'extensions']);
-    for (const presetKey of Object.keys(record)) {
-        if (excluded.has(presetKey)) continue;
-        const meta = settingsToUpdate[presetKey];
-        if (meta && meta[3]) continue; // is_connection 键不捕获
-        const settingsKey = meta ? meta[1] : presetKey;
-        if (runtime[settingsKey] !== record[presetKey]) return true;
-    }
-    return false;
 }
 
 /** 从运行时（设置键空间）采集采样快照，键名转回预设键空间（profile 采样存预设键）。 */
@@ -168,13 +166,45 @@ function runtimeExtra(runtime: Record<string, any>): Record<string, any> | null 
     return Object.keys(extra).length > 0 ? extra : null;
 }
 
-/** 采样/extra/模型漂移：判定用「运行时 vs profile 当前生效值」（变了才算），
- * 存储用 v3 diff（相对排除本 profile 的父链基线，base 相对出厂基线）。 */
+function samplingKeysDiffer(runtime: Record<string, any>, record: Record<string, any>): boolean {
+    for (const presetKey of SAMPLING_KEYS) {
+        if (!Object.hasOwn(record, presetKey)) continue;
+        const settingsKey = settingsToUpdate[presetKey]?.[1] ?? presetKey;
+        if (runtime[settingsKey] !== record[presetKey]) return true;
+    }
+    return false;
+}
+
+function extraKeysDiffer(runtime: Record<string, any>, record: Record<string, any>): boolean {
+    for (const presetKey of Object.keys(record)) {
+        if (SAMPLING_KEYS.some((key) => key === presetKey)) continue;
+        if (EXTRA_EXCLUDED_KEYS.has(presetKey)) continue;
+        const setting = settingsToUpdate[presetKey];
+        if (setting?.[3]) continue;
+        const settingsKey = setting?.[1] ?? presetKey;
+        if (runtime[settingsKey] !== record[presetKey]) return true;
+    }
+    return false;
+}
+
+function modelsEqual(a: PromptModel | null | undefined, b: PromptModel | null | undefined): boolean {
+    return a?.source === b?.source && a?.name === b?.name;
+}
+
+type TopLevelDrift = {
+    sampling?: PromptSampling | null;
+    extra?: Record<string, any> | null;
+    model?: PromptModel | null;
+};
+
+/** 采样/extra/模型漂移：先按类别确认运行时相对注册记录确有变化，再与当前 profile 和父级基线比较。
+ * null 表示用户已回到继承基线，持久化时必须删除当前 profile 的对应 override。 */
 function computeTopLevelDrift(
     parent: Preset,
     profileId: string,
     runtime: Record<string, any>,
-): { sampling?: PromptSampling; extra?: Record<string, any>; model?: PromptModel } {
+    record: Record<string, any>,
+): TopLevelDrift {
     const meta = readMeta(parent);
     const profiles = meta.profiles;
     const profile = getProfile(meta, profileId);
@@ -184,23 +214,36 @@ function computeTopLevelDrift(
         : undefined;
     const baselineSampling = parentOf ? resolveEffectiveSampling(parentOf, profiles, meta.defaultSampling) : meta.defaultSampling;
     const baselineExtra = parentOf ? resolveEffectiveExtra(parentOf, profiles, meta.defaultExtra) : meta.defaultExtra;
+    const baselineModel = parentOf
+        ? resolveProfileModel(parentOf, profiles) ?? meta.defaultModel
+        : meta.defaultModel;
 
-    const out: { sampling?: PromptSampling; extra?: Record<string, any>; model?: PromptModel } = {};
-    // 判定：运行时 vs profile 当前生效值（变了才算；键空间用运行时采样/extra 转换）
-    const currentSampling = resolveEffectiveSampling(profile, profiles, meta.defaultSampling);
-    const samplingDiff = diffSampling(runtimeSampling(runtime), currentSampling);
-    if (samplingDiff && Object.keys(samplingDiff).length > 0) {
-        out.sampling = diffSampling(runtimeSampling(runtime), baselineSampling) ?? undefined;
+    const out: TopLevelDrift = {};
+    if (samplingKeysDiffer(runtime, record)) {
+        const captured = runtimeSampling(runtime);
+        const current = resolveEffectiveSampling(profile, profiles, meta.defaultSampling);
+        const changed = diffSampling(captured, current);
+        if (changed && Object.keys(changed).length > 0) {
+            out.sampling = diffSampling(captured, baselineSampling);
+        }
     }
-    const currentExtra = resolveEffectiveExtra(profile, profiles, meta.defaultExtra);
-    const extraDiff = diffExtra(runtimeExtra(runtime), currentExtra);
-    if (extraDiff && Object.keys(extraDiff).length > 0) {
-        out.extra = diffExtra(runtimeExtra(runtime), baselineExtra) ?? undefined;
+
+    if (extraKeysDiffer(runtime, record)) {
+        const captured = runtimeExtra(runtime);
+        const current = resolveEffectiveExtra(profile, profiles, meta.defaultExtra);
+        const changed = diffExtra(captured, current);
+        if (changed && Object.keys(changed).length > 0) {
+            out.extra = diffExtra(captured, baselineExtra);
+        }
     }
-    const model = captureModel(runtime);
-    const currentModel = resolveProfileModel(profile, profiles);
-    if (model && (!currentModel || model.source !== currentModel.source || model.name !== currentModel.name)) {
-        out.model = model;
+
+    const capturedModel = captureModel(runtime);
+    const recordModel = captureModel(record);
+    if (capturedModel && !modelsEqual(capturedModel, recordModel)) {
+        const currentModel = resolveProfileModel(profile, profiles) ?? meta.defaultModel;
+        if (!modelsEqual(capturedModel, currentModel)) {
+            out.model = modelsEqual(capturedModel, baselineModel) ? null : capturedModel;
+        }
     }
     return out;
 }

@@ -64,6 +64,19 @@ export const SAMPLING_KEYS = [
 
 export type SamplingKey = (typeof SAMPLING_KEYS)[number];
 
+/** 扩展系统中支持 mount/unmount 的数组路径（按点号分隔的 extensions 键路径）。 */
+export const EXT_ARRAY_PATHS = [
+    'regex_scripts',
+    'SPreset.RegexBinding.regexes',
+    'tavern_helper.scripts',
+];
+
+/** 扩展系统中支持 toggle 的布尔值路径。 */
+export const EXT_BOOLEAN_PATHS = [
+    'SPreset.ChatSquash.enabled',
+    'SPreset.MacroNest',
+];
+
 export const LOCAL_DICT: Record<string, string> = {
     'Configurations': '配置快照',
     'Rename': '重命名',

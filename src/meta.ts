@@ -22,6 +22,8 @@ export type {
     PromptSampling,
     PromptStateChange,
     PresetProfile,
+    ExtMountEntry,
+    ExtProfileOverride,
 } from './core/domain/types.js';
 
 export { isPromptBaseProfile, isPromptDeltaProfile } from './core/domain/schema.js';

@@ -1,0 +1,115 @@
+// extApply.test.ts：扩展 mount/unmount/toggle 应用测试
+import { describe, it, expect } from 'vitest';
+import { applyExtensions } from '../src/extApply.js';
+
+describe('applyExtensions', () => {
+    it('mounts an item to an existing array', () => {
+        const preset = {
+            extensions: {
+                regex_scripts: [],
+            },
+        };
+        applyExtensions(preset, {
+            extMounts: {
+                'regex_scripts': [{
+                    id: 'abc-123',
+                    definition: { id: 'abc-123', findRegex: 'test', disabled: false },
+                }],
+            },
+        });
+        expect(preset.extensions.regex_scripts).toHaveLength(1);
+        expect(preset.extensions.regex_scripts[0].id).toBe('abc-123');
+        expect(preset.extensions.regex_scripts[0].findRegex).toBe('test');
+    });
+
+    it('unmounts items from an array by id', () => {
+        const preset = {
+            extensions: {
+                regex_scripts: [
+                    { id: 'r1', findRegex: 'a', disabled: false },
+                    { id: 'r2', findRegex: 'b', disabled: true },
+                    { id: 'r3', findRegex: 'c', disabled: false },
+                ],
+            },
+        };
+        applyExtensions(preset, {
+            extUnmounts: {
+                'regex_scripts': ['r2'],
+            },
+        });
+        expect(preset.extensions.regex_scripts).toHaveLength(2);
+        expect(preset.extensions.regex_scripts.map((x: any) => x.id)).toEqual(['r1', 'r3']);
+    });
+
+    it('toggles a simple boolean field', () => {
+        const preset = {
+            extensions: {
+                SPreset: {
+                    ChatSquash: { enabled: false },
+                },
+            },
+        };
+        applyExtensions(preset, {
+            extToggles: {
+                'SPreset.ChatSquash.enabled': true,
+            },
+        });
+        expect(preset.extensions.SPreset.ChatSquash.enabled).toBe(true);
+    });
+
+    it('toggles disabled on an array item by id', () => {
+        const preset = {
+            extensions: {
+                regex_scripts: [
+                    { id: 'r1', findRegex: 'a', disabled: false },
+                    { id: 'r2', findRegex: 'b', disabled: true },
+                ],
+            },
+        };
+        applyExtensions(preset, {
+            extToggles: {
+                'regex_scripts.r1.disabled': true,
+            },
+        });
+        expect(preset.extensions.regex_scripts[0].disabled).toBe(true);
+        expect(preset.extensions.regex_scripts[1].disabled).toBe(true); // r2 unchanged
+    });
+
+    it('mount and unmount on the same path', () => {
+        const preset = {
+            extensions: {
+                regex_scripts: [
+                    { id: 'r1', findRegex: 'a', disabled: false },
+                ],
+            },
+        };
+        applyExtensions(preset, {
+            extMounts: {
+                'regex_scripts': [{
+                    id: 'r-new',
+                    definition: { id: 'r-new', findRegex: 'new', disabled: false },
+                }],
+            },
+            extUnmounts: {
+                'regex_scripts': ['r1'],
+            },
+        });
+        // unmount 先执行，移除 r1；然后 mount 加上 r-new
+        expect(preset.extensions.regex_scripts).toHaveLength(1);
+        expect(preset.extensions.regex_scripts[0].id).toBe('r-new');
+    });
+
+    it('does nothing when extProfile is undefined', () => {
+        const preset = { extensions: { regex_scripts: [{ id: 'r1' }] } };
+        const original = structuredClone(preset);
+        applyExtensions(preset, undefined);
+        expect(preset).toEqual(original);
+    });
+
+    it('does nothing when extProfile is empty', () => {
+        const preset = { extensions: { regex_scripts: [{ id: 'r1' }] } };
+        const original = structuredClone(preset);
+        applyExtensions(preset, {});
+        expect(preset).toEqual(original);
+    });
+});

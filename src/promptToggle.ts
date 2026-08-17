@@ -8,6 +8,7 @@ import { findOrderList, resolvePromptOrderTarget } from './promptOrder.js';
 export { PROMPT_FIELD_WHITELIST, promptFieldsEqual, captureSampling, applySampling, captureExtra, applyExtra, diffSampling, diffExtra, capturePromptFields, captureModel, applyModel, filterFields, mirrorFieldsToActivePreset, findPromptInPreset, EXTRA_EXCLUDED_KEYS } from './promptCapture.js';
 export { applyEntryState, buildDefaultSnapshotLock, applyResolvedPromptState, applyBaseProfile, applyProfileToPreset, resolveProfileModel, collectProfileChain, resolveEffectiveSampling, resolveEffectiveExtra } from './promptApply.js';
 export { findOrderList, resolvePromptOrderTarget, syncPromptOrder, replaceTargetPromptOrder, pruneStaleOrderEntries, resolveProfilePrompts, resolveParentStates } from './promptOrder.js';
+export { applyExtensions } from './extApply.js';
 
 /**
  * 采集当前目标 prompt_order 的 v3 挂载状态快照（mounted + unusedIds）。

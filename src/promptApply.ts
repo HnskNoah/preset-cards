@@ -4,6 +4,7 @@ import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaul
 import { filterFields, applySampling, applyExtra, applyModel, capturePromptFields, findPromptInPreset } from './promptCapture.js';
 import { findOrderList, resolvePromptOrderTarget, replaceTargetPromptOrder, syncPromptOrder, resolveProfilePrompts, pruneStaleOrderEntries } from './promptOrder.js';
 import { snapshotPromptState } from './promptState.js';
+import { applyExtensions } from './extApply.js';
 
 /**
  * 单条开关应用到预设实际值：改 prompts[].enabled 并同步 prompt_order。
@@ -218,5 +219,8 @@ export function applyProfileToPreset(
     if (sampling) applySampling(preset, sampling);
     const extra = resolveEffectiveExtra(profile, allProfiles, opts?.defaultExtra);
     if (extra) applyExtra(preset, extra);
+
+    // 扩展 mount/unmount/toggle：在预设 clone（已有父预设 extensions）上应用 profile 的扩展覆盖
+    applyExtensions(preset, (profile as any).extProfile);
 }
 
