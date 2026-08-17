@@ -77,6 +77,37 @@ describe('computeExtensionDrift', () => {
         expect(result!.extUnmounts).toBeUndefined();
     });
 
+    it('detects an enabled toggle on tavern_helper script items', () => {
+        const runtime = {
+            extensions: {
+                tavern_helper: {
+                    scripts: [
+                        { id: 's1', name: 'script1', enabled: false },
+                        { id: 's2', name: 'script2', enabled: true },
+                    ],
+                },
+            },
+        };
+        const parent = {
+            extensions: {
+                tavern_helper: {
+                    scripts: [
+                        { id: 's1', name: 'script1', enabled: true },
+                        { id: 's2', name: 'script2', enabled: true },
+                    ],
+                },
+            },
+        };
+        const result = computeExtensionDrift(runtime, parent);
+        expect(result).not.toBeNull();
+        expect(result!.extToggles).toBeDefined();
+        expect(result!.extToggles!['tavern_helper.scripts.s1.enabled']).toBe(false);
+        // s2.enabled 未变，不应出现在 toggle 中
+        expect(result!.extToggles!['tavern_helper.scripts.s2.enabled']).toBeUndefined();
+        expect(result!.extMounts).toBeUndefined();
+        expect(result!.extUnmounts).toBeUndefined();
+    });
+
     it('detects a simple boolean toggle (SPreset.ChatSquash.enabled)', () => {
         const runtime = {
             extensions: {

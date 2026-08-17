@@ -75,6 +75,26 @@ describe('applyExtensions', () => {
         expect(preset.extensions.regex_scripts[1].disabled).toBe(true); // r2 unchanged
     });
 
+    it('toggles enabled on an array item by id', () => {
+        const preset = {
+            extensions: {
+                tavern_helper: {
+                    scripts: [
+                        { id: 's1', name: 'script1', enabled: true },
+                        { id: 's2', name: 'script2', enabled: false },
+                    ],
+                },
+            },
+        };
+        applyExtensions(preset, {
+            extToggles: {
+                'tavern_helper.scripts.s1.enabled': false,
+            },
+        });
+        expect(preset.extensions.tavern_helper.scripts[0].enabled).toBe(false);
+        expect(preset.extensions.tavern_helper.scripts[1].enabled).toBe(false); // s2 unchanged
+    });
+
     it('mount and unmount on the same path', () => {
         const preset = {
             extensions: {

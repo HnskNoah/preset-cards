@@ -70,12 +70,15 @@ export function computeExtensionDrift(
         }
         if (unmounted.length > 0) unmount[path] = unmounted;
 
-        // Toggle：两者共有条目上的 disabled 字段变化
+        // Toggle：两者共有条目上的 disabled/enabled 字段变化
         for (const [id, runtimeItem] of runtimeById) {
             const parentItem = parentById.get(id);
             if (!parentItem) continue;
             if (runtimeItem.disabled !== parentItem.disabled) {
                 toggles[`${path}.${id}.disabled`] = runtimeItem.disabled;
+            }
+            if (runtimeItem.enabled !== parentItem.enabled) {
+                toggles[`${path}.${id}.enabled`] = runtimeItem.enabled;
             }
         }
     }

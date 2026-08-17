@@ -70,36 +70,39 @@ export async function captureIfRegistered(): Promise<boolean> {
     if (parentIdx === undefined) return false;
     const parent = openai_settings[parentIdx] as Preset | undefined;
     if (!parent || !Array.isArray(oai_settings.prompts)) return false;
-    // 无基线守卫：注册记录无 prompts（父预设缺 prompts → 投影无 → PM 重建默认）时跳过 prompt 漂移,
-    // 避免把全部运行时默认 prompt 判为 added 全量写进 profile 并灌入父池（C6）
-    if (!Array.isArray(record.prompts) || record.prompts.length === 0) return false;
 
     capturing = true;
     try {
-        const drift = computePromptDrift(oai_settings as any, record, resolvePromptOrderTarget());
+        // 无基线守卫：注册记录无 prompts（父预设缺 prompts → 投影无 → PM 重建默认）时跳过 prompt 漂移,
+        // 避免把全部运行时默认 prompt 判为 added 全量写进 profile 并灌入父池（C6）
+        const hasPromptBaseline = Array.isArray(record.prompts) && record.prompts.length > 0;
+        const drift = hasPromptBaseline ? computePromptDrift(oai_settings as any, record, resolvePromptOrderTarget()) : undefined;
         const top = computeTopLevelDrift(parent, marker.profileId, oai_settings as any, record);
         const extDrift = computeExtensionDrift(oai_settings as any, parent);
-        if (isEmptyPromptDrift(drift) && Object.keys(top).length === 0 && !extDrift) return false;
+        const hasPromptDrift = drift !== undefined && !isEmptyPromptDrift(drift);
+        if (!hasPromptDrift && Object.keys(top).length === 0 && !extDrift) return false;
 
         // 材料恢复（池删除）/ 新增入父池：dormant prompt 定义进父预设 prompts[]（不挂载，仅池）。
         // ST 摘除（unmounted）的 prompt 池仍在，无需恢复。
-        const parentPrompts = Array.isArray(parent.prompts) ? parent.prompts : (parent.prompts = []);
-        const known = new Set(
-            parentPrompts.map((p: any) => p?.identifier).filter((id: unknown): id is string => typeof id === 'string'),
-        );
-        for (const id of drift.deleted) {
-            const def = Array.isArray(record.prompts)
-                ? record.prompts.find((p: any) => p?.identifier === id)
-                : undefined;
-            if (def && !known.has(id)) {
-                parentPrompts.push(structuredClone(def));
-                known.add(id);
+        if (hasPromptDrift && drift) {
+            const parentPrompts = Array.isArray(parent.prompts) ? parent.prompts : (parent.prompts = []);
+            const known = new Set(
+                parentPrompts.map((p: any) => p?.identifier).filter((id: unknown): id is string => typeof id === 'string'),
+            );
+            for (const id of drift.deleted) {
+                const def = Array.isArray(record.prompts)
+                    ? record.prompts.find((p: any) => p?.identifier === id)
+                    : undefined;
+                if (def && !known.has(id)) {
+                    parentPrompts.push(structuredClone(def));
+                    known.add(id);
+                }
             }
-        }
-        for (const a of drift.added) {
-            if (!known.has(a.identifier)) {
-                parentPrompts.push(structuredClone(a.definition));
-                known.add(a.identifier);
+            for (const a of drift.added) {
+                if (!known.has(a.identifier)) {
+                    parentPrompts.push(structuredClone(a.definition));
+                    known.add(a.identifier);
+                }
             }
         }
 
@@ -110,7 +113,15 @@ export async function captureIfRegistered(): Promise<boolean> {
             const profiles = Array.isArray(m.profiles) ? m.profiles : [];
             const target = profiles.find((p) => String(p.id) === String(marker.profileId));
             if (!target || (!isPromptBaseProfile(target) && !isPromptDeltaProfile(target))) return m;
-            const next = applyPromptDriftToProfile(target, drift) as PromptBaseProfile | PromptDeltaProfile;
+            const next = applyPromptDriftToProfile(target, drift ?? {
+                changedFields: [],
+                enabledChanges: [],
+                order: undefined,
+                deleted: [],
+                unmounted: [],
+                remounted: [],
+                added: [],
+            }) as PromptBaseProfile | PromptDeltaProfile;
             if (Object.hasOwn(top, 'sampling')) {
                 if (top.sampling) next.sampling = top.sampling;
                 else delete next.sampling;
