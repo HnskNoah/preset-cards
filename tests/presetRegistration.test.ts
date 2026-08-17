@@ -298,6 +298,26 @@ describe('切片 2：激活同步', () => {
         expect(readPresetMarker(arg.preset)?.kind).toBe('profile');
     });
 
+    it('BEFORE hook removes stale keys that are absent from the fresh projection', async () => {
+        const preset = samplePreset();
+        preset.obsolete_flag = 'stale';
+        const idx = addPreset('Midnight', preset);
+        syncPresetRegistrations('Midnight', idx);
+        const regName = 'Midnight - 战斗版';
+        const regIdx = openai_setting_names[regName];
+        initRegisteredPresetActivation();
+
+        delete (openai_settings[idx] as Record<string, any>).obsolete_flag;
+        const incoming = structuredClone(openai_settings[regIdx]);
+        await eventSource.emit(event_types.OAI_PRESET_CHANGED_BEFORE, {
+            preset: incoming,
+            presetName: regName,
+            settings: {},
+        });
+
+        expect(incoming).not.toHaveProperty('obsolete_flag');
+    });
+
     it('PRESET_CHANGED on the parent preset keeps activeProfile (field-level load path, C4)', async () => {
         const idx = addPreset('Midnight', samplePreset());
         syncPresetRegistrations('Midnight', idx);

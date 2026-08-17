@@ -89,6 +89,18 @@ describe('mergeImportedProfiles from full preset export', () => {
         expect(() => mergeImportedProfiles(preset, [], 'Imported', {} as any)).toThrow();
     });
 
+    it('rejects duplicate profile ids instead of creating an ambiguous profile graph', () => {
+        const duplicate = {
+            kind: 'prompt_tree',
+            formatVersion: 3,
+            profiles: [
+                baseProfile,
+                makeBaseProfile({ id: 'b1', name: 'Other', prompts: [] }),
+            ],
+        };
+        expect(() => mergeImportedProfiles(duplicate, [], 'Imported', {} as any)).toThrow();
+    });
+
     it('keeps v3 payload (tree) import path working unchanged', () => {
         const tree = { kind: 'prompt_tree', formatVersion: 3, profiles: [baseProfile, deltaProfile] };
         const result = mergeImportedProfiles(tree, [], 'Imported', {} as any);

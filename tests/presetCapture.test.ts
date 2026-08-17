@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resetOpenaiMock, addPreset, openai_settings, openai_setting_names, oai_settings } from './mocks/openai.js';
 import { eventSource, event_types } from './mocks/events.js';
 import { captureIfRegistered, initPresetCapture } from '../src/presetCapture.js';
-import { initPresetRegistration, syncPresetRegistrations } from '../src/presetRegistration.js';
+import { findRegisteredPresetName, initPresetRegistration, syncPresetRegistrations } from '../src/presetRegistration.js';
 import { readMeta } from '../src/meta.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
 
@@ -198,5 +198,83 @@ describe('NEW-1：ST 预设键 ↔ 设置键映射', () => {
         } finally {
             settingsToUpdate['temperature'] = orig;
         }
+    });
+});
+
+function topLevelCaptureFixture(): Record<string, any> {
+    return {
+        prompts: [{ identifier: 'p1', content: 'base', role: 'system', system_prompt: false, marker: false }],
+        prompt_order: [{ name: 'main', order: [{ identifier: 'p1', enabled: true }] }],
+        temperature: 0.7,
+        custom_prompt_post_processing: 'base',
+        chat_completion_source: 'openai',
+        openai_model: 'gpt-default',
+        extensions: {
+            preset_cards: {
+                description: '',
+                models: [],
+                bgImage: '',
+                defaultSnapshotLocked: true,
+                defaultSnapshot: [{ identifier: 'p1', mounted: true, enabled: true, originalFields: { content: 'base' } }],
+                defaultSampling: { temperature: 0.7 },
+                defaultExtra: { custom_prompt_post_processing: 'base' },
+                defaultModel: { source: 'openai', name: 'gpt-default' },
+                profiles: [
+                    {
+                        formatVersion: 3,
+                        kind: 'prompt_base',
+                        id: 'B',
+                        name: 'Base',
+                        prompts: [{ identifier: 'p1', mounted: true, enabled: true }],
+                    },
+                    {
+                        formatVersion: 3,
+                        kind: 'prompt_delta',
+                        id: 'D',
+                        name: 'Delta',
+                        baseId: 'B',
+                        changes: [],
+                        sampling: { temperature: 1 },
+                        extra: { custom_prompt_post_processing: 'delta' },
+                        model: { source: 'openai', name: 'gpt-old' },
+                    },
+                ],
+            },
+        },
+    };
+}
+
+function activateRegisteredDelta(parentIndex: number): void {
+    syncPresetRegistrations('Parent', parentIndex);
+    const registeredName = findRegisteredPresetName('D', 'Parent') as string;
+    const registered = openai_settings[openai_setting_names[registeredName]] as Record<string, any>;
+    Object.assign(oai_settings, structuredClone(registered), { preset_settings_openai: registeredName });
+}
+
+describe('registered profile top-level override capture', () => {
+    it('removes sampling and extra overrides when runtime returns to the inherited baseline', async () => {
+        const parentIndex = addPreset('Parent', topLevelCaptureFixture());
+        activateRegisteredDelta(parentIndex);
+        oai_settings.temperature = 0.7;
+        oai_settings.custom_prompt_post_processing = 'base';
+
+        expect(await captureIfRegistered()).toBe(true);
+
+        const delta = (openai_settings[parentIndex] as Record<string, any>)
+            .extensions.preset_cards.profiles.find((profile: any) => profile.id === 'D');
+        expect(delta).not.toHaveProperty('sampling');
+        expect(delta).not.toHaveProperty('extra');
+    });
+
+    it('captures a model-only change and removes the override when it matches the default model', async () => {
+        const parentIndex = addPreset('Parent', topLevelCaptureFixture());
+        activateRegisteredDelta(parentIndex);
+        oai_settings.openai_model = 'gpt-default';
+
+        expect(await captureIfRegistered()).toBe(true);
+
+        const delta = (openai_settings[parentIndex] as Record<string, any>)
+            .extensions.preset_cards.profiles.find((profile: any) => profile.id === 'D');
+        expect(delta).not.toHaveProperty('model');
     });
 });
