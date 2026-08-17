@@ -1,7 +1,7 @@
 /** ST openai 模块的最小 mock：测试可写状态后按需重置。 */
 
 export const settingsToUpdate: Record<string, [string, string, boolean, boolean]> = {
-    chat_completion_source: ['#chat_completion_source', 'chat_completion_source', false, false],
+    chat_completion_source: ['#chat_completion_source', 'chat_completion_source', false, true],
     stream_openai: ['#stream_openai', 'stream_openai', true, false],
     openai_model: ['#openai_model', 'openai_model', false, true],
     claude_model: ['#claude_model', 'claude_model', false, true],

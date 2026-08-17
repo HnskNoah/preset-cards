@@ -299,7 +299,11 @@ export function initRegisteredPresetActivation(): void {
             if (!marker || marker.kind !== 'profile' || !marker.parentKey || !marker.profileId) return;
             const fresh = resolveFreshRegisteredRecord(marker.parentKey, marker.profileId);
             if (!fresh) return;
-            // 应用前覆盖传入记录（native 路径是克隆；fastApply 路径即数组记录本体）
+            // 应用前完整替换传入记录（native 路径是克隆；fastApply 路径即数组记录本体）。
+            // 先删去 fresh 已不存在的键，避免旧投影字段在本次切换中继续被 ST 应用。
+            for (const key of Object.keys(preset)) {
+                if (!Object.hasOwn(fresh, key)) delete preset[key];
+            }
             Object.assign(preset, fresh);
             // 写回存储记录（保持注册记录新鲜 + 落盘）
             const storedIdx = typeof arg.presetName === 'string' ? openai_setting_names[arg.presetName] : undefined;

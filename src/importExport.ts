@@ -216,8 +216,13 @@ export function mergeImportedProfiles(
         throw new Error('Imported configuration is not a valid v3 preset snapshot');
     }
 
-    // 文件内 id 集合
-    const fileIds = new Set(rawProfiles.map((p) => String(p.id)));
+    // profile id 是父链和所有后续操作的唯一锚点；重复 id 会让重映射与 baseId 指向产生歧义。
+    const fileIds = new Set<string>();
+    for (const profile of rawProfiles) {
+        const id = String(profile.id);
+        if (fileIds.has(id)) throw new Error('Imported configuration contains duplicate profile ids');
+        fileIds.add(id);
+    }
 
     // 处理带内嵌父状态的 delta：父不在文件内的，生成本地 base 作为父
     for (const [deltaId, baseState] of deltaBaseMap) {

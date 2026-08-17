@@ -196,6 +196,8 @@ export async function applyProfileToPresetByName(
     const meta = readMeta(preset);
     const profile = getProfile(meta, profileId);
     if (!profile) return false;
+    const presetBefore = structuredClone(preset);
+    const activeBefore = getActiveProfile();
     applyProfileToPreset(preset, profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], {
         showMissingToast: true,
         defaultSampling: meta.defaultSampling,
@@ -207,6 +209,9 @@ export async function applyProfileToPresetByName(
     try {
         await saveMeta(name, idx, meta);
     } catch (err) {
+        for (const key of Object.keys(preset)) delete preset[key];
+        Object.assign(preset, presetBefore);
+        setActiveProfile(activeBefore);
         console.error('Load profile failed', err);
         toastr.error(L('Failed to save preset metadata'));
         return false;

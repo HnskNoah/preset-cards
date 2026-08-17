@@ -64,6 +64,7 @@ export const EXTRA_EXCLUDED_KEYS = new Set([
     'prompt_order',
     'extensions',
     'name',
+    'preset_settings_openai',
     ...Object.keys(settingsToUpdate).filter((key) => settingsToUpdate[key]?.[3] === true),
 ]);
 
