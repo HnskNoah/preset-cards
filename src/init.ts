@@ -9,6 +9,8 @@ import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredP
 import { initPresetCapture } from './presetCapture.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
 
+let _initialized = false;
+
 export function refresh(): void {
     location.reload();
 }
@@ -26,6 +28,8 @@ export function exposePresetCardsApi(): PresetCardsApi {
 }
 
 export function init(): void {
+    if (_initialized) return;
+    _initialized = true;
     initActiveProfile();
     initPresetOrderNormalization();
     initPresetRegistration();
@@ -63,3 +67,8 @@ export function init(): void {
         helpString: 'Opens the preset cards view for Chat Completion presets.',
     }));
 }
+
+// 自初始化：兼容 ShareTarven 非生命周期模式（extensionLifecycle: false），
+// 该模式加载脚本后不调用 manifest hooks，init() 不会自动执行。
+// 生命周期模式下由 extensionLifecycle.activate 调用 init()，守卫防重复执行。
+init();
