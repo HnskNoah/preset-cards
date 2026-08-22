@@ -240,8 +240,11 @@ describe('orderPresetCandidates', () => {
         expect(orderPresetCandidates(['B', 'C'], 'A')).toEqual(['B', 'C']);
     });
 
-    it('returns a copy of the original list without preferredFirst', () => {
-        expect(orderPresetCandidates(['B', 'A'])).toEqual(['B', 'A']);
+    it('returns a new array (not the same reference) without preferredFirst', () => {
+        const input = ['B', 'A'];
+        const out = orderPresetCandidates(input);
+        expect(out).toEqual(['B', 'A']);
+        expect(out).not.toBe(input); // 拷贝语义：调用方改返回值不得污染传入列表
         expect(orderPresetCandidates([])).toEqual([]);
     });
 });

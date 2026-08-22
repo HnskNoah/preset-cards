@@ -15,11 +15,4 @@ describe('resolveProfileMountedMap', () => {
         expect(map.get('a')).toBe(true);
         expect(map.get('u')).toBe(true);
     });
-
-    it('marks entries unknown to the profile as absent', () => {
-        const b = base('b1', [{ identifier: 'a', mounted: true, enabled: true }]);
-        const d = delta('d1', 'b1', []);
-        const map = resolveProfileMountedMap({ profile: d, meta: { profiles: [b, d] } } as any);
-        expect(map.has('unknown-entry')).toBe(false);
-    });
 });

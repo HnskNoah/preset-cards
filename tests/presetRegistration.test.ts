@@ -171,12 +171,16 @@ describe('refreshProjectionRuntimeIfActive (NEW-2)', () => {
         }
     });
 
-    it('no-op when the projection is not the active preset', () => {
+    it('no-op when the projection is not the active preset', async () => {
         const idx = addPreset('Midnight', samplePreset());
         syncPresetRegistrations('Midnight', idx);
         oai_settings.preset_settings_openai = 'Midnight';
-        refreshProjectionRuntimeIfActive('Midnight'); // 不抛错即可(活动是父预设,非投影)
+        // 守卫：活动预设是无 marker 的父预设 → 不得触发重应用，运行时 prompts 保持哨兵值
+        (oai_settings as any).prompts = [{ identifier: 'sentinel', content: 'untouched' }];
+        refreshProjectionRuntimeIfActive('Midnight');
+        await new Promise((r) => setImmediate(r)); // fastApply 为 void 异步
         expect(oai_settings.preset_settings_openai).toBe('Midnight');
+        expect((oai_settings as any).prompts).toEqual([{ identifier: 'sentinel', content: 'untouched' }]);
     });
 });
 

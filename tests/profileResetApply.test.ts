@@ -156,7 +156,6 @@ describe('resetProfileCore (delta)', () => {
 
         const p = resetProfileCore(preset, meta, profile, 'Test', idx);
         await vi.runAllTimersAsync();
-        console.log('S2 debug fetch calls:', failFetch.mock.calls.length);
         await expect(p).resolves.not.toBe('reset');
 
         expect(profile.prompts).toEqual(originalPrompts);

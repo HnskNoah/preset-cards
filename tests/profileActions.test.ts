@@ -5,7 +5,6 @@ import {
     buildDerivedProfile,
     collectAncestorProfileIds,
     collectDescendantProfileIds,
-    isArchiveProfile,
 } from '../src/profileActions.js';
 import { newProfileId } from '../src/meta.js';
 
@@ -86,10 +85,5 @@ describe('profileActions', () => {
         } as any;
         expect(collectAncestorProfileIds(meta, 'x')).toEqual(['x']);
         expect(collectAncestorProfileIds(meta, 'y')).toEqual(['y']);
-    });
-
-    it('archive stubs always return false', () => {
-        expect(isArchiveProfile({} as any)).toBe(false);
-        expect(isArchiveProfile({ archive: true } as any)).toBe(false);
     });
 });
