@@ -1,17 +1,8 @@
 import type { PromptDefaultSnapshotEntry, PromptFields, PromptProfileEntry, PromptStateChange } from './meta.js';
+import { PROMPT_NEVER_CAPTURE, isNeverCaptureIdentifier } from './core/domain/schema.js';
 
-/**
- * 明确定义「不随 profile 快照复制」的 prompt identifier：
- * 这些是第三方扩展自管理的固定名 prompt（content 可能是巨大的设置对象），
- * 采集/挂载还原时一律跳过——不进入 profile 的 prompts/unusedIds/order。
- * 应用时保持 preset 现状（由扩展自己管理），避免复制巨大内容或干扰其内部状态。
- */
-export const PROMPT_NEVER_CAPTURE = new Set<string>(['SPresetSettings']);
-
-/** 判断 identifier 是否应被 profile 快照排除（第三方扩展自管理的固定名）。 */
-export function isNeverCaptureIdentifier(identifier: string): boolean {
-    return PROMPT_NEVER_CAPTURE.has(identifier);
-}
+// 不进 profile 快照的固定名 prompt 集合：实现下沉 core/domain/schema（单一来源），此处 re-export 保持既有调用点。
+export { PROMPT_NEVER_CAPTURE, isNeverCaptureIdentifier };
 
 /** 目标 prompt_order 的角色 id（策略感知）。 */
 export function promptOrderTarget(strategy: 'global' | 'character' | undefined, activeCharacterId?: number): number {
