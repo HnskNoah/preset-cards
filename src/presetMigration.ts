@@ -9,12 +9,13 @@ import type { Preset } from './meta.js';
 import { L } from './i18n.js';
 import { findOrderList, resolvePromptOrderTarget } from './promptOrder.js';
 import { captureExtra, captureModel, captureSampling } from './promptToggle.js';
-import { buildMigrationPlan, type MigrationSource, type MigrationTarget, type MigrationPlan } from './core/migration/plan.js';
+import type { MigrationSource, MigrationTarget } from './core/migration/plan.js';
 import {
+    analyzeMigration,
     applyMigration,
-    type MigratedMeta,
+    type LevelFieldConflict,
     type MigrationApplyOptions,
-    type MigrationApplyReport,
+    type MigrationReplayResult,
 } from './core/migration/apply.js';
 
 /** 目标策略 order 列表（global → 100001 / character → 活动角色）。 */
@@ -48,18 +49,19 @@ export function buildMigrationTarget(preset: Preset): MigrationTarget {
 }
 
 /** dry-run：旧/新预设匹配与冲突清单（零写入，报告 UI 直接消费）。 */
-export function planMigration(sourcePreset: Preset, targetPreset: Preset): MigrationPlan {
-    return buildMigrationPlan(buildMigrationSource(sourcePreset), buildMigrationTarget(targetPreset));
+/** dry-run：逐层重放分析（冲突全量预展开，零写入，向导报告与编辑器迁移模式共用）。 */
+export function planMigration(sourcePreset: Preset, targetPreset: Preset): MigrationReplayResult {
+    return analyzeMigration(buildMigrationSource(sourcePreset), buildMigrationTarget(targetPreset));
 }
 
 export interface MigrationExecution {
     status: 'blocked' | 'applied' | 'persist-failed';
-    unresolved?: MigrationPlan['profileReports'][number]['fieldConflicts'];
-    report?: MigrationApplyReport;
+    unresolved?: LevelFieldConflict[];
+    report?: MigrationReplayResult['report'];
 }
 
 /** 与目标已有 profile 冲突的 id 重新分配，并同步重映射树内 baseId 引用（追加不替换，设计 §7）。 */
-function remapCollidingIds(profiles: MigratedMeta['profiles'], existingIds: Set<string>): MigratedMeta['profiles'] {
+function remapCollidingIds(profiles: MigrationReplayResult['profiles'], existingIds: Set<string>): MigrationReplayResult['profiles'] {
     const reassign = new Map<string, string>();
     for (const p of profiles) {
         if (existingIds.has(String(p.id))) reassign.set(String(p.id), newProfileId());

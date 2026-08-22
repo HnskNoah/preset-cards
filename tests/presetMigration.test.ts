@@ -136,13 +136,12 @@ describe('presetMigration 适配层', () => {
         expect(blocked.status).toBe('blocked');
 
         // 解决冲突（取我的值）后应用
-        const report = plan.profileReports.find((r) => r.fieldConflicts.length > 0)!;
-        const conflict = report.fieldConflicts[0];
+        const conflict = plan.conflicts[0]!;
         const applied = await executeMigration(
             openai_settings[oldIdx] as any, 'Midnight v2', newIdx,
             {
                 orderStrategy: 'keep-mine',
-                resolutions: [{ profileId: report.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, value: conflict.ours }],
+                resolutions: [{ profileId: conflict.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, value: conflict.ours }],
             },
         );
         expect(applied.status).toBe('applied');
@@ -181,11 +180,10 @@ describe('presetMigration 适配层', () => {
         const newIdx = addPreset('Midnight v2', targetWithProfiles);
 
         const plan = planMigration(openai_settings[oldIdx] as any, openai_settings[newIdx] as any);
-        const report = plan.profileReports.find((r) => r.fieldConflicts.length > 0)!;
-        const conflict = report.fieldConflicts[0];
+        const conflict = plan.conflicts[0]!;
         const applied = await executeMigration(
             openai_settings[oldIdx] as any, 'Midnight v2', newIdx,
-            { orderStrategy: 'keep-mine', resolutions: [{ profileId: report.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, value: conflict.ours }] },
+            { orderStrategy: 'keep-mine', resolutions: [{ profileId: conflict.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, value: conflict.ours }] },
         );
         expect(applied.status).toBe('applied');
 
