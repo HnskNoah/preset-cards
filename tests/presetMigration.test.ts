@@ -165,4 +165,43 @@ describe('presetMigration 适配层', () => {
         const projection = openai_settings[openai_setting_names['Midnight v2 - 主配置']];
         expect(readPresetMarker(projection as any)).toMatchObject({ kind: 'profile', parentKey: 'Midnight v2' });
     });
+
+    it('追加不替换：目标已有 profiles 时保留原配置，冲突 id 重分配，基线不动', async () => {
+        const oldIdx = addPreset('Midnight', oldPresetFixture());
+        // 目标自带 profiles（id b1/d1 与迁移树冲突）且已锁定自己的基线
+        const targetWithProfiles = newPresetFixture();
+        targetWithProfiles.extensions.preset_cards.profiles = [
+            { formatVersion: 3, kind: 'prompt_base', id: 'b1', name: '自带配置', prompts: [] },
+            { formatVersion: 3, kind: 'prompt_delta', id: 'd1', name: '自带派生', baseId: 'b1', changes: [] },
+        ];
+        targetWithProfiles.extensions.preset_cards.defaultSnapshotLocked = true;
+        targetWithProfiles.extensions.preset_cards.defaultSnapshot = [
+            { identifier: 'p1', mounted: true, enabled: true, originalFields: { content: 'v2', role: 'system' } },
+        ];
+        const newIdx = addPreset('Midnight v2', targetWithProfiles);
+
+        const plan = planMigration(openai_settings[oldIdx] as any, openai_settings[newIdx] as any);
+        const report = plan.profileReports.find((r) => r.fieldConflicts.length > 0)!;
+        const conflict = report.fieldConflicts[0];
+        const applied = await executeMigration(
+            openai_settings[oldIdx] as any, 'Midnight v2', newIdx,
+            { orderStrategy: 'keep-mine', resolutions: [{ profileId: report.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, value: conflict.ours }] },
+        );
+        expect(applied.status).toBe('applied');
+
+        const newMeta = readMeta(openai_settings[newIdx] as any);
+        // 原有两个 profile 原样保留，迁移的两个追加在后且换了新 id（无冲突覆盖）
+        expect(newMeta.profiles).toHaveLength(4);
+        expect(newMeta.profiles[0].name).toBe('自带配置');
+        expect(newMeta.profiles[1].name).toBe('自带派生');
+        const migratedBase = newMeta.profiles[2];
+        const migratedDelta = newMeta.profiles[3];
+        expect(migratedBase.name).toBe('主配置');
+        expect(migratedBase.id).not.toBe('b1');
+        expect(migratedDelta.id).not.toBe('d1');
+        expect((migratedDelta as any).baseId).toBe(migratedBase.id); // baseId 同步重映射
+        // 目标已锁定的基线不被覆盖（其既有 profiles 依赖它）
+        expect(newMeta.defaultSnapshot).toHaveLength(1);
+        expect(newMeta.defaultSnapshotLocked).toBe(true);
+    });
 });

@@ -4,7 +4,7 @@
 //   - 迁移产物落盘到目标预设（替换式：全量拷贝 profile 树 + 重锁基线，设计 §4 已决策）
 //   - 落盘成功后 onMetaPersisted → syncPresetRegistrations 自动把新预设上的 profiles 注册为投影
 import { openai_settings } from '@sillytavern/scripts/openai';
-import { readMeta, persistMetaTransaction, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
+import { readMeta, persistMetaTransaction, isPromptBaseProfile, isPromptDeltaProfile, newProfileId } from './meta.js';
 import type { Preset } from './meta.js';
 import { L } from './i18n.js';
 import { findOrderList, resolvePromptOrderTarget } from './promptOrder.js';
@@ -12,6 +12,7 @@ import { captureExtra, captureModel, captureSampling } from './promptToggle.js';
 import { buildMigrationPlan, type MigrationSource, type MigrationTarget, type MigrationPlan } from './core/migration/plan.js';
 import {
     applyMigration,
+    type MigratedMeta,
     type MigrationApplyOptions,
     type MigrationApplyReport,
 } from './core/migration/apply.js';
@@ -57,8 +58,27 @@ export interface MigrationExecution {
     report?: MigrationApplyReport;
 }
 
-/** 执行迁移：三方合并 + 替换式落盘到目标预设（profiles 与基线整体替换，v1 决策）。
- * 冲突解决项经 options.resolutions 传入（必须覆盖全部冲突，否则返回 blocked）。 */
+/** 与目标已有 profile 冲突的 id 重新分配，并同步重映射树内 baseId 引用（追加不替换，设计 §7）。 */
+function remapCollidingIds(profiles: MigratedMeta['profiles'], existingIds: Set<string>): MigratedMeta['profiles'] {
+    const reassign = new Map<string, string>();
+    for (const p of profiles) {
+        if (existingIds.has(String(p.id))) reassign.set(String(p.id), newProfileId());
+    }
+    if (reassign.size === 0) return profiles;
+    return profiles.map((p) => {
+        const id = reassign.get(String(p.id)) ?? String(p.id);
+        if (p.kind === 'prompt_delta') {
+            return { ...p, id, baseId: reassign.get(String(p.baseId)) ?? String(p.baseId) };
+        }
+        return { ...p, id };
+    });
+}
+
+/** 执行迁移：三方合并 + 追加式落盘到目标预设。
+ * - profiles 追加到目标现有 profiles 之后（不替换）；id 冲突自动重分配并重映射 baseId；
+ * - 出厂基线（defaultSnapshot/sampling/extra/model）仅在目标**未锁定**基线时写入——
+ *   目标已有自己的基线时不可覆盖，否则其既有 profiles 的 diff 基准会被破坏；
+ * - 冲突解决项经 options.resolutions 传入（必须覆盖全部冲突，否则返回 blocked）。 */
 export async function executeMigration(
     sourcePreset: Preset,
     targetName: string,
@@ -70,16 +90,27 @@ export async function executeMigration(
     const result = applyMigration(buildMigrationSource(sourcePreset), buildMigrationTarget(targetPreset), options);
     if (result.status === 'blocked') return { status: 'blocked', unresolved: result.unresolved };
 
+    const targetMeta = readMeta(targetPreset);
+    const existingIds = new Set(
+        (targetMeta.profiles ?? [])
+            .filter((p: any) => isPromptBaseProfile(p) || isPromptDeltaProfile(p))
+            .map((p: any) => String(p.id)),
+    );
+    const migrated = remapCollidingIds(result.meta.profiles, existingIds);
+    const keepExistingBaseline = targetMeta.defaultSnapshotLocked === true;
+
     const ok = await persistMetaTransaction(
-        readMeta(targetPreset),
+        targetMeta,
         (m) => ({
             ...m,
-            profiles: result.meta.profiles,
-            defaultSnapshot: result.meta.defaultSnapshot,
-            defaultSnapshotLocked: true,
-            defaultSampling: result.meta.defaultSampling,
-            defaultExtra: result.meta.defaultExtra,
-            defaultModel: result.meta.defaultModel,
+            profiles: [...(m.profiles ?? []), ...migrated],
+            ...(keepExistingBaseline ? {} : {
+                defaultSnapshot: result.meta.defaultSnapshot,
+                defaultSnapshotLocked: true,
+                defaultSampling: result.meta.defaultSampling,
+                defaultExtra: result.meta.defaultExtra,
+                defaultModel: result.meta.defaultModel,
+            }),
         }),
         targetName,
         targetIdx,

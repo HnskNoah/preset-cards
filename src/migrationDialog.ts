@@ -259,16 +259,6 @@ export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
     const targetPreset = presetByName(targetName);
     if (!sourcePreset || targetIdx === undefined || !targetPreset) return;
 
-    // 目标已有配置：替换式迁移需确认（v1 决策：全量拷贝 + 重锁基线）
-    const targetHasProfiles = listMigrationSourceNames('').includes(targetName);
-    if (targetHasProfiles) {
-        const confirmed = await callGenericPopup(
-            L('Target preset already has configurations. Migration will REPLACE them all. Continue?'),
-            POPUP_TYPE.CONFIRM,
-        );
-        if (!confirmed) return;
-    }
-
     const plan = planMigration(sourcePreset, targetPreset);
     const decision = await showMigrationReport(plan, sourceName, targetName);
     if (!decision?.apply) return;

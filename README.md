@@ -175,7 +175,7 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/presetCapture.ts` | 保存捕获（切片 3）：SETTINGS_UPDATED 门 + 漂移捕获回 profile + 材料留池 / 新增入父池 + 顶层采样 / extra / 模型漂移 + 扩展漂移 |
 | `src/extCapture.ts` | 扩展漂移检测纯函数：运行时 vs 父预设 extensions 的 mount / unmount / toggle 差异 |
 | `src/extApply.ts` | 扩展覆盖应用纯函数：`extProfile` 应用到预设 clone（摘除 / 新增 / 开关） |
-| `src/presetMigration.ts` | 迁移适配层：预设对象 ↔ core/migration 视图、新出厂基线采集、替换式落盘（落盘后注册链路自动投影） |
+| `src/presetMigration.ts` | 迁移适配层：预设对象 ↔ core/migration 视图、新出厂基线采集、追加式落盘（id 冲突重分配，落盘后注册链路自动投影） |
 | `src/migrationDialog.ts` | 迁移向导 UI：选来源/目标 → dry-run 报告与策略选项 → 冲突三栏裁决 → 应用 |
 | `src/presetBuffers.ts` | 会话编辑缓冲（`sessionEdits` / `pendingToggles`）的键管理与应用（纯数据，不接触 DOM） |
 | `src/activeProfile.ts` | 当前激活 profile 引用（localStorage 持久化）、`getActiveProfile` |

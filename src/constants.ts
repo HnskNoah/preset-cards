@@ -111,7 +111,6 @@ export const LOCAL_DICT: Record<string, string> = {
     'Followed new version': '跟随了新版',
     'No presets with configurations to migrate': '没有可迁移的配置（任何预设都未创建 profile）',
     'Need at least two presets to migrate': '迁移至少需要两个预设',
-    'Target preset already has configurations. Migration will REPLACE them all. Continue?': '目标预设已有配置，迁移将整体替换它们。继续？',
     'Unresolved conflicts remain': '存在未解决的冲突',
     'Rename': '重命名',
     'Edit': '编辑',
