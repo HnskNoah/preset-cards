@@ -15,6 +15,7 @@ import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
 import { addBaseProfile, clearImageCacheAndRefresh, deletePresetByName, exportPresetFile, importPresetFromHeader, importProfileFile, loadProfile, pickJsonFile, refreshActiveCardSelection, refreshActivePresetUI, refreshGrid, reselectFirstPreset, showConciseProfilesModal } from './presetCardsState.js';
 import { refreshCardInPlace } from './presetCardsRender.js';
+import { openMigrationWizard } from './migrationDialog.js';
 import type { CardsContext } from './presetCardsContext.js';
 
 function updateCount(ctx: CardsContext, visible: number, total: number): void {
@@ -405,5 +406,10 @@ export function bindCardsHandlers(ctx: CardsContext): void {
     // ---- Import button（插件接管文件读取，按类型分流）----
     ctx.dialog.on('click', '#preset_cards_import_btn', async function () {
         await importPresetFromHeader(ctx);
+    });
+
+    // ---- Migrate button（预设更新迁移：旧预设 profile 树 rebase 到新版预设）----
+    ctx.dialog.on('click', '#preset_cards_migrate_btn', async function () {
+        await openMigrationWizard(ctx);
     });
 }

@@ -2252,3 +2252,101 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* ---- 预设更新迁移向导（migrationDialog）---- */
+.preset_cards_migration h4 {
+    margin: 0 0 6px;
+}
+
+.preset_cards_migration_hint {
+    opacity: 0.8;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.preset_cards_migration_row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.preset_cards_migration_row > label:first-child {
+    min-width: 9em;
+    opacity: 0.85;
+}
+
+.preset_cards_migration_row select {
+    flex: 1;
+    min-width: 12em;
+}
+
+.preset_cards_migration_summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.preset_cards_migration_actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+.preset_cards_migration_conflict_group {
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    padding-top: 8px;
+    margin-top: 8px;
+}
+
+.preset_cards_migration_conflict_profile {
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.preset_cards_migration_conflict_row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.preset_cards_migration_field {
+    min-width: 10em;
+    max-width: 16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    align-self: center;
+}
+
+.preset_cards_migration_conflict_row > button {
+    flex: 1;
+    min-width: 9em;
+    max-width: 14em;
+    padding: 4px 8px;
+    text-align: left;
+    white-space: normal;
+}
+
+.preset_cards_migration_conflict_row > button.active {
+    outline: 2px solid var(--SmartThemeQuoteColor, #8a2be2);
+}
+
+.preset_cards_migration_choice_label {
+    font-size: 0.8em;
+    opacity: 0.75;
+    display: block;
+}
+
+.preset_cards_migration_choice_value {
+    overflow-wrap: anywhere;
+    display: block;
+    max-height: 6em;
+    overflow: hidden;
+}

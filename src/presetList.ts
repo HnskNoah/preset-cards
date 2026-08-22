@@ -311,6 +311,7 @@ export function getCardsTemplateContext() {
             multiSelect: L('Multi-Select'),
             batchDelete: L('Batch Delete'),
             importPreset: L('Import Preset'),
+            migrateConfig: L('Migrate configurations to updated preset'),
             conciseMode: L('Concise Mode'),
             clearCache: L('Clear Cache'),
             configurations: L('Configurations'),

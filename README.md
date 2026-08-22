@@ -24,6 +24,7 @@
 - **注册为原生预设（注册链路，2026-08 实现）**：profile 投影为 ST 原生预设出现在 ST 预设下拉，原生 UI 与其他扩展可直接切换；原生切换与卡片点击走同一钩子，激活永远是最新父链解析结果；启动 / reload 自动对账重注册。
 - **原生编辑自动捕获（保存捕获）**：注册 profile 激活期间，用户在原生 PromptManager 里改值 / 开关 / 拖顺序 / 删条目 / 新增条目，保存后自动 diff 捕获回 profile delta——原生编辑不再丢改动，形成「编辑 → 捕获 → 下次激活还原同一状态」闭环。
 - **扩展配置随 profile（扩展捕获）**：profile 可记录预设 extensions 的开关与数组条目增删（正则脚本、SPreset 绑定、tavern_helper 脚本等），加载 profile 时一并应用；在注册 profile 激活期间的扩展变更同样被自动捕获。
+- **预设更新迁移（rebase 式三方合并）**：预设出新版按新预设导入后，卡片页头部「迁移配置」把旧预设的整棵 profile 树迁移到新版——未变条目直接复用、作者改过的自动跟随、你改过的保留；双方都改的字段逐项三栏对照（旧出厂值 / 新版值 / 我的值）手动裁决，未解决完不能应用。条目匹配以 identifier 为主键、内容指纹兜底（id 变了内容没变自动重映射）；新条目默认跟随出厂挂载，顺序可选「保留我的 / 跟随新版」。迁移为纯拷贝，旧预设原样保留；落盘后新版预设上的 profiles 自动注册为原生预设投影。
 
 ## 安装与构建
 
@@ -152,6 +153,9 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `tests/extCapture.test.ts` | computeExtensionDrift：扩展 mount / unmount / toggle 与数组条目 enabled / disabled 漂移检测 |
 | `tests/extApply.test.ts` | applyExtensions：扩展覆盖应用到预设 clone（摘除 / 新增 / 开关，含数组条目路径） |
 | `tests/presetCardsState.test.ts` | `applyProfileToPresetByName` 持久化失败回滚 |
+| `tests/presetMigration.test.ts` | 迁移适配层：视图构建 / 来源候选 / plan→execute 闭环（冲突 blocked→解决→落盘重锁基线+自动注册投影） |
+| `tests/migrationPlan.test.ts` | 迁移 dry-run 纯函数：三级匹配 / 五类条目 / 字段级三方冲突 / dangling |
+| `tests/migrationApply.test.ts` | 迁移应用纯函数：blocked 语义 / 三方合并净零 / 顺序策略 / 链感知净零 / 成环保守 |
 
 > 新增逻辑（尤其纯数据变换层）应尽量作为纯函数测试，而非 DOM 弹窗测试；mocks 提供 `addPreset` 等辅助注册预设。
 
@@ -171,6 +175,8 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/presetCapture.ts` | 保存捕获（切片 3）：SETTINGS_UPDATED 门 + 漂移捕获回 profile + 材料留池 / 新增入父池 + 顶层采样 / extra / 模型漂移 + 扩展漂移 |
 | `src/extCapture.ts` | 扩展漂移检测纯函数：运行时 vs 父预设 extensions 的 mount / unmount / toggle 差异 |
 | `src/extApply.ts` | 扩展覆盖应用纯函数：`extProfile` 应用到预设 clone（摘除 / 新增 / 开关） |
+| `src/presetMigration.ts` | 迁移适配层：预设对象 ↔ core/migration 视图、新出厂基线采集、替换式落盘（落盘后注册链路自动投影） |
+| `src/migrationDialog.ts` | 迁移向导 UI：选来源/目标 → dry-run 报告与策略选项 → 冲突三栏裁决 → 应用 |
 | `src/presetBuffers.ts` | 会话编辑缓冲（`sessionEdits` / `pendingToggles`）的键管理与应用（纯数据，不接触 DOM） |
 | `src/activeProfile.ts` | 当前激活 profile 引用（localStorage 持久化）、`getActiveProfile` |
 | `src/presetSnapshot.ts` | defaultSnapshot 锁定 / 合并 / reset 基线 |
@@ -185,4 +191,5 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/core/storage/{project,marker}.ts` | profile 投影为 ST preset + 身份 marker（注册链路核心） |
 | `src/core/registration/register.ts` | 注册链路纯函数：注册 / marker 反查 / 注销 / 变更检测（注册表与命名策略可注入） |
 | `src/core/capture/drift.ts` | 保存捕获纯函数：prompt 级漂移计算与回写（fields / enabled / order / 删增 / 挂载态） |
+| `src/core/migration/{plan,apply}.ts` | 预设更新迁移纯函数：dry-run 三方合并分析（三级匹配/冲突清单）+ 应用（基线重锁/id 重映射/净零/排序策略） |
 | `tools/migrate-to-v3.ts` | v1/v2 → v3 迁移 CLI |
