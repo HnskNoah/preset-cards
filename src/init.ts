@@ -50,13 +50,7 @@ export function init(): void {
     // 对外入口：供其它扩展（如 ST-Quicker-Api 便捷方案）加载 preset-cards 的 profile
     window.presetCards = exposePresetCardsApi();
 
-    const buttonHtml = `
-        <div id="preset_cards_button" class="list-group-item flex-container flexGap5">
-            <div class="fa-solid fa-grip extensionsMenuExtensionButton"></div>` +
-        t`Preset Cards` +
-        '</div>';
-    $('#token_counter_wand_container').append(buttonHtml);
-    $('#preset_cards_button').on('click', openPresetCards);
+    mountWandButton();
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'presetcards',
@@ -68,7 +62,33 @@ export function init(): void {
     }));
 }
 
+/** 侧边栏 wand 按钮：容器可能尚未渲染（ShareTarven 早期注入时早于 DOM ready），
+ * DOM ready 后重试一次；仍缺失则告警放弃（斜杠命令 / 事件监听不受影响）。 */
+function mountWandButton(): void {
+    const container = $('#token_counter_wand_container');
+    if (container.length === 0) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => mountWandButton(), { once: true });
+            return;
+        }
+        console.warn('preset-cards: #token_counter_wand_container not found, wand button not mounted');
+        return;
+    }
+    const buttonHtml = `
+        <div id="preset_cards_button" class="list-group-item flex-container flexGap5">
+            <div class="fa-solid fa-grip extensionsMenuExtensionButton"></div>` +
+        t`Preset Cards` +
+        '</div>';
+    container.append(buttonHtml);
+    $('#preset_cards_button').on('click', openPresetCards);
+}
+
 // 自初始化：兼容 ShareTarven 非生命周期模式（extensionLifecycle: false），
 // 该模式加载脚本后不调用 manifest hooks，init() 不会自动执行。
-// 生命周期模式下由 extensionLifecycle.activate 调用 init()，守卫防重复执行。
-init();
+// 生命周期模式下由 extensionLifecycle.activate 调用 init()，守卫防重复执行；
+// window 哨兵防同一页面重复加载脚本（注入器缓存异常时模块作用域独立，模块级守卫失效，
+// 双重 init 会重复注册事件监听与斜杠命令、重复追加按钮）。
+if (!(window as any).__presetCards_initialized) {
+    (window as any).__presetCards_initialized = true;
+    init();
+}

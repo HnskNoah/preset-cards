@@ -113,6 +113,23 @@ describe('captureIfRegistered', () => {
         expect(await captureIfRegistered()).toBe(false);
     });
 
+    it('no-op when extension drift equals the stored extProfile (net-zero, no persist)', async () => {
+        const parent = parentFixture();
+        parent.extensions.regex_scripts = [{ id: 'r1', findRegex: 'a' }];
+        parent.extensions.preset_cards.profiles[0].extProfile = { extToggles: { 'regex_scripts.r1.disabled': true } };
+        const parentIdx = addPreset('Midnight', parent);
+        syncPresetRegistrations('Midnight', parentIdx);
+        const regIdx = openai_setting_names['Midnight - 战斗版'];
+        Object.assign(oai_settings, structuredClone(openai_settings[regIdx]));
+        oai_settings.preset_settings_openai = 'Midnight - 战斗版';
+        // 运行时扩展 = 父状态 + 已存 extProfile 描述的差异（等价重放，无新漂移）
+        (oai_settings.extensions as Record<string, any>).regex_scripts = [{ id: 'r1', findRegex: 'a', disabled: true }];
+        const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+        const callsBefore = fetchMock.mock.calls.length;
+        expect(await captureIfRegistered()).toBe(false);
+        expect(fetchMock.mock.calls.length).toBe(callsBefore); // 净零：零落盘（旧实现每次保存事件都全量 POST）
+    });
+
     it('captures drift back into the profile, restores pool, adds new prompt, refreshes record', async () => {
         const parentIdx = addPreset('Midnight', parentFixture());
         syncPresetRegistrations('Midnight', parentIdx);
@@ -164,6 +181,58 @@ describe('initPresetCapture', () => {
         const profile = readMeta(parent as any).profiles[0] as any;
         expect(profile.prompts.find((e: any) => e.identifier === 'p1').fields).toEqual({ content: 'v2' });
     });
+});
+
+describe('捕获周期：持久化窗口内并发 SETTINGS_UPDATED 不丢编辑', () => {
+    it('被挡事件重跑捕获，重应用不回滚窗口内编辑', async () => {
+        const parentIdx = addPreset('Midnight', parentFixture());
+        syncPresetRegistrations('Midnight', parentIdx);
+        const regIdx = openai_setting_names['Midnight - 战斗版'];
+        Object.assign(oai_settings, structuredClone(openai_settings[regIdx]));
+        oai_settings.preset_settings_openai = 'Midnight - 战斗版';
+        initPresetCapture();
+
+        // 编辑 A：p1 content → v2，触发捕获进入持久化窗口（300ms 合并 + POST）
+        oai_settings.prompts = (oai_settings.prompts as any[]).map((p: any) =>
+            p.identifier === 'p1' ? { ...p, content: 'v2' } : p);
+        void eventSource.emit(event_types.SETTINGS_UPDATED);
+        await new Promise((r) => setTimeout(r, 5)); // 捕获已读取运行时（仅含 A）并进入 await
+
+        // 窗口内编辑 B：p1 关闭（改在目标策略 order 列表上——drift 按 character_id 列表比较）。
+        // 旧实现：事件被防重入门丢弃 → 捕获 A 落盘后 refresh 用旧时点记录重应用 → B 被静默抹掉。
+        // 新实现：记待重跑，捕获链落定后应用含 B 的最新记录。
+        const targetList = (oai_settings.prompt_order as any[]).find((l: any) => String(l.character_id) === '100001')
+            ?? (oai_settings.prompt_order as any[])[0];
+        targetList.order = (targetList.order as any[]).map((e: any) =>
+            e.identifier === 'p1' ? { ...e, enabled: false } : e);
+        void eventSource.emit(event_types.SETTINGS_UPDATED);
+
+        const parent = openai_settings[parentIdx] as Record<string, any>;
+        for (let i = 0; i < 250; i++) {
+            const profile = readMeta(parent as any).profiles[0] as any;
+            if (profile.prompts.find((e: any) => e.identifier === 'p1')?.fields?.content === 'v2'
+                && profile.prompts.find((e: any) => e.identifier === 'p1')?.enabled === false) break;
+            await new Promise((r) => setTimeout(r, 20));
+        }
+        const profile = readMeta(parent as any).profiles[0] as any;
+        // 两次编辑都被捕获进 profile
+        expect(profile.prompts.find((e: any) => e.identifier === 'p1').fields).toEqual({ content: 'v2' });
+        expect(profile.prompts.find((e: any) => e.identifier === 'p1').enabled).toBe(false);
+
+        // 重应用后运行时保留两次编辑（未被旧时点记录回滚）
+        for (let i = 0; i < 250; i++) {
+            const list = (oai_settings.prompt_order as any[]).find((l: any) => String(l.character_id) === '100001')
+                ?? (oai_settings.prompt_order as any[])[0];
+            const orderEntry = (list.order as any[]).find((e: any) => e.identifier === 'p1');
+            const prompt = (oai_settings.prompts as any[]).find((p: any) => p.identifier === 'p1');
+            if (orderEntry?.enabled === false && prompt?.content === 'v2') break;
+            await new Promise((r) => setTimeout(r, 20));
+        }
+        expect((oai_settings.prompts as any[]).find((p: any) => p.identifier === 'p1')?.content).toBe('v2');
+        const finalList = (oai_settings.prompt_order as any[]).find((l: any) => String(l.character_id) === '100001')
+            ?? (oai_settings.prompt_order as any[])[0];
+        expect((finalList.order as any[]).find((e: any) => e.identifier === 'p1')?.enabled).toBe(false);
+    }, 20000);
 });
 
 describe('NEW-1：ST 预设键 ↔ 设置键映射', () => {
