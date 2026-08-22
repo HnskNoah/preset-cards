@@ -12,6 +12,7 @@ import type { Preset, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { applyProfileToPreset } from './promptToggle.js';
 import { fastApplyPreset } from './fastApply.js';
+import { whenCaptureSettled } from './presetCapture.js';
 import { buildProfileMarker, readPresetMarker } from './core/storage/marker.js';
 import { buildProjectedPreset } from './core/storage/project.js';
 import {
@@ -124,11 +125,13 @@ export function buildRegisteredSnapshots(preset: Preset): RegisteredProfileSnaps
  * 对账某预设的注册：未注册 → 新增；已注册且内容变化 → 重写；profile 已删 → 注销孤儿。
  * 内容未变时零写入（不触发 saveSettingsDebounced）。返回是否发生了变更。
  */
-export function syncPresetRegistrations(presetName: string, presetIndex: number): boolean {
+export function syncPresetRegistrations(presetName: string, _presetIndex?: number): boolean {
     // 父预设已被删除(原生删除会清 openai_setting_names;数组元素可能残留)时跳过对账,
     // 避免在途 meta 保存的 onMetaPersisted 用残留记录重建孤儿投影(与 doSaveMeta 同守卫)
     if (openai_setting_names[presetName] === undefined) return false;
-    const preset = openai_settings[presetIndex] as Preset | undefined;
+    // 索引以映射表当前值为准（调用方闭包捕获的索引可能因数组重建/同名替换过期,
+    // 用旧索引会把别的预设当父注册,连带 marker.parentKey 错标与孤儿清扫误删）
+    const preset = openai_settings[openai_setting_names[presetName]] as Preset | undefined;
     if (!preset) return false;
     const registry = createStRegistry();
     let touched = false;
@@ -162,7 +165,13 @@ export function syncPresetRegistrations(presetName: string, presetIndex: number)
     return touched;
 }
 
-/** 若活动预设是某父预设的 profile 投影,重应用其最新记录（保持运行时与投影记录一致）。 */
+/** 若活动预设是某父预设的 profile 投影,重应用其最新记录（保持运行时与投影记录一致）。
+ * 先等捕获周期（含持久化窗口内被挡事件的待重跑轮）落定再应用——否则窗口内的用户编辑
+ * 会被旧时点记录覆盖丢失（编辑 A 触发捕获 → 持久化期间编辑 B 被防重入记为待重跑 →
+ * 若立刻用 A 时点记录重应用,B 即被抹掉）。
+ * refreshing 防级联重入：捕获落盘 → onMetaPersisted → sync → 本函数的递归调用直接跳过,
+ * 由本次调用的收尾 fastApply 统一应用最新记录。 */
+let refreshing = false;
 export function refreshProjectionRuntimeIfActive(parentPresetName: string): void {
     const activeName = oai_settings.preset_settings_openai;
     if (typeof activeName !== 'string') return;
@@ -170,7 +179,14 @@ export function refreshProjectionRuntimeIfActive(parentPresetName: string): void
     if (idx === undefined) return;
     const marker = readPresetMarker(openai_settings[idx]);
     if (!marker || marker.kind !== 'profile' || marker.parentKey !== parentPresetName) return;
-    void fastApplyPreset(idx, activeName).catch((err) => console.error('preset-cards: fastApply failed', err));
+    if (refreshing) return;
+    refreshing = true;
+    void whenCaptureSettled()
+        .then(() => {
+            refreshing = false;
+            // 捕获周期(及其触发的对账级联)完成后应用最新记录;级联内已被 refreshing 拦截,此处为唯一应用点
+            void fastApplyPreset(idx, activeName).catch((err) => console.error('preset-cards: fastApply failed', err));
+        });
 }
 
 /** 注销某父预设名下全部注册（删除父预设时调用；不抛错，失败仅本地清理）。 */

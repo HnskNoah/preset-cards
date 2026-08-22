@@ -211,6 +211,12 @@ export async function applyProfileToPresetByName(
     } catch (err) {
         for (const key of Object.keys(preset)) delete preset[key];
         Object.assign(preset, presetBefore);
+        // saveMeta 在 fetch 前已把新 meta 镜像进运行时 extensions（目标为活动预设时），回滚须一并还原，
+        // 否则 oai_settings.extensions 残留指向已回滚内容的脏引用
+        if (oai_settings.preset_settings_openai === name) {
+            if (!oai_settings.extensions) oai_settings.extensions = {};
+            oai_settings.extensions[EXTENSION_KEY] = presetBefore.extensions?.[EXTENSION_KEY];
+        }
         setActiveProfile(activeBefore);
         console.error('Load profile failed', err);
         toastr.error(L('Failed to save preset metadata'));

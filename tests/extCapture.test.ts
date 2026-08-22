@@ -3,6 +3,34 @@ import { describe, it, expect } from 'vitest';
 import { computeExtensionDrift } from '../src/extCapture.js';
 
 describe('computeExtensionDrift', () => {
+    it('treats absent disabled as false / absent enabled as true (no ghost toggle on equivalent states)', () => {
+        // runtime 显式 disabled:false vs 父未写入该字段 = 等价的「未禁用」状态，不得产生 toggle
+        const runtime = {
+            extensions: {
+                regex_scripts: [{ id: 'r1', disabled: false }],
+            },
+        };
+        const parent = {
+            extensions: {
+                regex_scripts: [{ id: 'r1' }],
+            },
+        };
+        expect(computeExtensionDrift(runtime, parent)).toBeNull();
+
+        // runtime 未写 enabled vs 父 enabled:true = 等价的「启用」状态
+        expect(computeExtensionDrift(
+            { extensions: { regex_scripts: [{ id: 'r1', enabled: true }] } },
+            { extensions: { regex_scripts: [{ id: 'r1' }] } },
+        )).toBeNull();
+
+        // 真翻转仍要检出：父 disabled:true → runtime 显式 false
+        const flipped = computeExtensionDrift(
+            { extensions: { regex_scripts: [{ id: 'r1', disabled: false }] } },
+            { extensions: { regex_scripts: [{ id: 'r1', disabled: true }] } },
+        );
+        expect(flipped!.extToggles!['regex_scripts.r1.disabled']).toBe(false);
+    });
+
     it('detects a mounted item (in runtime but not in parent)', () => {
         const runtime = {
             extensions: {

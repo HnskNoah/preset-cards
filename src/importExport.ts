@@ -1,6 +1,7 @@
 import { POPUP_TYPE, callGenericPopup } from '@sillytavern/scripts/popup';
 import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
+import { stableStringify } from './stableStringify.js';
 import {
     isPromptBaseProfile,
     isPromptDeltaProfile,
@@ -76,18 +77,7 @@ export function extractProfilesFromPresetExport(parsed: Record<string, unknown>)
         isPromptBaseProfile(p) || isPromptDeltaProfile(p));
 }
 
-/** 稳定序列化：对象键递归排序，语义相同但键序不同的对象指纹一致。 */
-function stableStringify(value: unknown): string {
-    return JSON.stringify(value, (_key, v) => {
-        if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-            const record = v as Record<string, unknown>;
-            const sorted: Record<string, unknown> = {};
-            for (const k of Object.keys(record).sort()) sorted[k] = record[k];
-            return sorted;
-        }
-        return v;
-    });
-}
+// 稳定序列化已下沉 stableStringify.ts（捕获侧净零比较共用）
 
 /**
  * profile 内容指纹：排除 id / name / baseId（跨导入随机 id 重映射后仍可比较）。

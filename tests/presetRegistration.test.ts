@@ -67,6 +67,16 @@ describe('buildRegisteredSnapshots', () => {
 });
 
 describe('syncPresetRegistrations', () => {
+    it('resolves the parent record from the current name→index mapping (stale passed index ignored)', () => {
+        const idx = addPreset('Midnight', samplePreset());
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(true); // 初次注册
+
+        // 数组重建/同名替换场景：映射表已指向失效索引。旧索引闭包值不得被使用,
+        // 否则会把别的记录当父注册（marker.parentKey 错标 + 孤儿清扫误删）
+        openai_setting_names['Midnight'] = 99;
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(false);
+    });
+
     it('registers all profiles and reports touched; repeats are no-ops', () => {
         const idx = addPreset('Midnight', samplePreset());
 

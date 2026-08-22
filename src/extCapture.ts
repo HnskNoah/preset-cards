@@ -70,14 +70,16 @@ export function computeExtensionDrift(
         }
         if (unmounted.length > 0) unmount[path] = unmounted;
 
-        // Toggle：两者共有条目上的 disabled/enabled 字段变化
+        // Toggle：两者共有条目上的 disabled/enabled 字段变化。
+        // 归一缺省语义再比较（disabled 缺省 = false、enabled 缺省 = true），
+        // 否则「runtime 显式 false vs 父未写入」的等价状态会产生永真 toggle，净零永远不成立
         for (const [id, runtimeItem] of runtimeById) {
             const parentItem = parentById.get(id);
             if (!parentItem) continue;
-            if (runtimeItem.disabled !== parentItem.disabled) {
+            if ((runtimeItem.disabled ?? false) !== (parentItem.disabled ?? false)) {
                 toggles[`${path}.${id}.disabled`] = runtimeItem.disabled;
             }
-            if (runtimeItem.enabled !== parentItem.enabled) {
+            if ((runtimeItem.enabled ?? true) !== (parentItem.enabled ?? true)) {
                 toggles[`${path}.${id}.enabled`] = runtimeItem.enabled;
             }
         }
