@@ -191,6 +191,37 @@ describe('analyzeMigration（逐层重放分析）', () => {
         expect(followNew.conflicts[0]).toMatchObject({ kind: 'prompt_delta', base: 'MY', ours: 'D1', theirs: 'B' });
     });
 
+    it('残留 resolution 不消费：冲突因上层重选蒸发后，手动编辑值不得写入（含计数）', () => {
+        const { source, target } = fixture([
+            baseProfile({ prompts: [{ identifier: 'p1', mounted: true, enabled: true, fields: { content: 'MY' } }] }),
+            deltaProfile({ changes: [{ identifier: 'p1', fields: { content: 'D1' } }] }),
+        ]);
+        // 上层改选保我的(MY) → delta 三方收敛（theirs===baseVal===MY）→ 冲突消失
+        const stale = previewMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [
+                { profileId: 'b1', newIdentifier: 'p1', field: 'content', value: 'MY' },
+                { profileId: 'd1', newIdentifier: 'p1', field: 'content', value: 'Z' }, // 残留
+            ],
+        });
+        expect(stale.conflicts).toHaveLength(0);
+        const delta = stale.profiles[1] as PromptDeltaProfile;
+        expect(delta.changes.find((c) => c.identifier === 'p1')?.fields?.content).toBe('D1'); // 非 Z
+        expect(stale.report.conflictsResolved).toBe(1); // 只消费上层那次真冲突解决
+
+        // 真冲突仍在时决策照常生效（防矫枉过正）
+        const live = previewMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [
+                { profileId: 'b1', newIdentifier: 'p1', field: 'content', value: 'B' },
+                { profileId: 'd1', newIdentifier: 'p1', field: 'content', value: 'X' },
+            ],
+        });
+        expect(live.conflicts).toHaveLength(0);
+        const deltaLive = live.profiles[1] as PromptDeltaProfile;
+        expect(deltaLive.changes.find((c) => c.identifier === 'p1')?.fields?.content).toBe('X');
+    });
+
     it('dangling 引用进报告（含 unusedIds）；指纹重映射后不算 dangling', () => {
         const { source, target } = fixture([]);
         const withRemoved: MigrationSource = {

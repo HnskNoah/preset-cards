@@ -99,6 +99,12 @@ export interface MigrationReplayResult {
     };
 }
 
+/** 冲突解决项的键（JSON 编码，避免 identifier 含 \t 等分隔符时反解错位）。
+ * 编辑器（migrationEditor）写 resolutions 与引擎查表必须走同一构造，锁步契约。 */
+export function resolutionKey(profileId: string, newIdentifier: string, field: PromptFieldKey): string {
+    return JSON.stringify([profileId, newIdentifier, field]);
+}
+
 /** 白名单拾取（镜像 promptCapture.capturePromptFields：跳过 undefined）。 */
 function captureFields(def: Record<string, any> | undefined): PromptFields {
     const out: PromptFields = {};
@@ -143,6 +149,12 @@ export function relockDefaultSnapshot(target: MigrationTarget): PromptDefaultSna
         out.push({ identifier: id, mounted: false, enabled: false, originalFields: captureFields(p) });
     }
     return out;
+}
+
+/** 旧版（仅开关）defaultSnapshot 条目归一：缺 mounted 按「有 enabled 布尔即挂载」推断，缺 enabled 视为 false。 */
+function normalizeDefaultSnapshotEntry(e: PromptDefaultSnapshotEntry): PromptDefaultSnapshotEntry {
+    const mounted = typeof e.mounted === 'boolean' ? e.mounted : typeof e.enabled === 'boolean';
+    return { ...e, mounted, enabled: e.enabled ?? false };
 }
 
 /** 链解析态（净零与逐层三方基准；旧树按旧 id、迁移树按新 id 键控）。 */
@@ -257,7 +269,10 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
 
     const oldDefById = new Map(oldPool.map((e) => [e.identifier, e.def]));
     const newDefById = new Map(newPool.map((e) => [e.identifier, e.def]));
-    const snapshotById = new Map((source.defaultSnapshot ?? []).map((e) => [e.identifier, e]));
+    // v2 时代旧快照条目可能缺 mounted（{identifier, enabled}=挂载、无 enabled=unused）：
+    // 先按 entriesFromDefaultSnapshot 同规则归一，否则 undefined 会让 mergeMount 把
+    // 「出厂变化」误判为「用户有意保留 ours」，报告也整页误标 mount changed。
+    const snapshotById = new Map((source.defaultSnapshot ?? []).map((e) => [e.identifier, normalizeDefaultSnapshotEntry(e)]));
     const oldOrderById = new Map((source.order ?? []).filter((e: any) => e && typeof e.identifier === 'string').map((e) => [e.identifier as string, e]));
     const newOrderById = new Map((target.order ?? []).filter((e: any) => e && typeof e.identifier === 'string').map((e) => [e.identifier as string, e]));
 
@@ -281,12 +296,14 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
         });
     }
 
+    // 键用 JSON 编码而非分隔符拼接：identifier 是预设作者自定义串，含 \t 时
+    // split 反解会错位，导致编辑器写入的 resolution 永远匹配不上（Apply 卡死）。
     const resolutions = new Map<string, unknown>();
     for (const r of options.resolutions ?? []) {
-        resolutions.set(`${r.profileId}	${r.newIdentifier}	${r.field}`, r.value);
+        resolutions.set(resolutionKey(r.profileId, r.newIdentifier, r.field), r.value);
     }
     const resolutionOf = (profileId: string, newId: string, field: PromptFieldKey): unknown =>
-        resolutions.get(`${profileId}	${newId}	${field}`);
+        resolutions.get(resolutionKey(profileId, newId, field));
 
     const conflicts: LevelFieldConflict[] = [];
     const report: MigrationReplayReport = {
@@ -479,14 +496,18 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
             const baseVal = fieldOf(snapshotById.get(entry.identifier)?.originalFields, field) ?? fieldOf(view.oldDef, field);
             const theirs = fieldOf(view.newDef, field);
             const resolution = resolutionOf(base.id, view.newId, field);
-            const final = resolution !== undefined ? resolution : ours;
-            if (resolution !== undefined) report.conflictsResolved++;
-            if (resolution === undefined && ours !== baseVal && theirs !== baseVal && ours !== theirs) {
+            // 真冲突才消费决策：上游重选使三方收敛后，残留的手动编辑值不得再生效
+            // （设计：上层解决后才确定下层是否有冲突，无冲突的层不消费 resolutions）。
+            const conflicted = ours !== baseVal && theirs !== baseVal && ours !== theirs;
+            const resolvedNow = conflicted && resolution !== undefined;
+            const final = resolvedNow ? resolution : ours;
+            if (resolvedNow) report.conflictsResolved++;
+            if (conflicted && resolution === undefined) {
                 conflicts.push({ profileId: base.id, profileName: base.name, kind: 'prompt_base', chainLevel: 0, newIdentifier: view.newId, entryName, field, base: baseVal, ours, theirs });
             }
             if (final !== theirs) {
                 (fields as Record<string, unknown>)[field] = final;
-                if (resolution === undefined) report.preservedOurs++;
+                if (!resolvedNow) report.preservedOurs++;
             } else {
                 report.netZeroDropped++;
             }
@@ -525,14 +546,16 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
                 const baseVal = oldParentState?.fields[field] ?? (view ? fieldOf(view.oldDef, field) : undefined);
                 const theirs = newParentState?.fields[field] ?? (view ? fieldOf(view.newDef, field) : undefined);
                 const resolution = view ? resolutionOf(delta.id, view.newId, field) : undefined;
-                const final = resolution !== undefined ? resolution : ours;
-                if (resolution !== undefined) report.conflictsResolved++;
-                if (view && resolution === undefined && ours !== baseVal && theirs !== baseVal && ours !== theirs) {
+                const conflicted = view !== undefined && ours !== baseVal && theirs !== baseVal && ours !== theirs;
+                const resolvedNow = conflicted && resolution !== undefined;
+                const final = resolvedNow ? resolution : ours;
+                if (resolvedNow) report.conflictsResolved++;
+                if (conflicted && resolution === undefined) {
                     conflicts.push({ profileId: delta.id, profileName: delta.name, kind: 'prompt_delta', chainLevel: level, newIdentifier: view.newId, entryName, field, base: baseVal, ours, theirs });
                 }
                 if (final !== theirs) {
                     (fields as Record<string, unknown>)[field] = final;
-                    if (resolution === undefined) report.preservedOurs++;
+                    if (!resolvedNow) report.preservedOurs++;
                 } else {
                     report.netZeroDropped++;
                 }
