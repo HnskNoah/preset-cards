@@ -105,7 +105,7 @@ profile 可记录预设 `extensions` 下第三方数据的开关与数组条目�
 
 路径白名单见 `src/constants.ts`：数组路径 `EXT_ARRAY_PATHS`（`regex_scripts`、`SPreset.RegexBinding.regexes`、`tavern_helper.scripts`），布尔路径 `EXT_BOOLEAN_PATHS`。每次捕获全量重算，无差异自动删除该字段。
 
-**加载语义**：`extToggles` 沿父链叠加（祖先 → 自身，同名键自身优先）——开关是状态，子层站在父层状态之上；`extMounts` / `extUnmounts` 是该层的结构性意图，**不继承**，仅应用本层自己的。
+**加载语义**：三部分统一沿父链依次应用（祖先 → 自身）——`extToggles` 后写者胜；后代可摘除祖先挂载的条目；各层新增条目并存（按条目 id 去重）。捕获侧不变，仍是相对预设运行时的 sparse diff、每次全量重算。
 
 ## 9. 导出文件格式
 

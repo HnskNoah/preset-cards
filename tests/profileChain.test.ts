@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { diffSampling, diffExtra } from '../src/promptCapture.js';
-import { collectProfileChain, resolveEffectiveSampling, resolveEffectiveExtra, resolveEffectiveExtToggles, applyProfileToPreset } from '../src/promptApply.js';
+import { collectProfileChain, resolveEffectiveSampling, resolveEffectiveExtra, applyProfileToPreset } from '../src/promptApply.js';
 import { buildNewBaseProfile } from '../src/profileMutators.js';
 
 const base = (id: string, prompts: any[] = [], opts: any = {}): any => ({
@@ -93,34 +93,40 @@ describe('applyProfileToPreset sampling/extra/model chain', () => {
         expect(preset.openai_model).toBe('gpt-4o');
     });
 
-    it('resolves effective ext toggles as chain overlay with self precedence', () => {
-        const b = base('b1', [], { extProfile: { extToggles: { 'regex_scripts.r1.disabled': true, 'SPreset.ChatSquash.enabled': false } } });
-        const d = delta('d1', 'b1', { extProfile: { extToggles: { 'regex_scripts.r1.disabled': false } } });
-        // 自身覆盖父层同名键；未覆盖的父层键继承
-        expect(resolveEffectiveExtToggles(d, [b, d])).toEqual({ 'regex_scripts.r1.disabled': false, 'SPreset.ChatSquash.enabled': false });
-        expect(resolveEffectiveExtToggles(b, [b])).toEqual({ 'regex_scripts.r1.disabled': true, 'SPreset.ChatSquash.enabled': false });
-    });
 
-    it('applies inherited toggles on delta but does not inherit structural mounts', () => {
+    it('applies extension overrides along the chain: toggles overlay, mounts persist, unmounts prune', () => {
         const preset: any = {
             prompts: [],
             prompt_order: [],
             extensions: { regex_scripts: [{ id: 'r1', scriptName: 'X', disabled: true }] },
-            tavern_helper: {},
         };
         const b = base('b1', [], {
             extProfile: {
-                extMounts: { regex_scripts: [{ id: 'r9', definition: { id: 'r9', scriptName: 'Base新增' } }] },
-                extToggles: { 'regex_scripts.r1.disabled': false },
+                extMounts: { regex_scripts: [{ id: 'r9', definition: { id: 'r9', scriptName: 'Base新增', disabled: true } }] },
+                extToggles: { 'regex_scripts.r1.disabled': false }, // 父层把 r1 打开
             },
         });
-        const d = delta('d1', 'b1'); // 自身无任何扩展覆盖：开关继承父层，mount 不继承
+        const d = delta('d1', 'b1', {
+            extProfile: {
+                extUnmounts: { regex_scripts: ['r9'] },   // 后代摘除祖先挂载的条目
+                extToggles: { 'regex_scripts.r1.disabled': true }, // 自身开关覆盖父层
+            },
+        });
         applyProfileToPreset(preset as unknown as Parameters<typeof applyProfileToPreset>[0], d as never, [b as never, d as never]);
         const scripts = (preset.extensions.regex_scripts ?? []) as Array<{ id: string; disabled?: boolean }>;
-        expect(scripts.find((s) => s.id === 'r1')?.disabled).toBe(false); // 父层开关被继承应用
-        expect(scripts.find((s) => s.id === 'r9')).toBeUndefined();       // 结构性 mount 不继承
+        expect(scripts.map((s) => s.id)).toEqual(['r1']); // r9 被后代摘除
+        expect(scripts[0].disabled).toBe(true);           // 开关后写者胜（delta 覆盖 base）
     });
- });
+
+    it('keeps ancestor mounts when descendants do not touch them', () => {
+        const preset: any = { prompts: [], prompt_order: [], extensions: {} };
+        const b = base('b1', [], { extProfile: { extMounts: { regex_scripts: [{ id: 'r9', definition: { id: 'r9', scriptName: 'Base新增' } }] } } });
+        const d = delta('d1', 'b1');
+        applyProfileToPreset(preset as unknown as Parameters<typeof applyProfileToPreset>[0], d as never, [b as never, d as never]);
+        const scripts = (preset.extensions.regex_scripts ?? []) as Array<{ id: string }>;
+        expect(scripts.map((s) => s.id)).toEqual(['r9']); // 无关层级的挂载沿链保留
+    });
+});
 
 describe('buildNewBaseProfile sparse capture', () => {
     it('stores no sampling/extra when identical to factory baseline', () => {

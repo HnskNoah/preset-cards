@@ -1,6 +1,6 @@
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
-import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptModel, PromptProfileEntry, PromptSampling, ExtProfileOverride } from './meta.js';
+import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptModel, PromptProfileEntry, PromptSampling } from './meta.js';
 import { filterFields, applySampling, applyExtra, applyModel, capturePromptFields, findPromptInPreset } from './promptCapture.js';
 import { findOrderList, resolvePromptOrderTarget, replaceTargetPromptOrder, syncPromptOrder, resolveProfilePrompts, pruneStaleOrderEntries } from './promptOrder.js';
 import { snapshotPromptState } from './promptState.js';
@@ -167,20 +167,6 @@ export function resolveEffectiveExtra(
     }
     return Object.keys(merged).length > 0 ? merged : undefined;
 }
-/** 解析 profile 的有效扩展开关（extToggles）：祖先链各层依次叠加、自身优先。
- * 仅开关做链式继承——开关是状态，子层应站在父层状态之上；
- * extMounts / extUnmounts 为该层的结构性意图，维持单层应用不继承。 */
-export function resolveEffectiveExtToggles(
-    profile: PresetProfile,
-    allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
-): Record<string, boolean> | undefined {
-    if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return undefined;
-    const merged: Record<string, boolean> = {};
-    for (const p of collectProfileChain(profile, allProfiles)) {
-        if (p.extProfile?.extToggles) Object.assign(merged, p.extProfile.extToggles);
-    }
-    return Object.keys(merged).length > 0 ? merged : undefined;
-}
 
 export function applyProfileToPreset(
     preset: Preset,
@@ -228,16 +214,10 @@ export function applyProfileToPreset(
     const extra = resolveEffectiveExtra(profile, allProfiles, opts?.defaultExtra);
     if (extra) applyExtra(preset, extra);
 
-    // 扩展覆盖：mount/unmount 为该层结构性意图，单层应用不继承；
-    // 开关（extToggles）沿父链叠加、自身优先——子层站在父层状态之上。
-    const selfExt: ExtProfileOverride | undefined = profile.extProfile;
-    const toggles = resolveEffectiveExtToggles(profile, allProfiles);
-    if (selfExt?.extMounts || selfExt?.extUnmounts || toggles) {
-        applyExtensions(preset, {
-            ...(selfExt?.extMounts ? { extMounts: selfExt.extMounts } : {}),
-            ...(selfExt?.extUnmounts ? { extUnmounts: selfExt.extUnmounts } : {}),
-            ...(toggles ? { extToggles: toggles } : {}),
-        });
+    // 扩展覆盖沿父链依次应用（祖先 → 自身）：开关后写者胜、后代可摘除祖先挂载的条目、
+    // 各层新增条目并存；applyExtensions 自带按 id 去重与 no-op 摘除。
+    for (const p of collectProfileChain(profile, allProfiles)) {
+        if (p.extProfile) applyExtensions(preset, p.extProfile);
     }
 }
 
