@@ -118,7 +118,46 @@ export async function executeMigration(
             .map((id) => srcById.get(id))
             .filter((p): p is { identifier?: string } => p !== undefined)
             .map((p) => structuredClone(p));
-        if (carried.length > 0) patch = { prompts: [...((targetPreset.prompts ?? []) as unknown[]), ...carried] };
+        if (carried.length > 0) patch = { ...(patch ?? {}), prompts: [...((targetPreset.prompts ?? []) as unknown[]), ...carried] };
+
+        // 预设正则（extensions.regex_scripts）：uuid 或 scriptName 任一重叠 → 内容保留目标版，
+        // 但开关（disabled）以来源为准；未重叠条目整条带入（含自身开关态）。
+        interface RegexScriptLike { id?: unknown; scriptName?: unknown; disabled?: unknown }
+        const isScript = (s: unknown): s is RegexScriptLike =>
+            s !== null && typeof s === 'object' && ('id' in s || 'scriptName' in s);
+        const srcExt = (sourcePreset.extensions ?? {}) as { regex_scripts?: unknown[] };
+        if (Array.isArray(srcExt.regex_scripts) && srcExt.regex_scripts.length > 0) {
+            const srcRegex: unknown[] = srcExt.regex_scripts;
+            const mergedExt = structuredClone((targetPreset.extensions ?? {}) as Record<string, unknown>);
+            const tgtRegex: unknown[] = Array.isArray(mergedExt.regex_scripts) ? mergedExt.regex_scripts : [];
+            const srcScripts = srcRegex.filter(isScript);
+            const srcById = new Map(srcScripts.map((s): [string, RegexScriptLike] => [String(s.id), s]));
+            const srcByName = new Map(srcScripts.map((s): [string, RegexScriptLike] => [String(s.scriptName), s]));
+            let touched = false;
+            const kept: unknown[] = [];
+            for (const t of tgtRegex) {
+                if (!isScript(t)) { kept.push(t); continue; }
+                const src = srcById.get(String(t.id)) ?? srcByName.get(String(t.scriptName));
+                if (src !== undefined && 'disabled' in src) {
+                    t.disabled = src.disabled; // 开关随来源迁移
+                    touched = true;
+                }
+                kept.push(t);
+            }
+            const additions = srcScripts.filter((s) => !kept.some((t) => {
+                if (!isScript(t)) return false;
+                const sameId = t.id !== undefined && String(t.id) === String(s.id);
+                const sameName = t.scriptName !== undefined && String(t.scriptName) === String(s.scriptName);
+                return sameId || sameName;
+            }));
+            if (additions.length > 0) {
+                mergedExt.regex_scripts = [...kept, ...additions];
+                touched = true;
+            } else if (touched) {
+                mergedExt.regex_scripts = kept;
+            }
+            if (touched) patch = { ...(patch ?? {}), extensions: mergedExt };
+        }
     }
     const keepExistingBaseline = targetMeta.defaultSnapshotLocked === true;
 

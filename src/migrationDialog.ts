@@ -179,7 +179,7 @@ function showMigrationReport(
         ], options.mountNew, (v) => { options.mountNew = v as WizardOptions['mountNew']; },
     ));
     container.append(optionRow(
-        L('Missing prompt definitions'), 'defs', [
+        L('Source attachments'), 'defs', [
             [L('Keep skipped'), 'skip'],
             [L('Carry from source preset'), 'carry'],
         ], options.carryMissingDefs ? 'carry' : 'skip', (v) => { options.carryMissingDefs = v === 'carry'; },

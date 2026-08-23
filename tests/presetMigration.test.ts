@@ -211,7 +211,7 @@ describe('presetMigration 适配层', () => {
         expect(newMeta.defaultSnapshotLocked).toBe(true);
     });
 
-    it('carryMissingDefs：跨预设迁移把目标缺失的来源 prompt 定义随事务带入；默认不带入', async () => {
+    it('carryMissingDefs：跨预设迁移带入缺失 prompt 定义与预设正则（重叠目标优先）；默认均不带入', async () => {
         // 夹具为宽松字面量，结构与 Preset 对齐；经 unknown 断言后按类型读取
         const asPreset = (p: unknown): Preset => p as Preset;
         const unrelated = (): Record<string, unknown> => ({
@@ -219,8 +219,17 @@ describe('presetMigration 适配层', () => {
             prompts: [{ identifier: 'z9', name: 'Z条目', content: 'cz', role: 'system', system_prompt: false, marker: false }],
             prompt_order: [{ name: 'main', character_id: 100001, order: [{ identifier: 'z9', enabled: true }] }],
             temperature: 0.5,
-            extensions: { preset_cards: { description: '', models: [], bgImage: '', profiles: [] } },
+            extensions: {
+                preset_cards: { description: '', models: [], bgImage: '', profiles: [] },
+                regex_scripts: [
+                    { id: 'r2', scriptName: 'B正则', disabled: false },
+                    { id: 'r1', scriptName: 'A正则', disabled: true }, // 与来源同名同 id：重叠样本（B 版禁用）
+                ],
+            },
         });
+        const regexStates = (idx: number): string[] =>
+            (((openai_settings[idx] as Preset).extensions ?? {}) as { regex_scripts?: Array<{ scriptName?: unknown; disabled?: unknown }> }).regex_scripts
+                ?.map((s) => `${String(s.scriptName)}:${String(s.disabled)}`) ?? [];
         const promptIds = (idx: number): string[] =>
             ((openai_settings[idx] as Preset).prompts ?? []).map((p) => String(p.identifier));
 
@@ -229,20 +238,27 @@ describe('presetMigration 适配层', () => {
         // 夹具为宽松字面量，此处一次性具名断言到所需形状（结构由上方字面量保证）
         const srcFixture = oldPresetFixture() as {
             prompts: Array<Record<string, unknown>>;
-            extensions: { preset_cards: { profiles: Array<{ unusedIds?: string[] }> } };
+            extensions: {
+                preset_cards: { profiles: Array<{ unusedIds?: string[] }> };
+                regex_scripts?: Array<Record<string, unknown>>;
+            };
         };
         srcFixture.prompts.push(
             { identifier: 'p4', name: '未挂载引用', content: 'cx', role: 'system', system_prompt: false, marker: false },
             { identifier: 'p5', name: '无引用', content: 'cy', role: 'system', system_prompt: false, marker: false },
         );
         srcFixture.extensions.preset_cards.profiles[0].unusedIds = ['p4'];
-
+        srcFixture.extensions.regex_scripts = [
+            { id: 'r1', scriptName: 'A正则', disabled: false },  // 重叠：开关以来源为准（启用）
+            { id: 'r3', scriptName: 'A正则三', disabled: true }, // 新增：整条带入含自身开关
+        ];
         // 默认（作者更新语义）：新版删除的条目不复活，目标池不动
         const srcIdx1 = addPreset('SrcA', srcFixture);
         const tgtIdx1 = addPreset('TgtB', unrelated());
         await executeMigration(asPreset(openai_settings[srcIdx1]), 'TgtB', tgtIdx1, { orderStrategy: 'keep-mine', mountNew: 'factory' });
         await waitFor(() => (readMeta(asPreset(openai_settings[tgtIdx1])).profiles ?? []).length > 0);
-        expect(promptIds(tgtIdx1)).toEqual(['z9']);
+        expect(promptIds(tgtIdx1)).toEqual(['z9']); // 默认：目标池不动
+        expect(regexStates(tgtIdx1)).toEqual(['B正则:false', 'A正则:true']); // 默认不动正则（含开关）
 
         // 显式开启（跨预设场景）：缺失的定义随事务写入，name 字段保留
         resetOpenaiMock();
@@ -251,7 +267,8 @@ describe('presetMigration 适配层', () => {
         const tgtIdx2 = addPreset('TgtB', unrelated());
         await executeMigration(asPreset(openai_settings[srcIdx2]), 'TgtB', tgtIdx2, { orderStrategy: 'keep-mine', mountNew: 'factory', carryMissingDefs: true });
         expect(promptIds(tgtIdx2)).toEqual(['z9', 'p1', 'p2', 'p4']); // 严格相等：unusedIds 计入引用，无引用的 p5 不得混入
-        const carried = ((openai_settings[tgtIdx2] as Preset).prompts ?? []).find((p) => p.identifier === 'p1');
-        expect(carried?.name).toBe('条目一');
+        expect(regexStates(tgtIdx2)).toEqual(['B正则:false', 'A正则:false', 'A正则三:true']); // 重叠开关随来源，新增整条带入
+        const extAfter = ((openai_settings[tgtIdx2] as Preset).extensions ?? {}) as { preset_cards?: unknown };
+        expect(extAfter.preset_cards).toBeDefined(); // 插件自身 meta 字段不被合并破坏
     });
 });
