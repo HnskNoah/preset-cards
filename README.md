@@ -24,7 +24,7 @@
 - **注册为原生预设（注册链路，2026-08 实现）**：profile 投影为 ST 原生预设出现在 ST 预设下拉，原生 UI 与其他扩展可直接切换；原生切换与卡片点击走同一钩子，激活永远是最新父链解析结果；启动 / reload 自动对账重注册。
 - **原生编辑自动捕获（保存捕获）**：注册 profile 激活期间，用户在原生 PromptManager 里改值 / 开关 / 拖顺序 / 删条目 / 新增条目，保存后自动 diff 捕获回 profile delta——原生编辑不再丢改动，形成「编辑 → 捕获 → 下次激活还原同一状态」闭环。
 - **扩展配置随 profile（扩展捕获）**：profile 可记录预设 extensions 的开关与数组条目增删（正则脚本、SPreset 绑定、tavern_helper 脚本等），加载 profile 时一并应用；在注册 profile 激活期间的扩展变更同样被自动捕获。
-- **预设更新迁移（rebase 式三方合并）**：预设出新版按新预设导入后，卡片页头部「迁移配置」把旧预设的整棵 profile 树迁移到新版——未变条目直接复用、作者改过的自动跟随、你改过的保留；双方都改的字段逐项三栏对照（旧出厂值 / 新版值 / 我的值）手动裁决，未解决完不能应用。条目匹配以 identifier 为主键、内容指纹兜底（id 变了内容没变自动重映射）；新条目默认跟随出厂挂载，顺序可选「保留我的 / 跟随新版」。迁移为纯拷贝，旧预设原样保留；落盘后新版预设上的 profiles 自动注册为原生预设投影。
+- **预设更新迁移（rebase 式三方合并，v2 逐层重放）**：预设出新版按新预设导入后，卡片页头部「迁移配置」把旧预设的整棵 profile 树迁移到新版——未变条目直接复用、作者改过的自动跟随、你改过的保留；冲突在 profile 编辑器内图形化解决（左栏仅列冲突条目、右栏三方对照 + 手动编辑第四选项），每次裁决全量重放、上层解决可能增减下层冲突（rebase 语义），未解决完「应用迁移」置灰。条目匹配以 identifier 为主键、内容指纹兜底（id 变了内容没变自动重映射）；新条目默认跟随出厂挂载，顺序可选「保留我的 / 跟随新版」。**来源附带内容**：跨预设迁移可开「从来源预设带入」，把目标缺失的 prompt 定义（含未挂载引用）与来源预设正则一并带入——正则 uuid/名称重叠时内容保留目标版、开关状态随来源；默认关闭保持作者更新语义。迁移为纯拷贝，旧预设原样保留；落盘后新版预设上的 profiles 自动注册为原生预设投影。
 
 ## 安装与构建
 
@@ -51,7 +51,7 @@ npm test           # 运行 vitest 单元测试
 
 ## 数据模型
 
-所有扩展数据存于预设对象的 `extensions['preset_cards']`（描述、适用模型、背景图、profiles、隐藏默认基准、出厂采样基线），通过 ST 的 `/api/presets/save` 持久化。
+所有扩展数据存于预设对象的 `extensions['preset_cards']`（描述、适用模型、背景图、profiles、隐藏默认基准、出厂采样基线），通过 ST 的 `/api/presets/save` 持久化。完整字段级格式声明（两种容器形态、Base/Delta 全字段、扩展覆盖、导出文件形状）见 **[PROFILE_FORMAT.md](PROFILE_FORMAT.md)**。
 
 - **Base（`formatVersion: 3`, `kind: 'prompt_base'`）**：`prompts[]` 为 `{ identifier, mounted, enabled, lastActiveIndex?, fields? }`，记录完整挂载状态与开关；可选 `unusedIds`（保存时未挂载的 identifier 集合）、`sampling`、`extra`、`model`。`fields` 只含「与出厂基线有差异」的值字段。
 - **Delta（`formatVersion: 3`, `kind: 'prompt_delta'`）**：`{ baseId, changes[], order? }`，`changes` 为 `{ identifier, mounted?, enabled?, lastActiveIndex?, fields? }`，仅记录相对上级的差异，可嵌套；`order` 记录完整挂载顺序。
