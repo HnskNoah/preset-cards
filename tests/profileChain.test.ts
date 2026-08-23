@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { diffSampling, diffExtra } from '../src/promptCapture.js';
-import { collectProfileChain, resolveEffectiveSampling, resolveEffectiveExtra, applyProfileToPreset } from '../src/promptApply.js';
+import { collectProfileChain, resolveEffectiveSampling, resolveEffectiveExtra, resolveEffectiveExtToggles, applyProfileToPreset } from '../src/promptApply.js';
 import { buildNewBaseProfile } from '../src/profileMutators.js';
 
 const base = (id: string, prompts: any[] = [], opts: any = {}): any => ({
@@ -92,7 +92,35 @@ describe('applyProfileToPreset sampling/extra/model chain', () => {
         applyProfileToPreset(preset, d, [b, d], { defaultModel: { source: 'openai', name: 'gpt-4o' } });
         expect(preset.openai_model).toBe('gpt-4o');
     });
-});
+
+    it('resolves effective ext toggles as chain overlay with self precedence', () => {
+        const b = base('b1', [], { extProfile: { extToggles: { 'regex_scripts.r1.disabled': true, 'SPreset.ChatSquash.enabled': false } } });
+        const d = delta('d1', 'b1', { extProfile: { extToggles: { 'regex_scripts.r1.disabled': false } } });
+        // 自身覆盖父层同名键；未覆盖的父层键继承
+        expect(resolveEffectiveExtToggles(d, [b, d])).toEqual({ 'regex_scripts.r1.disabled': false, 'SPreset.ChatSquash.enabled': false });
+        expect(resolveEffectiveExtToggles(b, [b])).toEqual({ 'regex_scripts.r1.disabled': true, 'SPreset.ChatSquash.enabled': false });
+    });
+
+    it('applies inherited toggles on delta but does not inherit structural mounts', () => {
+        const preset: any = {
+            prompts: [],
+            prompt_order: [],
+            extensions: { regex_scripts: [{ id: 'r1', scriptName: 'X', disabled: true }] },
+            tavern_helper: {},
+        };
+        const b = base('b1', [], {
+            extProfile: {
+                extMounts: { regex_scripts: [{ id: 'r9', definition: { id: 'r9', scriptName: 'Base新增' } }] },
+                extToggles: { 'regex_scripts.r1.disabled': false },
+            },
+        });
+        const d = delta('d1', 'b1'); // 自身无任何扩展覆盖：开关继承父层，mount 不继承
+        applyProfileToPreset(preset as unknown as Parameters<typeof applyProfileToPreset>[0], d as never, [b as never, d as never]);
+        const scripts = (preset.extensions.regex_scripts ?? []) as Array<{ id: string; disabled?: boolean }>;
+        expect(scripts.find((s) => s.id === 'r1')?.disabled).toBe(false); // 父层开关被继承应用
+        expect(scripts.find((s) => s.id === 'r9')).toBeUndefined();       // 结构性 mount 不继承
+    });
+ });
 
 describe('buildNewBaseProfile sparse capture', () => {
     it('stores no sampling/extra when identical to factory baseline', () => {

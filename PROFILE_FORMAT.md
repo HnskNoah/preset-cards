@@ -105,6 +105,8 @@ profile 可记录预设 `extensions` 下第三方数据的开关与数组条目�
 
 路径白名单见 `src/constants.ts`：数组路径 `EXT_ARRAY_PATHS`（`regex_scripts`、`SPreset.RegexBinding.regexes`、`tavern_helper.scripts`），布尔路径 `EXT_BOOLEAN_PATHS`。每次捕获全量重算，无差异自动删除该字段。
 
+**加载语义**：`extToggles` 沿父链叠加（祖先 → 自身，同名键自身优先）——开关是状态，子层站在父层状态之上；`extMounts` / `extUnmounts` 是该层的结构性意图，**不继承**，仅应用本层自己的。
+
 ## 9. 导出文件格式
 
 导出统一为**完整 preset JSON**（4 空格缩进）：预设本体 + `extensions['preset_cards']`。脱敏剔除连接/凭据键（`reverse_proxy`、`proxy_password`、`custom_url` 及 `is_connection` 标记项）。单 profile 导出只保留该 profile 及其父链，并写入 `extensions.preset_cards.targetId`（字符串）。导入侧从同一字段提取 profiles 并入目标预设。
