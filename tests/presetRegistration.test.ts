@@ -14,6 +14,8 @@ import {
     syncAllPresetRegistrations,
     refreshProjectionRuntimeIfActive,
     onActiveProfileChangedBySwitch,
+    createStRegistry,
+    onPresetRegistryChanged,
 } from '../src/presetRegistration.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
@@ -52,6 +54,25 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+});
+
+describe('onPresetRegistryChanged', () => {
+    it('upsert 新增/改写与 remove 触发通知，remove 未知道目不触发；退订后不再通知', () => {
+        const registry = createStRegistry();
+        let hits = 0;
+        const off = onPresetRegistryChanged(() => { hits += 1; });
+        registry.upsert('Proj', samplePreset()); // push 分支（新增条目）
+        expect(hits).toBe(1);
+        registry.upsert('Proj', samplePreset()); // 原地改写分支
+        expect(hits).toBe(2);
+        registry.remove('Unknown'); // 未注册名：no-op 不通知
+        expect(hits).toBe(2);
+        registry.remove('Proj');
+        expect(hits).toBe(3);
+        off();
+        registry.upsert('Proj', samplePreset());
+        expect(hits).toBe(3); // 已退订
+    });
 });
 
 describe('buildRegisteredSnapshots', () => {

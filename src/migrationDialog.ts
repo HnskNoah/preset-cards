@@ -6,6 +6,8 @@ import { openai_settings, openai_setting_names } from '@sillytavern/scripts/open
 import { POPUP_TYPE, callGenericPopup } from '@sillytavern/scripts/popup';
 import type { Preset } from './meta.js';
 import { L } from './i18n.js';
+import { onMetaPersisted } from './meta.js';
+import { onPresetRegistryChanged } from './presetRegistration.js';
 import { planMigration, executeMigration, listMigrationSourceNames } from './presetMigration.js';
 import type { MigrationReplayResult } from './core/migration/apply.js';
 import type { ReplayOptions } from './core/migration/replay.js';
@@ -19,7 +21,7 @@ function presetByName(name: string): Preset | undefined {
 }
 
 /** 弹窗展示 + resolver 模式（同 chooseFromOptions）：按钮/关闭任一先到先得。 */
-function showWithResolver<T>(container: JQuery<HTMLElement>, onSettle: (resolve: (v: T | null) => void) => void): Promise<T | null> {
+function showWithResolver<T>(container: JQuery<HTMLElement>, onSettle: (resolve: (v: T | null) => void) => void, onSettled?: () => void): Promise<T | null> {
     let resolver: (v: T | null) => void;
     let settled = false;
     const promise = new Promise<T | null>((r) => { resolver = r; });
@@ -27,6 +29,7 @@ function showWithResolver<T>(container: JQuery<HTMLElement>, onSettle: (resolve:
         if (settled) return;
         settled = true;
         resolver(v);
+        onSettled?.();
         container.closest('.popup').find('.popup-controls .menu_button').click();
     };
     onSettle(settle);
@@ -40,33 +43,54 @@ function showWithResolver<T>(container: JQuery<HTMLElement>, onSettle: (resolve:
     return promise;
 }
 
-/** 第一步：选择来源（旧预设，须有配置）与目标（新预设）。 */
-function pickPresets(sources: string[], allNames: string[]): Promise<[string, string] | null> {
+/** 第一步：选择来源（旧预设，须有配置）与目标（新预设）。
+ * 弹窗非模态：订阅插件自有变更事件（meta 持久化 / 预设注册表条目变化），弹窗存续期间
+ * 数据变化时就地重建选项并保留当前选中项，关闭即退订。 */
+function pickPresets(
+    getSources: () => string[],
+    getAllNames: () => string[],
+): Promise<[string, string] | null> {
     const container = $('<div class="preset_cards_migration"></div>');
     container.append($('<h4></h4>').text(L('Migrate configurations to updated preset')));
     container.append($('<div class="preset_cards_migration_hint"></div>').text(L('Copy all profiles from an old preset onto its updated version, merging your edits with the author\'s changes (three-way merge).')));
 
+    /** 就地重建下拉选项；prev 仍在可见集合时保留选中，否则回落到首个可见项。 */
+    const syncSelect = (select: JQuery<HTMLElement>, names: string[], skip?: string): void => {
+        const prev = select.val();
+        const visible = skip === undefined ? names : names.filter((n) => n !== skip);
+        select.empty();
+        for (const name of visible) select.append($('<option></option>').val(name).text(name));
+        const keep = typeof prev === 'string' && visible.includes(prev) ? prev : visible[0];
+        if (keep !== undefined) select.val(keep);
+    };
+
     const sourceRow = $('<div class="preset_cards_migration_row"></div>');
     sourceRow.append($('<label></label>').text(L('Source preset (old)')));
     const sourceSelect = $('<select class="text_pole textarea_compact"></select>');
-    for (const name of sources) sourceSelect.append($('<option></option>').val(name).text(name));
     sourceRow.append(sourceSelect);
     container.append(sourceRow);
 
     const targetRow = $('<div class="preset_cards_migration_row"></div>');
     targetRow.append($('<label></label>').text(L('Target preset (updated)')));
     const targetSelect = $('<select class="text_pole textarea_compact"></select>');
-    const rebuildTargets = (): void => {
-        targetSelect.empty();
-        for (const name of allNames) {
-            if (name === (sourceSelect.val() as string)) continue;
-            targetSelect.append($('<option></option>').val(name).text(name));
-        }
-    };
-    rebuildTargets();
-    sourceSelect.on('change', rebuildTargets);
     targetRow.append(targetSelect);
     container.append(targetRow);
+
+    const rebuildTargets = (): void => syncSelect(targetSelect, getAllNames(), sourceSelect.val() as string | undefined);
+    const rebuildAll = (): void => {
+        syncSelect(sourceSelect, getSources());
+        rebuildTargets();
+    };
+    syncSelect(sourceSelect, getSources());
+    rebuildTargets();
+
+    // 换源即时重建目标列表（不等事件）
+    sourceSelect.on('change', rebuildTargets);
+
+    const unsubscribe = [
+        onMetaPersisted(rebuildAll),
+        onPresetRegistryChanged(rebuildAll),
+    ];
 
     const actions = $('<div class="preset_cards_migration_actions"></div>');
     const nextBtn = $('<button class="menu_button"></button>').text(L('Analyze migration'));
@@ -74,10 +98,17 @@ function pickPresets(sources: string[], allNames: string[]): Promise<[string, st
     actions.append(nextBtn, cancelBtn);
     container.append(actions);
 
+    const teardown = (): void => { for (const off of unsubscribe) off(); };
     return showWithResolver<[string, string]>(container, (settle) => {
-        nextBtn.on('click', () => settle([sourceSelect.val() as string, targetSelect.val() as string]));
-        cancelBtn.on('click', () => settle(null));
-    });
+        const done = (v: [string, string] | null): void => { teardown(); settle(v); };
+        nextBtn.on('click', () => {
+            const s = sourceSelect.val();
+            const t = targetSelect.val();
+            if (typeof s !== 'string' || typeof t !== 'string') return;
+            done([s, t]);
+        });
+        cancelBtn.on('click', () => done(null));
+    }, teardown);
 }
 
 interface WizardOptions {
@@ -162,20 +193,21 @@ function showMigrationReport(
 
 /** 迁移向导入口（卡片页头部按钮）。 */
 export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
-    const sources = listMigrationSourceNames('');
-    if (sources.length === 0) {
+    const readSources = (): string[] => listMigrationSourceNames('');
+    const readAllNames = (): string[] =>
+        [...new Set((openai_settings as Preset[])
+            .map((p) => (p && typeof p.name === 'string' ? p.name : ''))
+            .filter(Boolean))];
+    if (readSources().length === 0) {
         void callGenericPopup(L('No presets with configurations to migrate'), POPUP_TYPE.TEXT);
         return;
     }
-    const allNames = (openai_settings as Preset[])
-        .map((p) => (p && typeof p.name === 'string' ? p.name : ''))
-        .filter(Boolean);
-    if (allNames.length < 2) {
+    if (readAllNames().length < 2) {
         void callGenericPopup(L('Need at least two presets to migrate'), POPUP_TYPE.TEXT);
         return;
     }
 
-    const picked = await pickPresets(sources, allNames);
+    const picked = await pickPresets(readSources, readAllNames);
     if (!picked) return;
     const [sourceName, targetName] = picked;
 
@@ -198,6 +230,12 @@ export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
     // 无冲突 → 直接应用
     const result = await executeMigration(sourcePreset, targetName, targetIdx, { orderStrategy, mountNew });
     if (result.status === 'persist-failed') return;
+    if (result.status === 'blocked') {
+        // 分析与执行之间源/目标可能已变（如捕获周期追加了 delta）产生新冲突：
+        // 与编辑器路径同样提示，而不是对 undefined report 解引用崩溃。
+        void callGenericPopup(L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
+        return;
+    }
     const r = result.report!;
     void callGenericPopup(
         `${L('Migration applied')}：${r.profilesMigrated} profiles · ${L('Preserved my edits')}: ${r.preservedOurs} · ${L('Followed new version')}: ${r.netZeroDropped + r.mountFollowed}`,

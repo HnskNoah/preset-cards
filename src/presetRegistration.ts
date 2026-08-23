@@ -41,6 +41,26 @@ export const placeholderNaming: PresetNaming = {
     },
 };
 
+/** 预设注册表条目变化监听器（upsert/remove 触发）。 */
+type PresetRegistryListener = () => void;
+const presetRegistryListeners = new Set<PresetRegistryListener>();
+
+/** 订阅预设注册表条目变化（新增/改写/删除条目时触发），返回退订函数。 */
+export function onPresetRegistryChanged(listener: PresetRegistryListener): () => void {
+    presetRegistryListeners.add(listener);
+    return () => { presetRegistryListeners.delete(listener); };
+}
+
+function notifyPresetRegistryChanged(): void {
+    for (const listener of [...presetRegistryListeners]) {
+        try {
+            listener();
+        } catch (err) {
+            console.error('preset-cards: preset registry listener failed', err);
+        }
+    }
+}
+
 /** ST 注册表适配：openai_settings 数组 + openai_setting_names 映射（对齐 saveOpenAIPreset 语义）。 */
 export function createStRegistry(): PresetRegistry {
     return {
@@ -63,11 +83,13 @@ export function createStRegistry(): PresetRegistry {
             const idx = openai_setting_names[name];
             if (idx !== undefined) {
                 openai_settings[idx] = record;
+                notifyPresetRegistryChanged();
                 return;
             }
             openai_settings.push(record);
             openai_setting_names[name] = openai_settings.length - 1;
             appendDropdownOption(name, openai_settings.length - 1);
+            notifyPresetRegistryChanged();
         },
         remove: (name) => {
             const idx = openai_setting_names[name];
@@ -80,6 +102,7 @@ export function createStRegistry(): PresetRegistry {
             }).catch((err) => console.error('preset-cards: unregister preset delete failed', err));
             delete openai_setting_names[name];
             delete openai_settings[idx]; // 保留索引空洞（对齐 ST 删除语义，不 splice 位移）
+            notifyPresetRegistryChanged();
             if (typeof document !== 'undefined') {
                 const selectEl = document.querySelector('#settings_preset_openai') as HTMLSelectElement | null;
                 selectEl?.querySelector(`option[value="${idx}"]`)?.remove();
@@ -184,17 +207,23 @@ export function refreshProjectionRuntimeIfActive(parentPresetName: string): void
     void whenCaptureSettled()
         .then(() => {
             refreshing = false;
+            // 捕获窗口（合并窗口 + 网络 RTT，可被待重跑轮延长）内用户可能已切换预设：
+            // 仅当活动名未变时才重应用——fastApplyPreset 会无条件改写 preset_settings_openai，
+            // 否则会把用户显式切走的选择静默拉回本投影。
+            if (oai_settings.preset_settings_openai !== activeName) return;
             // 捕获周期(及其触发的对账级联)完成后应用最新记录;级联内已被 refreshing 拦截,此处为唯一应用点
             void fastApplyPreset(idx, activeName).catch((err) => console.error('preset-cards: fastApply failed', err));
         });
 }
 
-/** 注销某父预设名下全部注册（删除父预设时调用；不抛错，失败仅本地清理）。 */
-export async function unregisterAllForPreset(presetName: string): Promise<void> {
+/** 注销某父预设名下全部注册（删除父预设时调用；不抛错，失败仅本地清理）。
+ * 返回被注销的注册名列表（供调用方清理悬空的活动指针/activeProfile 引用）。 */
+export async function unregisterAllForPreset(presetName: string): Promise<string[]> {
     const registry = createStRegistry();
     const owned = findRegistrationsByParent(registry, presetName);
     for (const reg of owned) registry.remove(reg.name);
     if (owned.length > 0) saveSettingsDebounced();
+    return owned.map((reg) => reg.name);
 }
 
 /** 初始化：订阅 meta 持久化成功事件，自动对账注册；并在设置加载后全量对账一次
@@ -219,12 +248,33 @@ export function initPresetRegistration(): void {
     eventSource.on(event_types.PRESET_DELETED, (arg: any) => {
         const name = typeof arg?.name === 'string' ? arg.name : undefined;
         if (!name) return;
+        // 无论该预设名下有无注册投影都通知（向导等列表 UI 需要感知条目消失）
+        notifyPresetRegistryChanged();
         try {
-            void unregisterAllForPreset(name);
+            void unregisterAllForPreset(name).then((removedNames) => {
+                // 删除的父预设若有激活中的投影：投影刚被注销，ST 不会重置指向它的活动指针
+                //（原生只处理「删的就是活动预设」），悬空引用会残留到 settings.json 并让
+                // getActiveProfile() 持续报告已删除的 profile——与插件删除路径对齐，这里清掉。
+                if (oai_settings.preset_settings_openai !== null
+                    && removedNames.includes(String(oai_settings.preset_settings_openai))) {
+                    oai_settings.preset_settings_openai = null;
+                    saveSettingsDebounced();
+                }
+                const activeRef = getActiveProfile();
+                if (activeRef && activeRef.presetName === name) {
+                    setActiveProfile(undefined);
+                }
+            });
         } catch (err) {
             console.error('preset-cards: cleanup registrations on preset delete failed', err);
         }
     });
+    // ST 原生导入/保存预设（openai.js saveOpenAIPreset）不发 eventSource 事件，
+    // 只 trigger #settings_preset_openai 的 change——委托转发进注册表变更通知。
+    // 守卫：纯逻辑单测（node 环境）无 DOM/jQuery。
+    if (typeof document !== 'undefined' && typeof $ === 'function') {
+        $(document).on('change.presetCards', '#settings_preset_openai', () => notifyPresetRegistryChanged());
+    }
 }
 
 /** 全量对账（幂等；启动/reload 后调用）：存活预设的 profile 全部注册/重写；

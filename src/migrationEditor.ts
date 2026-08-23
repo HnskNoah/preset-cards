@@ -12,7 +12,7 @@ import {
     type LevelFieldConflict,
     type MigrationReplayResult,
 } from './core/migration/apply.js';
-import type { ConflictResolution, ReplayOptions } from './core/migration/replay.js';
+import { resolutionKey, type ConflictResolution, type ReplayOptions } from './core/migration/replay.js';
 import type { PromptFieldKey } from './core/migration/plan.js';
 import type { CardsContext } from './presetCardsContext.js';
 import { refreshGrid } from './presetCardsState.js';
@@ -35,13 +35,23 @@ function manualEditInput(field: PromptFieldKey, value: unknown): JQuery<HTMLElem
         return $('<input type="number" class="text_pole textarea_compact pc-migration-manual-input"></input>')
             .val(typeof value === 'number' ? value : 0);
     }
+    if (field === 'role') {
+        const select = $('<select class="text_pole textarea_compact pc-migration-manual-input"></select>');
+        for (const r of ['system', 'user', 'assistant']) {
+            select.append($('<option></option>').val(r).text(r));
+        }
+        select.val(typeof value === 'string' && ['system', 'user', 'assistant'].includes(value) ? value : 'system');
+        return select;
+    }
     return $('<input type="text" class="text_pole textarea_compact pc-migration-manual-input"></input>')
         .val(typeof value === 'string' ? value : '');
 }
 
 function parseManualValue(field: PromptFieldKey, el: JQuery<HTMLElement>): unknown {
-    const raw = (el.val() as string) ?? '';
+    const raw = ((el.val() as string) ?? '').trim();
     if (field === 'injection_position' || field === 'injection_depth') {
+        // 空输入视为无效（Number('')===0 会误写 injection_depth:0，同 editModal 的守卫）
+        if (raw === '') return undefined;
         const n = Number(raw);
         return Number.isFinite(n) ? n : undefined;
     }
@@ -54,7 +64,7 @@ function previewText(value: unknown): { text: string; title: string } {
 }
 
 function keyOf(c: LevelFieldConflict): string {
-    return `${c.profileId}	${c.newIdentifier}	${c.field}`;
+    return resolutionKey(c.profileId, c.newIdentifier, c.field);
 }
 
 /** 编辑器迁移模式会话。返回是否完成应用（false = 用户关闭放弃）。 */
@@ -74,8 +84,8 @@ export async function openMigrationEditor(params: {
 
     const resolutionsList = (): ConflictResolution[] =>
         [...resolutions.entries()].map(([k, v]) => {
-            const [profileId, newIdentifier, field] = k.split('	');
-            return { profileId, newIdentifier, field: field as PromptFieldKey, value: v };
+            const [profileId, newIdentifier, field] = JSON.parse(k) as [string, string, PromptFieldKey];
+            return { profileId, newIdentifier, field, value: v };
         });
     const recompute = (): MigrationReplayResult => previewMigration(source, target, {
         orderStrategy: params.orderStrategy,
@@ -122,9 +132,12 @@ export async function openMigrationEditor(params: {
         counterEl.text(current.conflicts.length > 0
             ? `${L('Resolve conflicts')}: ${current.conflicts.length}`
             : L('All conflicts resolved'));
-        applyBtn.prop('disabled', current.conflicts.length > 0);
-        if (current.conflicts.length > 0
-            && (selectedEntry === null || !current.conflicts.some((c) => c.newIdentifier === selectedEntry))) {
+        // 设计 §115：未解决完不能应用——视觉禁用，而非仅点击静默拦截
+        applyBtn.toggleClass('disabled', current.conflicts.length > 0)
+            .prop('disabled', current.conflicts.length > 0);
+        // 仅在无选中时自动定位首个冲突：普通条目点击后选中项不在冲突集是预期态
+        //（查看迁移后预览），不能弹回——旧行为把点击变成视觉 no-op。
+        if (selectedEntry === null && current.conflicts.length > 0) {
             selectedEntry = current.conflicts[0].newIdentifier;
         }
         renderLeft();
@@ -155,19 +168,6 @@ export async function openMigrationEditor(params: {
             listEl.append(group);
         }
 
-        // 常规条目预览：迁移后最浅 Base 层的挂载序（只读，无编辑操作——迁移模式为受限会话）
-        const baseProfile = current.profiles.find((p): p is Extract<typeof p, { kind: 'prompt_base' }> => p.kind === 'prompt_base');
-        if (baseProfile) {
-            for (const entry of baseProfile.prompts) {
-                if (current.conflicts.some((c) => c.newIdentifier === entry.identifier)) continue;
-                const card = $('<div class="pc-prompt-card"></div>').attr('data-identifier', entry.identifier);
-                card.append($('<span class="pc-card-index"></span>').text('·'));
-                card.append($('<span class="pc-card-name"></span>').text(entry.identifier));
-                if (!entry.enabled) card.addClass('disabled');
-                card.on('click', () => { selectedEntry = entry.identifier; render(); });
-                listEl.append(card);
-            }
-        }
     }
 
     function renderRight(): void {
@@ -182,7 +182,7 @@ export async function openMigrationEditor(params: {
             .sort((a, b) => a.chainLevel - b.chainLevel);
         if (entryConflicts.length === 0) {
             diffArea.append($('<div class="pc-migration-placeholder"></div>')
-                .text(L('No conflicts on this entry (preview state)')));
+                .text(L('No conflicts on this entry')));
             return;
         }
         for (const c of entryConflicts) diffArea.append(buildConflictPanel(c));
@@ -243,26 +243,33 @@ export async function openMigrationEditor(params: {
     closeBtn.on('click', () => popup.completeCancelled());
 
     let applied = false;
+    let applying = false;
     applyBtn.on('click', async () => {
-        if (current.conflicts.length > 0) return;
-        const result = await executeMigration(sourcePreset, targetName, targetIdx, {
-            orderStrategy: params.orderStrategy,
-            mountNew: params.mountNew,
-            resolutions: resolutionsList(),
-        });
-        if (result.status === 'persist-failed') return;
-        if (result.status === 'blocked') {
-            void callGenericPopup(L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
-            return;
+        if (applying || current.conflicts.length > 0) return;
+        // executeMigration 是追加式落盘且含网络往返：防重入守卫，双击不会写入两份 profiles。
+        applying = true;
+        try {
+            const result = await executeMigration(sourcePreset, targetName, targetIdx, {
+                orderStrategy: params.orderStrategy,
+                mountNew: params.mountNew,
+                resolutions: resolutionsList(),
+            });
+            if (result.status === 'persist-failed') return;
+            if (result.status === 'blocked') {
+                void callGenericPopup(L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
+                return;
+            }
+            applied = true;
+            const r = result.report!;
+            void callGenericPopup(
+                `${L('Migration applied')}：${r.profilesMigrated} profiles · ${L('Preserved my edits')}: ${r.preservedOurs} · ${L('Followed new version')}: ${r.netZeroDropped + r.mountFollowed}`,
+                POPUP_TYPE.TEXT,
+            );
+            await refreshGrid(ctx);
+            popup.completeCancelled();
+        } finally {
+            applying = false;
         }
-        applied = true;
-        const r = result.report!;
-        void callGenericPopup(
-            `${L('Migration applied')}：${r.profilesMigrated} profiles · ${L('Preserved my edits')}: ${r.preservedOurs} · ${L('Followed new version')}: ${r.netZeroDropped + r.mountFollowed}`,
-            POPUP_TYPE.TEXT,
-        );
-        await refreshGrid(ctx);
-        popup.completeCancelled();
     });
 
     await popup.show();

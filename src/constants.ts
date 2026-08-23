@@ -118,7 +118,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'Use edited value': '采用编辑值',
     'All conflicts resolved': '全部冲突已解决',
     'Select a conflicted entry to resolve': '在左侧选择一个冲突条目进行解决',
-    'No conflicts on this entry (preview state)': '该条目无冲突（预览状态）',
+    'No conflicts on this entry': '该条目已无冲突',
     'Rename': '重命名',
     'Edit': '编辑',
     'Delete': '删除',

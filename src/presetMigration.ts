@@ -48,7 +48,6 @@ export function buildMigrationTarget(preset: Preset): MigrationTarget {
     };
 }
 
-/** dry-run：旧/新预设匹配与冲突清单（零写入，报告 UI 直接消费）。 */
 /** dry-run：逐层重放分析（冲突全量预展开，零写入，向导报告与编辑器迁移模式共用）。 */
 export function planMigration(sourcePreset: Preset, targetPreset: Preset): MigrationReplayResult {
     return analyzeMigration(buildMigrationSource(sourcePreset), buildMigrationTarget(targetPreset));
@@ -122,7 +121,7 @@ export async function executeMigration(
     return { status: 'applied', report: result.report };
 }
 
-/** 候选来源预设：拥有 v3 profile 的预设（排除目标自身）。 */
+/** 候选来源预设：拥有 v3 profile 的预设（排除目标自身）；ST 数组可含多份同名预设，按名去重只列一次。 */
 export function listMigrationSourceNames(excludeName: string): string[] {
     const names: string[] = [];
     for (const preset of openai_settings as Preset[]) {
@@ -132,5 +131,5 @@ export function listMigrationSourceNames(excludeName: string): string[] {
             names.push(preset.name);
         }
     }
-    return names;
+    return [...new Set(names)];
 }

@@ -121,6 +121,14 @@ describe('presetMigration 适配层', () => {
         expect(listMigrationSourceNames('Plain')).toEqual(['Midnight']);
     });
 
+    it('listMigrationSourceNames：同名重复数组条目只列一次，其余保持数组顺序', () => {
+        // ST 真实场景：同一内部名可存在多份数组条目（作者更新反复导入/目录双份文件）
+        addPreset('Dup', { ...oldPresetFixture(), name: 'Dup' });
+        addPreset('Dup', { ...oldPresetFixture(), name: 'Dup' });
+        addPreset('Solo', { ...oldPresetFixture(), name: 'Solo' });
+        expect(listMigrationSourceNames('')).toEqual(['Dup', 'Solo']);
+    });
+
     it('planMigration → executeMigration 闭环：冲突解决后落盘 + 重锁基线 + 注册投影', async () => {
         const oldIdx = addPreset('Midnight', oldPresetFixture());
         const newIdx = addPreset('Midnight v2', newPresetFixture());
