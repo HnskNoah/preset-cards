@@ -24,8 +24,10 @@ export interface PromptDrift {
     unmounted: string[];
     /** 记录 order 无而运行时 order 有的 identifier（重新挂载 → mounted:true）。 */
     remounted: { identifier: string; enabled: boolean }[];
-    /** 运行时新增（记录无）的 identifier 与定义（→ 父池 + 挂载条目）。 */
-    added: { identifier: string; definition: Record<string, any> }[];
+    /** 运行时新增（记录无）的 identifier 与定义（→ 父池 + 挂载条目）。
+     * enabled 取运行时真值：ST append 新增挂载 prompt 的缺省态是禁用（enabled:false 置顶），
+     * 硬编码 true 会把「新增即禁用」的意图静默反转并持久化。 */
+    added: { identifier: string; definition: Record<string, any>; enabled: boolean }[];
 }
 
 export function isEmptyPromptDrift(drift: PromptDrift): boolean {
@@ -176,7 +178,7 @@ export function computePromptDrift(
     }
     const added: PromptDrift['added'] = [];
     for (const [id, def] of rt) {
-        if (!rc.has(id)) added.push({ identifier: id, definition: structuredClone(def) });
+        if (!rc.has(id)) added.push({ identifier: id, definition: structuredClone(def), enabled: rtEnabled.get(id) ?? true });
     }
     const order = sameOrder(rtOrder, rcOrder) ? undefined : rtOrder;
     return { changedFields, enabledChanges, order, deleted, unmounted, remounted, added };
@@ -221,7 +223,7 @@ export function applyPromptDriftToProfile(
                 const entry: PromptProfileEntry = {
                     identifier: a.identifier,
                     mounted: true,
-                    enabled: true,
+                    enabled: a.enabled,
                     fields: pickPromptFields(a.definition),
                 };
                 prompts.push(entry);
@@ -284,7 +286,7 @@ export function applyPromptDriftToProfile(
         for (const a of drift.added) upsert({
             identifier: a.identifier,
             mounted: true,
-            enabled: true,
+            enabled: a.enabled,
             fields: pickPromptFields(a.definition),
         });
         next.changes = changes;

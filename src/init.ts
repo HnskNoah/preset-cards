@@ -2,7 +2,8 @@ import { t } from '@sillytavern/scripts/i18n';
 import { SlashCommand } from '@sillytavern/scripts/slash-commands/SlashCommand';
 import { SlashCommandParser } from '@sillytavern/scripts/slash-commands/SlashCommandParser';
 import { openPresetCards } from './presetCards.js';
-import { getActiveProfile, initActiveProfile } from './activeProfile.js';
+import { getActiveProfile, initActiveProfile, validateActiveProfile } from './activeProfile.js';
+import { eventSource, event_types } from '@sillytavern/scripts/events';
 import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, notifyProfileChanged, onProfileChanged } from './presetCardsState.js';
 import { initPresetOrderNormalization } from './fastApply.js';
 import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredPresetObserver, onActiveProfileChangedBySwitch, syncAllPresetRegistrations } from './presetRegistration.js';
@@ -42,6 +43,14 @@ export function init(): void {
     initRegisteredPresetActivation();
     initRegisteredPresetObserver();
     initPresetCapture();
+    // 设置加载完成后校验持久化的 activeProfile 引用（指向已删除预设/profile 时清除）
+    eventSource.on(event_types.SETTINGS_LOADED, () => {
+        try {
+            validateActiveProfile();
+        } catch (err) {
+            console.error('preset-cards: active profile validation failed', err);
+        }
+    });
     // 原生切换激活 profile 时,与所有加载路径(卡片行/concise/API)统一通知外部扩展
     onActiveProfileChangedBySwitch((ref) => {
         if (ref) notifyProfileChanged(ref);

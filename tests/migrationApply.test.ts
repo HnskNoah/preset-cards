@@ -129,6 +129,24 @@ describe('applyMigration', () => {
         expect(migrated.prompts.find((e) => e.identifier === 'p3')).toBeDefined();       // p3 出厂改挂载、用户未动 → 跟随
     });
 
+    it('旧版仅开关快照（无 mounted 字段）仍按三方语义跟随出厂变化', () => {
+        const { source, target } = fixture([baseProfile({
+            prompts: [{ identifier: 'p1', mounted: true, enabled: true }], // 用户未动（==base）
+        })]);
+        // v2 时代旧快照形状：{identifier, enabled}=挂载、无 enabled=unused，缺 mounted
+        source.defaultSnapshot = [
+            { identifier: 'p1', enabled: true },
+            { identifier: 'p2', enabled: true },
+            { identifier: 'p3' },
+        ] as MigrationSource['defaultSnapshot'];
+        const result = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        if (result.status !== 'applied') throw new Error('expected applied');
+        const migrated = result.meta.profiles[0] as PromptBaseProfile;
+        // 未修复时 base.mounted/enabled=undefined，mergeMount 恒判 ours 有意 → p1 停留 true
+        expect(migrated.prompts.find((e) => e.identifier === 'p1')?.enabled).toBe(false);
+        expect(result.report.mountFollowed).toBe(1);
+    });
+
     it('mountFollowed 计数：ours == base 且出厂翻转的条目计入', () => {
         const { source, target } = fixture([baseProfile({
             prompts: [{ identifier: 'p1', mounted: true, enabled: true }], // 未动（==base）

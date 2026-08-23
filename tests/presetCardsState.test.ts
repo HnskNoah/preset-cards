@@ -66,16 +66,22 @@ describe('applyProfileToPresetByName persistence failure', () => {
             },
         };
         addPreset('Active', preset);
-        oai_settings.preset_settings_openai = 'Active'; // 关键：目标即活动预设，saveMeta 会镜像写运行时 extensions
+        // 预置运行时镜像为旧值（模拟上次成功保存的状态）
+        const oldRuntimeMeta = { profiles: [{ marker: 'old' }] };
+        if (!oai_settings.extensions) oai_settings.extensions = {} as Record<string, any>;
+        (oai_settings.extensions as Record<string, any>).preset_cards = oldRuntimeMeta;
 
         const pending = applyProfileToPresetByName('Active', 'B');
         await vi.advanceTimersByTimeAsync(301);
 
         expect(await pending).toBe(false);
-        // 运行时 extensions 必须随回滚还原到预设记录的（已回滚）meta，而非残留 fetch 前写入的新引用
-        const runtimeMeta = (oai_settings.extensions as Record<string, any>)?.preset_cards;
+        expect((openai_settings[0] as Record<string, any>).prompts[0].content).toBe('original');
+        expect(getActiveProfile()).toBeUndefined();
+        // 副本先行：fetch 失败时 extensions 从未被写入——运行时镜像保持旧引用，
+        // 预设记录也保持原 meta（不会出现「fetch 前已写入新值、靠 catch 还原」的中间态）
+        expect((oai_settings.extensions as Record<string, any>).preset_cards).toBe(oldRuntimeMeta);
         const recordMeta = ((openai_settings[0] as Record<string, any>).extensions as Record<string, any>).preset_cards;
-        expect(runtimeMeta).toBe(recordMeta);
-        expect((runtimeMeta as Record<string, any>).profiles[0].prompts[0].fields?.content).toBe('changed'); // readMeta 兜底值
+        expect(recordMeta).not.toBe(oldRuntimeMeta);
+        expect((recordMeta as Record<string, any>).profiles[0].name).toBe('Base'); // 原 meta 完好
     });
 });

@@ -86,20 +86,21 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     const maxTokens = toNumOrUndef('#preset_edit_max_tokens');
     const streaming = dialog.find('#preset_edit_stream').is(':checked');
 
-    // 直接写预设本体字段（saveMeta 会把整个预设 POST 到 /api/presets/save）
-    if (temp !== undefined) preset['temperature'] = temp;
-    if (topP !== undefined) preset['top_p'] = topP;
-    if (topK !== undefined) preset['top_k'] = topK;
-    if (context !== undefined) preset['openai_max_context'] = context;
-    if (maxTokens !== undefined) preset['openai_max_tokens'] = maxTokens;
-    preset['stream_openai'] = streaming;
+    // 采样参数随 meta 事务一并落盘（patch 模式）：请求体携带新值，成功后才写回活预设——
+    // 保存失败时内存/磁盘/UI 三方保持一致，不残留「内存已改、磁盘未存」的分歧。
+    const samplingPatch: Record<string, any> = { stream_openai: streaming };
+    if (temp !== undefined) samplingPatch['temperature'] = temp;
+    if (topP !== undefined) samplingPatch['top_p'] = topP;
+    if (topK !== undefined) samplingPatch['top_k'] = topK;
+    if (context !== undefined) samplingPatch['openai_max_context'] = context;
+    if (maxTokens !== undefined) samplingPatch['openai_max_tokens'] = maxTokens;
 
     const ok = await persistMetaTransaction(meta, (m) => ({
         ...m,
         description: newDesc,
         models: newModels,
         bgImage: newBgImage,
-    }), presetName, presetIndex);
+    }), presetName, presetIndex, { patch: samplingPatch });
     if (!ok) return;
     toastr.success(t`Preset updated`);
     if (onSaved) onSaved();

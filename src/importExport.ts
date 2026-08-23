@@ -189,6 +189,14 @@ export function mergeImportedProfiles(
     } else if (parsed && parsed.kind === 'prompt_base' && Array.isArray(parsed.prompts)) {
         rawProfiles.push(makeBaseProfile({ id: parsed.id, name: parsed.name, prompts: parsed.prompts, ...(parsed.unusedIds ? { unusedIds: parsed.unusedIds } : {}), ...(parsed.sampling ? { sampling: parsed.sampling } : {}), ...(parsed.extra ? { extra: parsed.extra } : {}), ...(parsed.model ? { model: parsed.model } : {}) }));
     } else if (parsed && parsed.kind === 'prompt_delta' && Array.isArray(parsed.changes)) {
+        // 内嵌父状态（assertV3ImportPayload 放行的 delta 导出自带 base.prompts）：与 tree 分支
+        // 同样登记到 deltaBaseMap，父不在文件内时生成真实内容的本地 base——否则会落到
+        // 孤立 delta 兜底生成空锚点，父条目静默丢失。
+        const embeddedBase: unknown = parsed.base;
+        if (parsed.id !== undefined && typeof embeddedBase === 'object' && embeddedBase !== null
+            && 'prompts' in embeddedBase && Array.isArray(embeddedBase.prompts)) {
+            deltaBaseMap.set(String(parsed.id), { prompts: embeddedBase.prompts });
+        }
         rawProfiles.push(makeDeltaProfile({ id: parsed.id, name: parsed.name, baseId: parsed.baseId, changes: parsed.changes, ...(parsed.order ? { order: parsed.order } : {}), ...(parsed.sampling ? { sampling: parsed.sampling } : {}), ...(parsed.extra ? { extra: parsed.extra } : {}), ...(parsed.model ? { model: parsed.model } : {}) }));
     } else {
         throw new Error('Imported configuration is not a valid v3 preset snapshot');
@@ -274,7 +282,12 @@ export function mergeImportedProfiles(
 
     // 第二遍：写入（跳过的 raw 不写入；delta 父链接指向有效 id，父被去重跳过时也能挂到现有父上）
     const missingBaseIds: string[] = [];
-    const targetId = typeof parsed.targetId === 'string' ? parsed.targetId : undefined;
+    // 导出目标标记：v3 profile 文件在顶层；完整 preset 导出（单 profile）写在 extensions 里，
+    // 避免污染预设本体（该文件也可能走 ST 原生「作为新预设导入」）。
+    const extContainer = parsed?.extensions?.[EXTENSION_KEY] as Record<string, unknown> | undefined;
+    const targetId = typeof parsed.targetId === 'string' ? parsed.targetId
+        : typeof extContainer?.targetId === 'string' ? extContainer.targetId
+        : undefined;
     for (const raw of rawProfiles) {
         const rawId = String(raw.id);
         if (skippedRawIds.has(rawId)) continue;

@@ -46,10 +46,15 @@ export async function openPresetCards(): Promise<void> {
             return;
         }
         ctx.dialog.find('.preset_card').removeClass('selected');
-        const card = ctx.dialog.find(`.preset_card[data-preset-name="${ref.presetName}"]`);
+        // 预设名/profileId 来自预设数据：按属性值过滤，不走字符串选择器（引号/反斜杠防不住）
+        const card = ctx.dialog.find('.preset_card').filter(function () {
+            return $(this).attr('data-preset-name') === ref.presetName;
+        });
         card.addClass('selected');
         card.find('.preset_card_profile_row.active').removeClass('active');
-        card.find(`.preset_card_profile_row[data-profile-id="${ref.profileId}"]`).addClass('active');
+        card.find('.preset_card_profile_row').filter(function () {
+            return String($(this).attr('data-profile-id')) === ref.profileId;
+        }).addClass('active');
     });
 
     // 保存捕获(原生 PM 编辑)成功后刷新卡片页：profile 条目列表显示最新挂载/开关态,

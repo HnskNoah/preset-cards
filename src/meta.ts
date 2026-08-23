@@ -90,6 +90,8 @@ const MERGE_WINDOW_MS = 300;
 interface MergePending {
     presetIndex: number;
     meta: PresetMeta;
+    /** 随本次 meta 一并落盘的预设本体补丁（如采样字段）；落盘成功才写回活对象，失败不污染内存。 */
+    patch?: Record<string, any>;
     timer: ReturnType<typeof setTimeout>;
     promise: Promise<void>;
 }
@@ -105,10 +107,11 @@ const tailByPreset = new Map<string, Promise<void>>();
  * 统一机制：per-preset 合并窗口（窗口内末次 meta 胜出）+ per-preset 串行尾链。
  * 网络失败时 reject 给调用方（调用方决定回滚/提示），不阻塞后续保存。
  */
-export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta, patch?: Record<string, any>): Promise<void> {
     const existing = mergePending.get(presetName);
     if (existing) {
         existing.meta = meta;
+        existing.patch = patch;
         return existing.promise;
     }
     let resolveFn!: () => void;
@@ -117,11 +120,12 @@ export function saveMeta(presetName: string, presetIndex: number, meta: PresetMe
     const pending: MergePending = {
         presetIndex,
         meta,
+        patch,
         timer: setTimeout(() => {
             mergePending.delete(presetName);
             const tail = tailByPreset.get(presetName) ?? Promise.resolve();
             const run = tail.then(async () => {
-                await doSaveMeta(presetName, pending.presetIndex, pending.meta);
+                await doSaveMeta(presetName, pending.presetIndex, pending.meta, pending.patch);
                 // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
                 // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
                 for (const listener of [...metaPersistedListeners]) {
@@ -154,11 +158,11 @@ export async function persistMetaTransaction(
     transform: (m: PresetMeta) => PresetMeta,
     name: string,
     idx: number,
-    opts?: { toastMessage?: string },
+    opts?: { toastMessage?: string; patch?: Record<string, any> },
 ): Promise<boolean> {
     const nextMeta = transform(meta);
     try {
-        await saveMeta(name, idx, nextMeta);
+        await saveMeta(name, idx, nextMeta, opts?.patch);
     } catch (err) {
         console.error('Persist preset metadata failed', err);
         toastr.error(opts?.toastMessage ?? L('Failed to save preset metadata'));
@@ -177,16 +181,19 @@ export function onMetaPersisted(listener: MetaPersistedListener): () => void {
     return () => { metaPersistedListeners.delete(listener); };
 }
 
-async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
+async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta, patch?: Record<string, any>): Promise<void> {
     const preset = openai_settings[presetIndex] as Preset | undefined;
     if (!preset) return;
     // 合并窗口延迟落盘：预设若在窗口内被删除（openai_setting_names 已移除），放弃本次落盘，
     // 避免用旧 body 把已删除的预设重新创建到服务器（删除与延迟保存的竞态）。
     if (openai_setting_names[presetName] === undefined) return;
 
-    // Ensure extensions object exists
-    if (!preset.extensions) preset.extensions = {};
-    preset.extensions[EXTENSION_KEY] = {
+    // 副本先行：新 meta 与本体补丁只进请求体，/api/presets/save 成功后才写回活对象——
+    // 失败（网络错误 / 非 ok 响应）时内存与磁盘都保持原状，「失败不污染」对 extensions
+    // 与 patch 字段同时成立。
+    const presetBody = structuredClone(preset);
+    if (!presetBody.extensions) presetBody.extensions = {};
+    presetBody.extensions[EXTENSION_KEY] = {
         description: meta.description || '',
         models: meta.models || [],
         profiles: meta.profiles || [],
@@ -197,16 +204,7 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
         defaultExtra: meta.defaultExtra,
         defaultModel: meta.defaultModel,
     };
-
-    // Also update oai_settings if this is the current preset
-    if (oai_settings.preset_settings_openai === presetName) {
-        if (!oai_settings.extensions) oai_settings.extensions = {};
-        oai_settings.extensions[EXTENSION_KEY] = preset.extensions[EXTENSION_KEY];
-    }
-
-    // Build the preset body from the actual preset object (not from oai_settings,
-    // which reflects the *currently active* preset — possibly a different one).
-    const presetBody = structuredClone(preset);
+    if (patch) Object.assign(presetBody, patch);
 
     const response = await fetch('/api/presets/save', {
         method: 'POST',
@@ -222,5 +220,14 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
         toastr.error(t`Failed to save preset metadata`);
         console.error('Failed to save preset metadata', response);
         throw new Error('Failed to save preset metadata');
+    }
+
+    // 成功：请求体内容写回活对象（保持引用身份），活动预设同步 oai_settings 镜像。
+    if (!preset.extensions) preset.extensions = {};
+    preset.extensions[EXTENSION_KEY] = presetBody.extensions[EXTENSION_KEY];
+    if (patch) Object.assign(preset, patch);
+    if (oai_settings.preset_settings_openai === presetName) {
+        if (!oai_settings.extensions) oai_settings.extensions = {};
+        oai_settings.extensions[EXTENSION_KEY] = preset.extensions[EXTENSION_KEY];
     }
 }
