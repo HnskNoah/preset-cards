@@ -105,13 +105,16 @@ export async function executeMigration(
     if (options.carryMissingDefs) {
         const referenced = new Set<string>();
         for (const p of migrated) {
-            if (isPromptBaseProfile(p)) for (const e of p.prompts) referenced.add(String(e.identifier));
-            else if (isPromptDeltaProfile(p)) for (const c of p.changes) referenced.add(String(c.identifier));
+            if (isPromptBaseProfile(p)) {
+                // 未挂载引用只存在于 unusedIds（drift「删 prompt→mounted:false」/detach 形态），同样是真实引用
+                for (const e of p.prompts) referenced.add(String(e.identifier));
+                for (const id of p.unusedIds ?? []) referenced.add(String(id));
+            } else if (isPromptDeltaProfile(p)) for (const c of p.changes) referenced.add(String(c.identifier));
         }
-        const existingIds2 = new Set(((targetPreset.prompts ?? []) as { identifier?: string }[]).map((p) => String(p.identifier)));
+        const targetPromptIds = new Set(((targetPreset.prompts ?? []) as { identifier?: string }[]).map((p) => String(p.identifier)));
         const srcById = new Map(((sourcePreset.prompts ?? []) as { identifier?: string }[]).map((p) => [String(p.identifier), p]));
         const carried = [...referenced]
-            .filter((id) => !existingIds2.has(id))
+            .filter((id) => !targetPromptIds.has(id))
             .map((id) => srcById.get(id))
             .filter((p): p is { identifier?: string } => p !== undefined)
             .map((p) => structuredClone(p));

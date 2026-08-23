@@ -224,8 +224,21 @@ describe('presetMigration 适配层', () => {
         const promptIds = (idx: number): string[] =>
             ((openai_settings[idx] as Preset).prompts ?? []).map((p) => String(p.identifier));
 
+        // 来源侧：p4 经 base.unusedIds 引用（drift 删 prompt→mounted:false 形态，应带入）；
+        // p5 仅存在定义、无任何引用（不得混入）——区分「按引用收集」与「全量拷贝」。
+        // 夹具为宽松字面量，此处一次性具名断言到所需形状（结构由上方字面量保证）
+        const srcFixture = oldPresetFixture() as {
+            prompts: Array<Record<string, unknown>>;
+            extensions: { preset_cards: { profiles: Array<{ unusedIds?: string[] }> } };
+        };
+        srcFixture.prompts.push(
+            { identifier: 'p4', name: '未挂载引用', content: 'cx', role: 'system', system_prompt: false, marker: false },
+            { identifier: 'p5', name: '无引用', content: 'cy', role: 'system', system_prompt: false, marker: false },
+        );
+        srcFixture.extensions.preset_cards.profiles[0].unusedIds = ['p4'];
+
         // 默认（作者更新语义）：新版删除的条目不复活，目标池不动
-        const srcIdx1 = addPreset('SrcA', oldPresetFixture());
+        const srcIdx1 = addPreset('SrcA', srcFixture);
         const tgtIdx1 = addPreset('TgtB', unrelated());
         await executeMigration(asPreset(openai_settings[srcIdx1]), 'TgtB', tgtIdx1, { orderStrategy: 'keep-mine', mountNew: 'factory' });
         await waitFor(() => (readMeta(asPreset(openai_settings[tgtIdx1])).profiles ?? []).length > 0);
@@ -234,11 +247,10 @@ describe('presetMigration 适配层', () => {
         // 显式开启（跨预设场景）：缺失的定义随事务写入，name 字段保留
         resetOpenaiMock();
         vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
-        const srcIdx2 = addPreset('SrcA', oldPresetFixture());
+        const srcIdx2 = addPreset('SrcA', srcFixture);
         const tgtIdx2 = addPreset('TgtB', unrelated());
         await executeMigration(asPreset(openai_settings[srcIdx2]), 'TgtB', tgtIdx2, { orderStrategy: 'keep-mine', mountNew: 'factory', carryMissingDefs: true });
-        await waitFor(() => ((openai_settings[tgtIdx2] as Preset).prompts ?? []).length >= 3);
-        expect(promptIds(tgtIdx2)).toEqual(expect.arrayContaining(['z9', 'p1', 'p2']));
+        expect(promptIds(tgtIdx2)).toEqual(['z9', 'p1', 'p2', 'p4']); // 严格相等：unusedIds 计入引用，无引用的 p5 不得混入
         const carried = ((openai_settings[tgtIdx2] as Preset).prompts ?? []).find((p) => p.identifier === 'p1');
         expect(carried?.name).toBe('条目一');
     });

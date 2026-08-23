@@ -87,6 +87,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'Analyze migration': '分析迁移',
     'Migration report': '迁移报告',
     'Matched': '匹配条目',
+    'Remapped': '指纹重映射',
     'Missing prompt definitions': '缺失的 prompt 定义',
     'Keep skipped': '保持跳过',
     'Carry from source preset': '从来源预设带入',
