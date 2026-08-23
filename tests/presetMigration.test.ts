@@ -7,7 +7,7 @@ import {
     executeMigration,
     listMigrationSourceNames,
 } from '../src/presetMigration.js';
-import { readMeta } from '../src/meta.js';
+import { readMeta, type Preset } from '../src/meta.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
 import { initPresetRegistration } from '../src/presetRegistration.js';
 
@@ -209,5 +209,37 @@ describe('presetMigration 适配层', () => {
         // 目标已锁定的基线不被覆盖（其既有 profiles 依赖它）
         expect(newMeta.defaultSnapshot).toHaveLength(1);
         expect(newMeta.defaultSnapshotLocked).toBe(true);
+    });
+
+    it('carryMissingDefs：跨预设迁移把目标缺失的来源 prompt 定义随事务带入；默认不带入', async () => {
+        // 夹具为宽松字面量，结构与 Preset 对齐；经 unknown 断言后按类型读取
+        const asPreset = (p: unknown): Preset => p as Preset;
+        const unrelated = (): Record<string, unknown> => ({
+            name: 'Other',
+            prompts: [{ identifier: 'z9', name: 'Z条目', content: 'cz', role: 'system', system_prompt: false, marker: false }],
+            prompt_order: [{ name: 'main', character_id: 100001, order: [{ identifier: 'z9', enabled: true }] }],
+            temperature: 0.5,
+            extensions: { preset_cards: { description: '', models: [], bgImage: '', profiles: [] } },
+        });
+        const promptIds = (idx: number): string[] =>
+            ((openai_settings[idx] as Preset).prompts ?? []).map((p) => String(p.identifier));
+
+        // 默认（作者更新语义）：新版删除的条目不复活，目标池不动
+        const srcIdx1 = addPreset('SrcA', oldPresetFixture());
+        const tgtIdx1 = addPreset('TgtB', unrelated());
+        await executeMigration(asPreset(openai_settings[srcIdx1]), 'TgtB', tgtIdx1, { orderStrategy: 'keep-mine', mountNew: 'factory' });
+        await waitFor(() => (readMeta(asPreset(openai_settings[tgtIdx1])).profiles ?? []).length > 0);
+        expect(promptIds(tgtIdx1)).toEqual(['z9']);
+
+        // 显式开启（跨预设场景）：缺失的定义随事务写入，name 字段保留
+        resetOpenaiMock();
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+        const srcIdx2 = addPreset('SrcA', oldPresetFixture());
+        const tgtIdx2 = addPreset('TgtB', unrelated());
+        await executeMigration(asPreset(openai_settings[srcIdx2]), 'TgtB', tgtIdx2, { orderStrategy: 'keep-mine', mountNew: 'factory', carryMissingDefs: true });
+        await waitFor(() => ((openai_settings[tgtIdx2] as Preset).prompts ?? []).length >= 3);
+        expect(promptIds(tgtIdx2)).toEqual(expect.arrayContaining(['z9', 'p1', 'p2']));
+        const carried = ((openai_settings[tgtIdx2] as Preset).prompts ?? []).find((p) => p.identifier === 'p1');
+        expect(carried?.name).toBe('条目一');
     });
 });

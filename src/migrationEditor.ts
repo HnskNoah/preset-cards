@@ -76,6 +76,7 @@ export async function openMigrationEditor(params: {
     targetIdx: number;
     orderStrategy: ReplayOptions['orderStrategy'];
     mountNew: NonNullable<ReplayOptions['mountNew']>;
+    carryMissingDefs: boolean;
 }): Promise<boolean> {
     const { ctx, sourcePreset, targetPreset, targetName, targetIdx } = params;
     const source = buildMigrationSource(sourcePreset);
@@ -252,6 +253,7 @@ export async function openMigrationEditor(params: {
             const result = await executeMigration(sourcePreset, targetName, targetIdx, {
                 orderStrategy: params.orderStrategy,
                 mountNew: params.mountNew,
+                carryMissingDefs: params.carryMissingDefs,
                 resolutions: resolutionsList(),
             });
             if (result.status === 'persist-failed') return;

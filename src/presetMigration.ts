@@ -79,12 +79,15 @@ function remapCollidingIds(profiles: MigrationReplayResult['profiles'], existing
  * - profiles 追加到目标现有 profiles 之后（不替换）；id 冲突自动重分配并重映射 baseId；
  * - 出厂基线（defaultSnapshot/sampling/extra/model）仅在目标**未锁定**基线时写入——
  *   目标已有自己的基线时不可覆盖，否则其既有 profiles 的 diff 基准会被破坏；
- * - 冲突解决项经 options.resolutions 传入（必须覆盖全部冲突，否则返回 blocked）。 */
+ * - 冲突解决项经 options.resolutions 传入（必须覆盖全部冲突，否则返回 blocked）；
+ * - options.carryMissingDefs：跨预设迁移时把目标池缺失的来源 prompt 定义随事务带入
+ *   （缺定义的 profile 是幽灵条目——编辑器显示 identifier 且不可打开，运行时应用无效）。
+ *   作者更新语义默认关闭：新版删除的条目保持「引用保留、加载跳过」，不复活。 */
 export async function executeMigration(
     sourcePreset: Preset,
     targetName: string,
     targetIdx: number,
-    options: MigrationApplyOptions,
+    options: MigrationApplyOptions & { carryMissingDefs?: boolean },
 ): Promise<MigrationExecution> {
     const targetPreset = openai_settings[targetIdx] as Preset | undefined;
     if (!targetPreset) return { status: 'persist-failed' };
@@ -98,6 +101,22 @@ export async function executeMigration(
             .map((p: any) => String(p.id)),
     );
     const migrated = remapCollidingIds(result.meta.profiles, existingIds);
+    let patch: Record<string, any> | undefined;
+    if (options.carryMissingDefs) {
+        const referenced = new Set<string>();
+        for (const p of migrated) {
+            if (isPromptBaseProfile(p)) for (const e of p.prompts) referenced.add(String(e.identifier));
+            else if (isPromptDeltaProfile(p)) for (const c of p.changes) referenced.add(String(c.identifier));
+        }
+        const existingIds2 = new Set(((targetPreset.prompts ?? []) as { identifier?: string }[]).map((p) => String(p.identifier)));
+        const srcById = new Map(((sourcePreset.prompts ?? []) as { identifier?: string }[]).map((p) => [String(p.identifier), p]));
+        const carried = [...referenced]
+            .filter((id) => !existingIds2.has(id))
+            .map((id) => srcById.get(id))
+            .filter((p): p is { identifier?: string } => p !== undefined)
+            .map((p) => structuredClone(p));
+        if (carried.length > 0) patch = { prompts: [...((targetPreset.prompts ?? []) as unknown[]), ...carried] };
+    }
     const keepExistingBaseline = targetMeta.defaultSnapshotLocked === true;
 
     const ok = await persistMetaTransaction(
@@ -115,7 +134,7 @@ export async function executeMigration(
         }),
         targetName,
         targetIdx,
-        { toastMessage: L('Failed to save preset metadata') },
+        { toastMessage: L('Failed to save preset metadata'), patch },
     );
     if (!ok) return { status: 'persist-failed' };
     return { status: 'applied', report: result.report };

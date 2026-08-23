@@ -114,6 +114,7 @@ function pickPresets(
 interface WizardOptions {
     orderStrategy: ReplayOptions['orderStrategy'];
     mountNew: NonNullable<ReplayOptions['mountNew']>;
+    carryMissingDefs: boolean;
 }
 
 /** 策略选项行（radio 组）。 */
@@ -137,8 +138,9 @@ function showMigrationReport(
     plan: MigrationReplayResult,
     sourceName: string,
     targetName: string,
+    sourcePreset: Preset,
 ): Promise<{ proceed: boolean; options: WizardOptions } | null> {
-    const options: WizardOptions = { orderStrategy: 'keep-mine', mountNew: 'factory' };
+    const options: WizardOptions = { orderStrategy: 'keep-mine', mountNew: 'factory', carryMissingDefs: false };
 
     const container = $('<div class="preset_cards_migration"></div>');
     container.append($('<h4></h4>').text(L('Migration report')));
@@ -156,8 +158,12 @@ function showMigrationReport(
     container.append(summary);
 
     if (plan.report.danglingKept.length > 0) {
+        // 悬空引用按来源定义显示名称（真不存在的条目回落 identifier）
+        const nameById = new Map(((sourcePreset.prompts ?? []) as { identifier?: string; name?: string }[])
+            .map((p) => [String(p.identifier), typeof p.name === 'string' && p.name !== '' ? p.name : String(p.identifier)]));
+        const shown = [...new Set(plan.report.danglingKept)].map((id) => nameById.get(id) ?? id);
         container.append($('<div class="preset_cards_migration_hint"></div>')
-            .text(`${L('Removed entries (references kept, skipped on load)')}: ${[...new Set(plan.report.danglingKept)].join(', ')}`));
+            .text(`${L('Removed entries (references kept, skipped on load)')}: ${shown.join(', ')}`));
     }
 
     container.append(optionRow(
@@ -171,6 +177,12 @@ function showMigrationReport(
             [L('Follow factory'), 'factory'],
             [L('Keep unmounted'), 'unmounted'],
         ], options.mountNew, (v) => { options.mountNew = v as WizardOptions['mountNew']; },
+    ));
+    container.append(optionRow(
+        L('Missing prompt definitions'), 'defs', [
+            [L('Keep skipped'), 'skip'],
+            [L('Carry from source preset'), 'carry'],
+        ], options.carryMissingDefs ? 'carry' : 'skip', (v) => { options.carryMissingDefs = v === 'carry'; },
     ));
 
     if (s.conflicts > 0) {
@@ -217,18 +229,18 @@ export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
     if (!sourcePreset || targetIdx === undefined || !targetPreset) return;
 
     const plan = planMigration(sourcePreset, targetPreset);
-    const decision = await showMigrationReport(plan, sourceName, targetName);
+    const decision = await showMigrationReport(plan, sourceName, targetName, sourcePreset);
     if (!decision?.proceed) return;
-    const { orderStrategy, mountNew } = decision.options;
+    const { orderStrategy, mountNew, carryMissingDefs } = decision.options;
 
     if (plan.summary.conflicts > 0) {
         // 有冲突 → 编辑器迁移模式（图形化解决 + 应用；未解决完不能应用）
-        await openMigrationEditor({ ctx, sourcePreset, targetPreset, targetName, targetIdx, orderStrategy, mountNew });
+        await openMigrationEditor({ ctx, sourcePreset, targetPreset, targetName, targetIdx, orderStrategy, mountNew, carryMissingDefs });
         return;
     }
 
     // 无冲突 → 直接应用
-    const result = await executeMigration(sourcePreset, targetName, targetIdx, { orderStrategy, mountNew });
+    const result = await executeMigration(sourcePreset, targetName, targetIdx, { orderStrategy, mountNew, carryMissingDefs });
     if (result.status === 'persist-failed') return;
     if (result.status === 'blocked') {
         // 分析与执行之间源/目标可能已变（如捕获周期追加了 delta）产生新冲突：
