@@ -89,7 +89,7 @@ Delta 可嵌套派生。加载 = 出厂基线 ⊕ 父链各层 sparse diff 依�
 
 ## 7. 采样参数（PromptSampling）
 
-可选键：`temperature` `top_p` `top_k` `top_a` `min_p` `frequency_penalty` `presence_penalty` `repetition_penalty` `seed` `n` `openai_max_context` `openai_max_tokens` `stream_openai`。加载时缺失的键保持预设当前值，不覆盖。
+可选键：`temperature` `top_p` `top_k` `top_a` `min_p` `frequency_penalty` `presence_penalty` `repetition_penalty` `seed` `n` `openai_max_context` `openai_max_tokens` `stream_openai` `show_thoughts`。布尔键：`stream_openai`（流式输出）/ `show_thoughts`（请求思维链）。加载时缺失的键保持预设当前值，不覆盖。
 
 ## 8. 扩展覆盖（extProfile）
 
@@ -105,7 +105,7 @@ profile 可记录预设 `extensions` 下第三方数据的开关与数组条目�
 
 路径白名单见 `src/constants.ts`：数组路径 `EXT_ARRAY_PATHS`（`regex_scripts`、`SPreset.RegexBinding.regexes`、`tavern_helper.scripts`），布尔路径 `EXT_BOOLEAN_PATHS`。每次捕获全量重算，无差异自动删除该字段。
 
-**加载语义**：三部分统一沿父链依次应用（祖先 → 自身）——`extToggles` 后写者胜；后代可摘除祖先挂载的条目；各层新增条目并存（按条目 id 去重）。捕获侧不变，仍是相对预设运行时的 sparse diff、每次全量重算。
+**加载语义**：三部分统一沿父链依次应用（祖先 → 自身）——`extToggles` 后写者胜；后代可摘除祖先挂载的条目；各层新增条目并存，**同 id 跨层重复挂载时后层定义原位覆盖前层（后写者胜）**。捕获侧相对**继承基线**（父预设 extensions ⊕ 祖先层覆盖，注册链路捕获用 `buildInheritedExtensionBaseline` 构造）全量重算：基线没有的条目记 mount、有的记 unmount、仅开关字段变化记 toggle、其余定义被改写整条重捕获为覆盖 mount。
 
 ## 9. 导出文件格式
 

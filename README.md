@@ -116,8 +116,8 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 - **注册**：`openai_settings.push` + `openai_setting_names[注册名]=索引`，落盘走 `POST /api/presets/save`（ST 预设为文件型存储）；注册名唯一（占位规则 `父名 - profile名` + 数字后缀去重）。启动 / reload 时全量对账幂等重注册（服务端按预设文件重建数组后不丢投影）。**数据权威仍在父预设的 `extensions['preset_cards']`，注册记录只是投影拷贝**。
 - **激活归一**：`OAI_PRESET_CHANGED_BEFORE` 钩子（ST 原生下拉与卡片点击都触发）读 marker → 沿父链重新解析 → **应用前**覆盖传入记录 + 写回存储，注册记录保持新鲜；**激活永远 = 最新父链解析结果**，父预设被原生编辑导致的过期靠此兜底。
 - **观察者**：`PRESET_CHANGED` 只同步 activeProfile / 卡片高亮 / `onProfileChanged` 通知，绝不重复应用（ST 已应用）。
-- **保存捕获**：`SETTINGS_UPDATED`（ST 保存落盘后触发；原生 PromptManager 每次编辑都以它收尾）diff 运行时 vs 注册记录 → 差异自动捕获回 profile delta。删除 = `mounted:false` + 材料留池；新增 = 定义入父预设 prompts 池 + delta 挂载条目；ST 列表 Remove（detach）识别为 unmounted 而非 enabled 漂移。顶层采样 / extra / 模型漂移按「运行时 vs profile 生效值」判定，回到继承基线时自动删除 override。无基线守卫（注册记录无 prompts 时跳过 prompt 漂移，防全量误捕获）；无差异零写入防重入。
-- **扩展捕获**：注册 profile 激活期间，扩展（extensions）的布尔开关与数组条目增删 diff 运行时 vs 父预设 → 捕获为 `extProfile` 覆盖（见数据模型节）；加载 profile 时 `applyExtensions` 在预设 clone 上还原。
+- **保存捕获**：`SETTINGS_UPDATED`（ST 保存落盘后触发；原生 PromptManager 每次编辑都以它收尾）diff 运行时 vs 注册记录 → 差异自动捕获回 profile delta。删除 / 摘除 = `mounted:false` + `enabled:false`（渲染开关读 enabled）+ 材料留池；新增 = 定义入父预设 prompts 池 + delta 挂载条目；ST 列表 Remove（detach）识别为 unmounted 而非 enabled 漂移。顶层采样 / extra / 模型漂移按「运行时 vs profile 生效值」判定，回到继承基线时自动删除 override。无基线守卫（注册记录无 prompts 时跳过 prompt 漂移，防全量误捕获）；无差异零写入防重入。
+- **扩展捕获**：注册 profile 激活期间，扩展（extensions）的布尔开关与数组条目增删 diff 运行时 vs **继承基线**（父预设 ⊕ 祖先层覆盖）→ 捕获为 `extProfile` 覆盖（见数据模型节）；加载 profile 时沿父链依次应用（祖先 → 自身），三类覆盖统一逐层重放（开关后写者胜、后代可摘除祖先挂载、各层新增并存、同 id 重复挂载后层定义覆盖）。
 - **生命周期清理**：profile 删除 → 注销注册；父预设删除（含 `PRESET_DELETED` 事件与启动孤儿清扫）→ 注销名下全部注册，ST 下拉不留废项。
 
 ## 开发约定
@@ -154,8 +154,8 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `tests/extApply.test.ts` | applyExtensions：扩展覆盖应用到预设 clone（摘除 / 新增 / 开关，含数组条目路径） |
 | `tests/presetCardsState.test.ts` | `applyProfileToPresetByName` 持久化失败回滚 |
 | `tests/presetMigration.test.ts` | 迁移适配层：视图构建 / 来源候选 / plan→execute 闭环（冲突 blocked→解决→落盘重锁基线+自动注册投影） |
-| `tests/migrationPlan.test.ts` | 迁移 dry-run 纯函数：三级匹配 / 五类条目 / 字段级三方冲突 / dangling |
-| `tests/migrationApply.test.ts` | 迁移应用纯函数：blocked 语义 / 三方合并净零 / 顺序策略 / 链感知净零 / 成环保守 |
+| `tests/migrationPlan.test.ts` | 迁移纯函数：池三级匹配（`matchPromptPools`：identifier 主键 + 指纹重映射 + ambiguous）+ 逐层重放分析（`analyzeMigration`：Base/Delta 层三方、多层重放语义、残留 resolution 失效、dangling、基线回退） |
+| `tests/migrationApply.test.ts` | 迁移应用纯函数（经 `replayMigration`）：blocked/applied、解决项写入、指纹重映射、新条目出厂挂载策略（mounted/unmounted）、顺序策略、基线重锁（`relockDefaultSnapshot`） |
 
 > 新增逻辑（尤其纯数据变换层）应尽量作为纯函数测试，而非 DOM 弹窗测试；mocks 提供 `addPreset` 等辅助注册预设。
 
@@ -176,12 +176,14 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/extCapture.ts` | 扩展漂移检测纯函数：运行时 vs 父预设 extensions 的 mount / unmount / toggle 差异 |
 | `src/extApply.ts` | 扩展覆盖应用纯函数：`extProfile` 应用到预设 clone（摘除 / 新增 / 开关） |
 | `src/presetMigration.ts` | 迁移适配层：预设对象 ↔ core/migration 视图、新出厂基线采集、追加式落盘（id 冲突重分配，落盘后注册链路自动投影） |
-| `src/migrationDialog.ts` | 迁移向导 UI：选来源/目标 → dry-run 报告与策略选项 → 冲突三栏裁决 → 应用 |
+| `src/migrationDialog.ts` | 迁移向导 UI：两步向导——选来源/目标与策略选项 → dry-run 报告（列表事件驱动实时刷新、同名条目去重）；确认后进编辑器迁移模式 |
+| `src/migrationEditor.ts` | 编辑器迁移模式（v2 冲突解决）：复用 pc-* 布局，左栏冲突条目置顶成组，右栏三方对照 + 手动编辑第四选项，每次裁决全量重放实时刷新，未解决完「应用迁移」置灰 |
 | `src/presetBuffers.ts` | 会话编辑缓冲（`sessionEdits` / `pendingToggles`）的键管理与应用（纯数据，不接触 DOM） |
 | `src/activeProfile.ts` | 当前激活 profile 引用（localStorage 持久化）、`getActiveProfile` |
 | `src/presetSnapshot.ts` | defaultSnapshot 锁定 / 合并 / reset 基线 |
 | `src/profileMutators.ts` / `src/profileActions.ts` | profile 数据变换与派生 / 级联删除 |
 | `src/importExport.ts` / `src/profileSchema.ts` | 导入导出与 v3 载荷校验 |
+| `src/stableStringify.ts` | 键序稳定 JSON 序列化：导入去重指纹与捕获净零比较共用 |
 | `src/presetList.ts` / `src/profileTree.ts` | 卡片与弹窗共用的条目视图、派生关系森林 |
 | `src/nameWrap.ts` | 名字换行策略：`applyNameWrap` 消费 `presetList.ts` 的 `isRepeatedRunName`（超长重复串检测），对名字元素加 `.pc-name-nowrap` 保留省略号 |
 | `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、ST 语言判定 `L()`、中英词典、常量 |
@@ -191,5 +193,5 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/core/storage/{project,marker}.ts` | profile 投影为 ST preset + 身份 marker（注册链路核心） |
 | `src/core/registration/register.ts` | 注册链路纯函数：注册 / marker 反查 / 注销 / 变更检测（注册表与命名策略可注入） |
 | `src/core/capture/drift.ts` | 保存捕获纯函数：prompt 级漂移计算与回写（fields / enabled / order / 删增 / 挂载态） |
-| `src/core/migration/{plan,apply}.ts` | 预设更新迁移纯函数：dry-run 三方合并分析（三级匹配/冲突清单）+ 应用（基线重锁/id 重映射/净零/排序策略） |
+| `src/core/migration/{plan,replay,apply}.ts` | 预设更新迁移纯函数：池三级匹配（plan）+ v2 逐层重放引擎（replay：Base/Delta 层三方、冲突集为 resolutions 纯函数）+ 应用封装（apply：blocked/applied、dry-run 分析、编辑器预览、基线重锁、排序策略） |
 | `tools/migrate-to-v3.ts` | v1/v2 → v3 迁移 CLI |
