@@ -25,6 +25,8 @@ import {
 } from './promptToggle.js';
 import { SAMPLING_KEYS } from './constants.js';
 import { computeExtensionDrift } from './extCapture.js';
+import { buildInheritedExtensionBaseline } from './extApply.js';
+import { collectProfileChain } from './promptApply.js';
 import { stableStringify } from './stableStringify.js';
 
 /** 捕获周期状态：进行中标记 + 待重跑标记（持久化窗口内被挡的 SETTINGS_UPDATED 不丢事件，
@@ -111,13 +113,25 @@ export async function captureIfRegistered(): Promise<boolean> {
     const hasPromptBaseline = Array.isArray(record.prompts) && record.prompts.length > 0;
     const drift = hasPromptBaseline ? computePromptDrift(oai_settings as any, record, resolvePromptOrderTarget()) : undefined;
     const top = computeTopLevelDrift(parent, marker.profileId, oai_settings as any, record);
-    const extDrift = computeExtensionDrift(oai_settings as any, parent);
-    // 扩展净零：漂移与 profile 现有 extProfile 稳定序列化等价 → 视为无变化（防每次 SETTINGS_UPDATED 全量落盘）
     const meta = readMeta(parent);
     const currentProfile = getProfile(meta, marker.profileId);
     const currentExt = currentProfile && (isPromptBaseProfile(currentProfile) || isPromptDeltaProfile(currentProfile))
         ? currentProfile.extProfile
         : undefined;
+    // 扩展漂移对照「继承基线」= 父预设 ⊕ 祖先层 extProfile：应用沿链重放，捕获必须同基线对齐——
+    // 否则祖先挂载条目的编辑会被记成后代重复 mount 且永不重放、删除则完全不可捕获（下次激活复活）。
+    let extBaselineParent: Record<string, any> = parent as Record<string, any>;
+    if (currentProfile && (isPromptBaseProfile(currentProfile) || isPromptDeltaProfile(currentProfile))) {
+        const ancestors = collectProfileChain(
+            currentProfile,
+            meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[],
+        ).slice(0, -1);
+        if (ancestors.some((a) => a.extProfile)) {
+            extBaselineParent = buildInheritedExtensionBaseline(parent as Record<string, any>, ancestors);
+        }
+    }
+    const extDrift = computeExtensionDrift(oai_settings as any, extBaselineParent);
+    // 扩展净零：漂移与 profile 现有 extProfile 稳定序列化等价 → 无变化（防每次 SETTINGS_UPDATED 全量落盘）
     const extUnchanged = extDrift === null
         ? currentExt === undefined // 无漂移且原本无覆盖 → 无事；原本有覆盖则需落盘删除
         : currentExt !== undefined && stableStringify(extDrift) === stableStringify(currentExt);

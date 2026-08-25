@@ -151,7 +151,7 @@ export async function executeMigration(
                 return sameId || sameName;
             }));
             if (additions.length > 0) {
-                mergedExt.regex_scripts = [...kept, ...additions];
+                mergedExt.regex_scripts = [...kept, ...additions.map((s) => structuredClone(s))]; // 克隆：避免来源/目标共享同一脚本对象（开关互串）
                 touched = true;
             } else if (touched) {
                 mergedExt.regex_scripts = kept;

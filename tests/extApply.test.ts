@@ -1,6 +1,6 @@
 // extApply.test.ts：扩展 mount/unmount/toggle 应用测试
 import { describe, it, expect } from 'vitest';
-import { applyExtensions } from '../src/extApply.js';
+import { applyExtensions, buildInheritedExtensionBaseline } from '../src/extApply.js';
 
 describe('applyExtensions', () => {
     it('mounts an item to an existing array', () => {
@@ -131,5 +131,23 @@ describe('applyExtensions', () => {
         const original = structuredClone(preset);
         applyExtensions(preset, {});
         expect(preset).toEqual(original);
+    });
+
+    it('overrides an existing entry definition when mounted again (cross-layer last-writer-wins)', () => {
+        const preset = { extensions: { regex_scripts: [{ id: 'x1', content: 'old', disabled: false }] } };
+        applyExtensions(preset, {
+            extMounts: { regex_scripts: [{ id: 'x1', definition: { id: 'x1', content: 'new', disabled: false } }] },
+        });
+        expect(preset.extensions.regex_scripts).toHaveLength(1);
+        expect(preset.extensions.regex_scripts[0].content).toBe('new');
+    });
+
+    it('buildInheritedExtensionBaseline applies ancestor layers onto a clone without mutating parent', () => {
+        const parent = { extensions: { regex_scripts: [] as any[] } };
+        const baseline = buildInheritedExtensionBaseline(parent, [
+            { extProfile: { extMounts: { regex_scripts: [{ id: 'a', definition: { id: 'a' } }] } } },
+        ]);
+        expect((baseline.extensions.regex_scripts as any[]).map((s) => s.id)).toEqual(['a']);
+        expect(parent.extensions.regex_scripts).toHaveLength(0);
     });
 });

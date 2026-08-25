@@ -192,6 +192,7 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
     // 失败（网络错误 / 非 ok 响应）时内存与磁盘都保持原状，「失败不污染」对 extensions
     // 与 patch 字段同时成立。
     const presetBody = structuredClone(preset);
+    if (patch) Object.assign(presetBody, patch); // 补丁先行：插件元数据容器始终以本次 transform 为准（补丁可能整体携带旧 extensions 克隆）
     if (!presetBody.extensions) presetBody.extensions = {};
     presetBody.extensions[EXTENSION_KEY] = {
         description: meta.description || '',
@@ -204,7 +205,6 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
         defaultExtra: meta.defaultExtra,
         defaultModel: meta.defaultModel,
     };
-    if (patch) Object.assign(presetBody, patch);
 
     const response = await fetch('/api/presets/save', {
         method: 'POST',
@@ -223,9 +223,9 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
     }
 
     // 成功：请求体内容写回活对象（保持引用身份），活动预设同步 oai_settings 镜像。
+    if (patch) Object.assign(preset, patch); // 与请求体同序：先补丁后容器覆写
     if (!preset.extensions) preset.extensions = {};
     preset.extensions[EXTENSION_KEY] = presetBody.extensions[EXTENSION_KEY];
-    if (patch) Object.assign(preset, patch);
     if (oai_settings.preset_settings_openai === presetName) {
         if (!oai_settings.extensions) oai_settings.extensions = {};
         oai_settings.extensions[EXTENSION_KEY] = preset.extensions[EXTENSION_KEY];

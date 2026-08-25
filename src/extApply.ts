@@ -65,8 +65,7 @@ function applyToggle(ext: Record<string, any>, path: string, value: boolean): vo
 /**
  * 应用扩展覆盖到预设 clone：
  * 1. unmount：从数组中按 id 移除条目
- * 2. mount：向数组中按 id 新增条目（不重复）
- * 3. toggle：设置布尔值（支持简单路径和数组条目路径）
+ * 2. mount：新增条目；同 id 已存在（祖先层挂载/本层重复）→ 后写定义原位覆盖（后写者胜）
  */
 export function applyExtensions(
     preset: Record<string, any>,
@@ -89,16 +88,15 @@ export function applyExtensions(
         }
     }
 
-    // Mounts：向数组中新增条目（不重复）
+    // Mounts：新增条目；同 id 已存在（祖先层挂载/本层重复）→ 后写定义原位覆盖。
+    // 覆盖语义与跨层开关「后写者胜」一致：祖先挂载的条目被后代整条重捕获时必须能生效。
     if (extProfile.extMounts) {
         for (const [path, entries] of Object.entries(extProfile.extMounts)) {
             const arr = resolveArray(ext, path) ?? [];
-            const existingIds = new Set(arr.map((item: any) => item.id).filter(Boolean));
             for (const entry of entries) {
-                if (!existingIds.has(entry.id)) {
-                    arr.push(structuredClone(entry.definition));
-                    existingIds.add(entry.id);
-                }
+                const idx = arr.findIndex((item: any) => item && item.id === entry.id);
+                if (idx >= 0) arr[idx] = structuredClone(entry.definition);
+                else arr.push(structuredClone(entry.definition));
             }
             setArray(ext, path, arr);
         }
@@ -110,4 +108,15 @@ export function applyExtensions(
             applyToggle(ext, path, value);
         }
     }
+}
+
+/** 构造扩展捕获的继承基线：父预设克隆 ⊕ 祖先层 extProfile 依次应用（纯函数）。
+ * 注册捕获用它对齐「应用沿链重放」的对照态：运行时 vs 该基线的漂移恰好落在活动层可表达的差异。 */
+export function buildInheritedExtensionBaseline(
+    parent: Record<string, any>,
+    ancestorProfiles: { extProfile?: ExtProfileOverride }[],
+): Record<string, any> {
+    const clone = structuredClone(parent);
+    for (const ancestor of ancestorProfiles) applyExtensions(clone, ancestor.extProfile);
+    return clone;
 }

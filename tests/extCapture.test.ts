@@ -31,6 +31,26 @@ describe('computeExtensionDrift', () => {
         expect(flipped!.extToggles!['regex_scripts.r1.disabled']).toBe(false);
     });
 
+    it('recaptures a definition edit on an inherited entry as an overriding mount', () => {
+        const drift = computeExtensionDrift(
+            { extensions: { regex_scripts: [{ id: 'r1', findRegex: 'edited', disabled: false }] } },
+            { extensions: { regex_scripts: [{ id: 'r1', findRegex: 'orig', disabled: false }] } },
+        );
+        expect(drift!.extMounts!['regex_scripts']).toEqual([
+            { id: 'r1', definition: { id: 'r1', findRegex: 'edited', disabled: false } },
+        ]);
+        expect(drift!.extToggles).toBeUndefined();
+    });
+
+    it('still records pure toggle flips as toggles, not mounts', () => {
+        const drift = computeExtensionDrift(
+            { extensions: { regex_scripts: [{ id: 'r1', findRegex: 'same', disabled: true }] } },
+            { extensions: { regex_scripts: [{ id: 'r1', findRegex: 'same', disabled: false }] } },
+        );
+        expect(drift!.extToggles!['regex_scripts.r1.disabled']).toBe(true);
+        expect(drift!.extMounts).toBeUndefined();
+    });
+
     it('detects a mounted item (in runtime but not in parent)', () => {
         const runtime = {
             extensions: {

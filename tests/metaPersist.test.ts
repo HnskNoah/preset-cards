@@ -24,6 +24,22 @@ describe('saveMeta 持久化统一机制', () => {
         expect(seen).toEqual([['Midnight', 0]]);
     });
 
+    it('patch.extensions 不回滚本次 meta 容器（迁移「带入正则」场景）', async () => {
+        addPreset('Midnight', { name: 'Midnight', prompts: [], extensions: { preset_cards: { profiles: [] }, regex_scripts: [] } });
+        const idx = 0;
+        const meta = readMeta(openai_settings[idx] as any);
+        const staleContainer = structuredClone((openai_settings[idx] as any).extensions);
+        const patch = {
+            prompts: [{ identifier: 'carried' }],
+            extensions: { ...staleContainer, regex_scripts: [{ id: 'r1' }] },
+        };
+        const ok = await persistMetaTransaction(meta, (m) => ({ ...m, profiles: [{ ...(m.profiles?.[0] ?? {}), id: 'p-new', kind: 'prompt_base', formatVersion: 3, name: 'N', prompts: [] } as any] }), 'Midnight', idx, { patch });
+        expect(ok).toBe(true);
+        const ext = (openai_settings[idx] as any).extensions;
+        expect(ext.regex_scripts).toEqual([{ id: 'r1' }]); // patch 的正则合并生效
+        expect(ext.preset_cards.profiles.map((p: any) => p.id)).toEqual(['p-new']); // 新 meta 不被旧容器覆盖
+    });
+
     it('saveMetaMerged（编辑器提交路径）也触发 onMetaPersisted → 注册对账（L17）', async () => {
         addPreset('Midnight', { name: 'Midnight', prompts: [], extensions: { preset_cards: { profiles: [] } } });
         const idx = 0;

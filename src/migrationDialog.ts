@@ -9,6 +9,7 @@ import { L } from './i18n.js';
 import { onMetaPersisted } from './meta.js';
 import { onPresetRegistryChanged } from './presetRegistration.js';
 import { planMigration, executeMigration, listMigrationSourceNames } from './presetMigration.js';
+import { readPresetMarker } from './core/storage/marker.js';
 import type { MigrationReplayResult } from './core/migration/apply.js';
 import type { ReplayOptions } from './core/migration/replay.js';
 import type { CardsContext } from './presetCardsContext.js';
@@ -208,6 +209,7 @@ export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
     const readSources = (): string[] => listMigrationSourceNames('');
     const readAllNames = (): string[] =>
         [...new Set((openai_settings as Preset[])
+            .filter((p) => p && readPresetMarker(p) === undefined) // 投影预设是 profile 实体化：作为目标会被纯 meta 覆写 marker，致注册断链
             .map((p) => (p && typeof p.name === 'string' ? p.name : ''))
             .filter(Boolean))];
     if (readSources().length === 0) {
