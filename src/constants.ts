@@ -60,6 +60,7 @@ export const SAMPLING_KEYS = [
     'openai_max_context',
     'openai_max_tokens',
     'stream_openai',
+    'show_thoughts',
 ] as const;
 
 export type SamplingKey = (typeof SAMPLING_KEYS)[number];
@@ -137,6 +138,7 @@ export const LOCAL_DICT: Record<string, string> = {
     'Context': '上下文',
     'Tokens': '回复 Tokens',
     'Streaming': '流式输出',
+    'Request model reasoning': '请求思维链',
     'Search presets...': '搜索预设...',
     'presets': '个预设',
     'Multi-Select': '多选',

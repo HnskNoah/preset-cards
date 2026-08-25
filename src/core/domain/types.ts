@@ -13,7 +13,7 @@ export interface PromptFields {
 
 /** 采样参数快照（全可选）：缺失的键在加载 profile 时保持预设当前值，不覆盖。
  * 键与 SAMPLING_KEYS 一一对应（temperature/top_p/top_k/top_a/min_p/frequency_penalty/
- * presence_penalty/repetition_penalty/seed/n/openai_max_context/openai_max_tokens/stream_openai）。 */
+ * presence_penalty/repetition_penalty/seed/n/openai_max_context/openai_max_tokens/stream_openai/show_thoughts）。 */
 export interface PromptSampling {
     temperature?: number;
     top_p?: number;
@@ -28,6 +28,7 @@ export interface PromptSampling {
     openai_max_context?: number;
     openai_max_tokens?: number;
     stream_openai?: boolean;
+    show_thoughts?: boolean;
 }
 
 /** profile 绑定的模型（chat_completion_source + 对应模型键值）。加载 profile 时一并应用。 */

@@ -36,6 +36,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
             contextTokens: preset['openai_max_context'] != null ? String(preset['openai_max_context']) : '',
             maxTokens: preset['openai_max_tokens'] != null ? String(preset['openai_max_tokens']) : '',
             streaming: !!preset['stream_openai'],
+            thoughts: !!preset['show_thoughts'],
         },
         i18n: {
             descTitle: L('Description'),
@@ -47,6 +48,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
             contextTitle: L('Context'),
             tokensTitle: L('Tokens'),
             streamTitle: L('Streaming'),
+            thoughtsTitle: L('Request model reasoning'),
         }
     });
 
@@ -85,10 +87,11 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     const context = toNumOrUndef('#preset_edit_context');
     const maxTokens = toNumOrUndef('#preset_edit_max_tokens');
     const streaming = dialog.find('#preset_edit_stream').is(':checked');
+    const thoughts = dialog.find('#preset_edit_thoughts').is(':checked');
 
     // 采样参数随 meta 事务一并落盘（patch 模式）：请求体携带新值，成功后才写回活预设——
     // 保存失败时内存/磁盘/UI 三方保持一致，不残留「内存已改、磁盘未存」的分歧。
-    const samplingPatch: Record<string, any> = { stream_openai: streaming };
+    const samplingPatch: Record<string, any> = { stream_openai: streaming, show_thoughts: thoughts };
     if (temp !== undefined) samplingPatch['temperature'] = temp;
     if (topP !== undefined) samplingPatch['top_p'] = topP;
     if (topK !== undefined) samplingPatch['top_k'] = topK;

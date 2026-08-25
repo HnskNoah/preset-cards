@@ -3,6 +3,7 @@
 export const settingsToUpdate: Record<string, [string, string, boolean, boolean]> = {
     chat_completion_source: ['#chat_completion_source', 'chat_completion_source', false, true],
     stream_openai: ['#stream_openai', 'stream_openai', true, false],
+    show_thoughts: ['#openai_show_thoughts', 'show_thoughts', true, false],
     openai_model: ['#openai_model', 'openai_model', false, true],
     claude_model: ['#claude_model', 'claude_model', false, true],
     custom_url: ['#custom_url', 'custom_url', false, true],

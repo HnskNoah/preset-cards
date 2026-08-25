@@ -42,6 +42,13 @@ describe('promptChain resolution', () => {
         expect(resolveEffectiveExtra(d, [b, d], { a: 0, c: 3 })).toEqual({ a: 1, b: 2, c: 3 });
     });
 
+    it('drops keys later promoted to SAMPLING_KEYS from baseline and legacy layer extras', () => {
+        const b = base('b1');
+        const d = delta('d1', 'b1', { extra: { show_thoughts: true, impersonation_prompt: 'x' } });
+        const out = resolveEffectiveExtra(d, [b, d], { show_thoughts: false, bias: 'y' });
+        expect(out).toEqual({ impersonation_prompt: 'x', bias: 'y' });
+     });
+
     it('collects chain root-first with cycle protection', () => {
         const b = base('b1');
         const d1 = delta('d1', 'b1');
