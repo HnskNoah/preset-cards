@@ -1,6 +1,7 @@
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile } from './meta.js';
 import type { Preset, PresetMeta, PresetProfile, PromptBaseProfile, PromptDefaultSnapshotEntry, PromptDeltaProfile, PromptModel, PromptProfileEntry, PromptSampling } from './meta.js';
+import { SAMPLING_KEYS } from './constants.js';
 import { filterFields, applySampling, applyExtra, applyModel, capturePromptFields, findPromptInPreset } from './promptCapture.js';
 import { findOrderList, resolvePromptOrderTarget, replaceTargetPromptOrder, syncPromptOrder, resolveProfilePrompts, pruneStaleOrderEntries } from './promptOrder.js';
 import { snapshotPromptState } from './promptState.js';
@@ -154,26 +155,29 @@ export function resolveEffectiveSampling(
     return Object.keys(merged).length > 0 ? (merged as PromptSampling) : undefined;
 }
 
-/** 解析 profile 的有效 extra：出厂基线 ⊕ 祖先链各层 sparse 差异依次叠加。 */
+/** 解析 profile 的有效 extra：出厂基线 ⊕ 祖先链各层 sparse 差异依次叠加。
+ * 采样键一律跳过——存量 defaultExtra/旧差异里可能冻结有后来升为采样键的成员（如 show_thoughts），
+ * 若留在 extra 会因「extra 后于 sampling 应用」而在每条重放路径上永久压过 sampling 覆盖。 */
 export function resolveEffectiveExtra(
     profile: PresetProfile,
     allProfiles: (PromptBaseProfile | PromptDeltaProfile)[],
     defaultExtra?: Record<string, any>,
 ): Record<string, any> | undefined {
     if (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile)) return undefined;
-    const merged: Record<string, any> = { ...(defaultExtra ?? {}) };
+    const isSamplingKey = (key: string): boolean => (SAMPLING_KEYS as readonly string[]).includes(key);
+    const merged: Record<string, any> = {};
+    for (const [key, value] of Object.entries(defaultExtra ?? {})) {
+        if (!isSamplingKey(key)) merged[key] = value;
+    }
     for (const p of collectProfileChain(profile, allProfiles)) {
-        if (p.extra) Object.assign(merged, p.extra);
+        if (!p.extra) continue;
+        for (const [key, value] of Object.entries(p.extra)) {
+            if (!isSamplingKey(key)) merged[key] = value;
+        }
     }
     return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-/**
- * 加载配置的核心分支（base / delta）。
- * - v3 base/delta：resolve → applyResolvedPromptState（mounted/unused 精确还原）。
- * - 模型/采样/extra 统一链式解析：出厂基线（defaultModel/defaultSampling/defaultExtra）⊕ 父链 diff ⊕ 自身 diff。
- *   旧版全量快照文件按 sparse 叠加结果值相同，无需迁移。
- */
 export function applyProfileToPreset(
     preset: Preset,
     profile: PresetProfile,
@@ -220,7 +224,10 @@ export function applyProfileToPreset(
     const extra = resolveEffectiveExtra(profile, allProfiles, opts?.defaultExtra);
     if (extra) applyExtra(preset, extra);
 
-    // 扩展 mount/unmount/toggle：在预设 clone（已有父预设 extensions）上应用 profile 的扩展覆盖
-    applyExtensions(preset, (profile as any).extProfile);
+    // 扩展覆盖沿父链依次应用（祖先 → 自身）：开关后写者胜、后代可摘除祖先挂载的条目、
+    // 各层新增条目并存；applyExtensions 自带按 id 去重与 no-op 摘除。
+    for (const p of collectProfileChain(profile, allProfiles)) {
+        if (p.extProfile) applyExtensions(preset, p.extProfile);
+    }
 }
 

@@ -1,4 +1,5 @@
-import { openai_settings } from '@sillytavern/scripts/openai';
+import { oai_settings, openai_settings, settingsToUpdate } from '@sillytavern/scripts/openai';
+import { saveSettingsDebounced } from '@sillytavern/script';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { POPUP_TYPE, POPUP_RESULT, callGenericPopup } from '@sillytavern/scripts/popup';
 import { t } from '@sillytavern/scripts/i18n';
@@ -36,6 +37,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
             contextTokens: preset['openai_max_context'] != null ? String(preset['openai_max_context']) : '',
             maxTokens: preset['openai_max_tokens'] != null ? String(preset['openai_max_tokens']) : '',
             streaming: !!preset['stream_openai'],
+            thoughts: !!preset['show_thoughts'],
         },
         i18n: {
             descTitle: L('Description'),
@@ -47,6 +49,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
             contextTitle: L('Context'),
             tokensTitle: L('Tokens'),
             streamTitle: L('Streaming'),
+            thoughtsTitle: L('Request model reasoning'),
         }
     });
 
@@ -85,22 +88,37 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     const context = toNumOrUndef('#preset_edit_context');
     const maxTokens = toNumOrUndef('#preset_edit_max_tokens');
     const streaming = dialog.find('#preset_edit_stream').is(':checked');
+    const thoughts = dialog.find('#preset_edit_thoughts').is(':checked');
 
-    // 直接写预设本体字段（saveMeta 会把整个预设 POST 到 /api/presets/save）
-    if (temp !== undefined) preset['temperature'] = temp;
-    if (topP !== undefined) preset['top_p'] = topP;
-    if (topK !== undefined) preset['top_k'] = topK;
-    if (context !== undefined) preset['openai_max_context'] = context;
-    if (maxTokens !== undefined) preset['openai_max_tokens'] = maxTokens;
-    preset['stream_openai'] = streaming;
+    // 采样参数随 meta 事务一并落盘（patch 模式）：请求体携带新值，成功后才写回活预设——
+    // 保存失败时内存/磁盘/UI 三方保持一致，不残留「内存已改、磁盘未存」的分歧。
+    const samplingPatch: Record<string, any> = { stream_openai: streaming, show_thoughts: thoughts };
+    if (temp !== undefined) samplingPatch['temperature'] = temp;
+    if (topP !== undefined) samplingPatch['top_p'] = topP;
+    if (topK !== undefined) samplingPatch['top_k'] = topK;
+    if (context !== undefined) samplingPatch['openai_max_context'] = context;
+    if (maxTokens !== undefined) samplingPatch['openai_max_tokens'] = maxTokens;
 
     const ok = await persistMetaTransaction(meta, (m) => ({
         ...m,
         description: newDesc,
         models: newModels,
         bgImage: newBgImage,
-    }), presetName, presetIndex);
+    }), presetName, presetIndex, { patch: samplingPatch });
     if (!ok) return;
+    // 活动预设：把采样补丁同步进 ST 运行时与面板 DOM（镜像 doSaveMeta 的 extensions 镜像语义）——
+    // 否则当前会话不生效，且下次原生「保存预设」会用旧运行时值覆盖预设文件里的新值。
+    if (oai_settings.preset_settings_openai === presetName) {
+        for (const [presetKey, value] of Object.entries(samplingPatch)) {
+            const meta = settingsToUpdate[presetKey];
+            const settingsKey = meta ? meta[1] : presetKey;
+            (oai_settings as Record<string, any>)[settingsKey] = value;
+            if (!meta) continue;
+            if (meta[2]) $(meta[0]).prop('checked', value === true);
+            else $(meta[0]).val(value as number);
+        }
+        saveSettingsDebounced(); // 运行时变更随 ST 自身节奏落 settings.json,与原生面板改动同路径
+    }
     toastr.success(t`Preset updated`);
     if (onSaved) onSaved();
 }

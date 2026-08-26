@@ -98,10 +98,16 @@ export function renderStagedPane(ctx: EditorContext, snapshot?: EditorSnapshot):
         if (item.entry?.index !== undefined) {
             card.append($('<div class="pc-card-index"><span>' + item.entry.index + '</span></div>'));
         }
+        // label/role 来自预设数据（导入的 delta changes.fields.role 可携带任意串）：
+        // 走 attr/text 构建，禁止拼 HTML（cssEscape 只服务选择器，不是 HTML 转义）。
         const title = $('<div class="pc-card-title"></div>')
-            .append($('<span class="pc-card-name" title="' + cssEscape(item.label) + '"></span>').text(item.label));
+            .append($('<span class="pc-card-name"></span>').attr('title', item.label).text(item.label));
         if (item.entry?.role) {
-            title.append($('<span class="pc-role-badge role-' + cssEscape(item.entry.role) + '">' + item.entry.role + '</span>'));
+            const role = String(item.entry.role);
+            const roleClass = ['system', 'user', 'assistant'].includes(role) ? `role-${role}` : '';
+            const badge = $('<span class="pc-role-badge"></span>').text(role);
+            if (roleClass) badge.addClass(roleClass);
+            title.append(badge);
         }
         card.append(title);
         // 开关组：Undo 在最前（撤销该条目），其后 enable 开关 / 闪电按钮（与主列表一致，staged 可交互）

@@ -77,7 +77,8 @@ describe('resetProfileCore (delta)', () => {
             prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
             extensions: {},
         };
-        const result = await resetProfileCore(preset, meta, child, 'Test', 0);
+        const idx = addPreset('Test', preset);
+        const result = await resetProfileCore(preset, meta, child, 'Test', idx);
         expect(result).toBe('reset');
         expect(preset.temperature).toBe(0.5);
         // 自身差异清空：继承父链解析态（加载时链式解析还原）
@@ -102,7 +103,8 @@ describe('resetProfileCore (delta)', () => {
             prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
             extensions: {},
         };
-        await resetProfileCore(preset, meta, child, 'Test', 0);
+        const idx = addPreset('Test', preset);
+        await resetProfileCore(preset, meta, child, 'Test', idx);
         expect(preset.impersonation_prompt).toBe('parent');
         expect(child.extra).toBeUndefined();
     });
@@ -125,7 +127,8 @@ describe('resetProfileCore (delta)', () => {
             prompt_order: [{ character_id: 100001, order: [{ identifier: 'a', enabled: true }] }],
             extensions: {},
         };
-        await resetProfileCore(preset, meta, child, 'Test', 0);
+        const idx = addPreset('Test', preset);
+        await resetProfileCore(preset, meta, child, 'Test', idx);
         expect(preset.temperature).toBe(1.0);
         expect(child.sampling).toBeUndefined();
     });
@@ -156,7 +159,6 @@ describe('resetProfileCore (delta)', () => {
 
         const p = resetProfileCore(preset, meta, profile, 'Test', idx);
         await vi.runAllTimersAsync();
-        console.log('S2 debug fetch calls:', failFetch.mock.calls.length);
         await expect(p).resolves.not.toBe('reset');
 
         expect(profile.prompts).toEqual(originalPrompts);

@@ -42,7 +42,22 @@ describe('computePromptDrift', () => {
         expect(drift.deleted).toEqual(['pDeleted']);
         expect(drift.unmounted).toEqual([]);
         expect(drift.remounted).toEqual([]);
-        expect(drift.added).toEqual([{ identifier: 'p3', definition: expect.objectContaining({ content: 'new' }) }]);
+        expect(drift.added).toEqual([{ identifier: 'p3', definition: expect.objectContaining({ content: 'new' }), enabled: true }]);
+    });
+
+    it('keeps the disabled-by-default state of a newly appended prompt (no silent enable)', () => {
+        // ST append 新增挂载 prompt 的缺省态是禁用（enabled:false）：捕获必须保留运行时真值
+        const rt = {
+            prompts: [{ identifier: 'pNew', content: 'fresh' }],
+            prompt_order: [{ name: 'main', order: [{ identifier: 'pNew', enabled: false }] }],
+        };
+        const rc = { prompts: [], prompt_order: [{ name: 'main', order: [] }] };
+        const drift = computePromptDrift(rt as any, rc as any);
+        expect(drift.added).toEqual([{ identifier: 'pNew', definition: expect.anything(), enabled: false }]);
+
+        const base: PromptBaseProfile = { kind: 'prompt_base', formatVersion: 3, id: 'b', name: 'B', prompts: [] };
+        const next = applyPromptDriftToProfile(base, drift) as PromptBaseProfile;
+        expect(next.prompts.find((e) => e.identifier === 'pNew')).toMatchObject({ mounted: true, enabled: false });
         expect(isEmptyPromptDrift(drift)).toBe(false);
     });
 

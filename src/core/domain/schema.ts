@@ -12,6 +12,18 @@ export const PROMPT_FIELD_KEYS = [
 
 const PROMPT_FIELD_KEY_SET = new Set<string>(PROMPT_FIELD_KEYS);
 
+/**
+ * 明确定义「不随 profile 快照复制」的 prompt identifier：
+ * 这些是第三方扩展自管理的固定名 prompt（content 可能是巨大的设置对象），
+ * 采集/挂载还原时一律跳过——不进入 profile 的 prompts/unusedIds/order 与 defaultSnapshot。
+ * 应用时保持 preset 现状（由扩展自己管理），避免复制巨大内容或干扰其内部状态。
+ */
+export const PROMPT_NEVER_CAPTURE = new Set<string>(['SPresetSettings']);
+
+export function isNeverCaptureIdentifier(identifier: string): boolean {
+    return PROMPT_NEVER_CAPTURE.has(identifier);
+}
+
 export function isPromptFieldsData(value: unknown): boolean {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     const fields = value as Record<string, unknown>;

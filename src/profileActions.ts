@@ -76,11 +76,6 @@ export function buildDerivedProfile(
     });
 }
 
-// 判断 profile 是否为导入存档 base（只读隐藏）。v1/v2 迁移已移除，始终返回 false 保留接口兼容。
-export function isArchiveProfile(_profile: PromptBaseProfile | PromptDeltaProfile): boolean {
-    return false;
-}
-
 // 递归收集所有派生后代（含多层 delta 链）：id → 其后代 id 列表。
 // visited 防环：损坏/导入成环数据（delta baseId 指回自身或互相引用）时不致死循环。
 export function collectDescendantProfileIds(meta: PresetMeta, rootId: string): string[] {

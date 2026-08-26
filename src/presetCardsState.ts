@@ -211,6 +211,7 @@ export async function applyProfileToPresetByName(
     } catch (err) {
         for (const key of Object.keys(preset)) delete preset[key];
         Object.assign(preset, presetBefore);
+        // saveMeta 已改为副本先行：失败时 extensions 与本体都未被写回，无需还原镜像
         setActiveProfile(activeBefore);
         console.error('Load profile failed', err);
         toastr.error(L('Failed to save preset metadata'));
@@ -231,12 +232,19 @@ export async function loadProfile(
     const regName = findRegisteredPresetName(profileId, name);
     if (regName !== undefined) {
         const preset = openai_settings[idx] as Preset;
-        refreshRegisteredSnapshot(name, preset, profileId);
-        const regIdx = openai_setting_names[regName];
+        // 注册名以 refreshRegisteredSnapshot 的返回为准：profile 刚改名时注册已迁移到新名
+        //（marker 里还是旧名），按旧名查索引会 miss 而误走字段级路径覆写父预设。
+        const effectiveRegName = refreshRegisteredSnapshot(name, preset, profileId) ?? regName;
+        const regIdx = openai_setting_names[effectiveRegName];
         if (regIdx !== undefined) {
             // activeProfile/通知由 PRESET_CHANGED 观察者统一处理（fastApply 内部 emit,避免双重通知 L18）
+            try {
+                await fastApplyPreset(regIdx, effectiveRegName);
+            } catch (err) {
+                console.error('preset-cards: fastApply failed', err);
+                return;
+            }
             toastr.success(L('Configuration loaded'));
-            void fastApplyPreset(regIdx, regName).catch((err) => console.error('preset-cards: fastApply failed', err));
             clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
             await refreshGrid(ctx);
             return;
@@ -268,9 +276,11 @@ export async function refreshGrid(ctx: CardsContext, opts?: { applyBackgrounds?:
         ctx.dialog.toggleClass('preset_cards_batch_mode', true);
         ctx.dialog.find('#preset_cards_multiselect_btn').addClass('active');
         ctx.dialog.find('#preset_cards_batch_delete_btn').removeClass('hidden');
-        for (const selName of bs.selectedIds) {
-            ctx.dialog.find(`.preset_card[data-preset-name="${selName}"]`).addClass('batch_selected');
-        }
+        // 同 applyBatchView：按属性值过滤，预设名含引号/反斜杠时不走字符串选择器
+        const selected = new Set(bs.selectedIds);
+        ctx.dialog.find('.preset_card').filter(function () {
+            return selected.has(String($(this).attr('data-preset-name')));
+        }).addClass('batch_selected');
     }
     // 默认折叠：自动展开当前激活 profile 的祖先链，保证其可见
     ctx.dialog.find('.preset_card_profile_row.active').parents('.preset_card_profile_group').addClass('expanded');
@@ -321,14 +331,19 @@ export async function addBaseProfile(
         toastr.error(L('Failed to save preset metadata'));
         return;
     }
+    // 缓冲已被新 base 吸收，消费即清（与 loadProfile/delete 一致）：残留会让后续
+    // add base 把用户已撤销的开关/值编辑再次固化进快照。
+    clearBufferedForName(name, ctx.sessionEdits, ctx.pendingToggles);
     toastr.success(L('Base profile saved'));
     await refreshGrid(ctx);
 }
 
 /** 导出完整 preset JSON（剔除敏感连接字段）。
- * profileIds 为空表示导出全部 profiles；指定时为「只导出这些 profile + 预设本体」（单 profile 导出）。
+ * profileIds 为空表示导出全部 profiles；指定时为「只导出这些 profile + 预设本体」（单 profile 导出），
+ * 此时 targetProfileId 标记被导出的叶子 profile：导入端按它命名目标配置，
+ * 避免对多 profile 文件做「末位即导出目标」的位置猜测而误改名。
  * fileName 指定下载文件名（不含 .json，自动补后缀），缺省用预设名。 */
-export function exportPresetFile(name: string, idx: number, profileIds?: string[], fileName?: string): void {
+export function exportPresetFile(name: string, idx: number, profileIds?: string[], fileName?: string, targetProfileId?: string): void {
     const preset = structuredClone(openai_settings[idx] as Preset);
     const sensitiveKeys = [
         'reverse_proxy', 'proxy_password', 'custom_url', 'custom_include_body', 'custom_exclude_body',
@@ -340,12 +355,14 @@ export function exportPresetFile(name: string, idx: number, profileIds?: string[
     for (const [key, [,, , isConnection]] of Object.entries(settingsToUpdate)) {
         if (isConnection) delete preset[key];
     }
-    // 单 profile 导出：只保留指定 profile，其余剔除（profile 的 defaultSnapshot 等出厂基线随 meta 保留）
     if (profileIds && profileIds.length > 0) {
         const ext = preset.extensions?.[EXTENSION_KEY];
         if (ext && Array.isArray(ext.profiles)) {
             const keep = new Set(profileIds.map(String));
-            ext.profiles = ext.profiles.filter((p: any) => keep.has(String(p.id)));
+            ext.profiles = ext.profiles.filter((p: { id?: unknown }) => keep.has(String(p.id)));
+            if (targetProfileId !== undefined && keep.has(String(targetProfileId))) {
+                ext.targetId = String(targetProfileId);
+            }
         }
     }
     const baseName = fileName?.trim() ? fileName.trim() : name;

@@ -14,6 +14,9 @@ import {
     syncAllPresetRegistrations,
     refreshProjectionRuntimeIfActive,
     onActiveProfileChangedBySwitch,
+    createStRegistry,
+    onPresetRegistryChanged,
+    unregisterAllForPreset,
 } from '../src/presetRegistration.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
@@ -54,6 +57,25 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
+describe('onPresetRegistryChanged', () => {
+    it('upsert 新增/改写与 remove 触发通知，remove 未知道目不触发；退订后不再通知', () => {
+        const registry = createStRegistry();
+        let hits = 0;
+        const off = onPresetRegistryChanged(() => { hits += 1; });
+        registry.upsert('Proj', samplePreset()); // push 分支（新增条目）
+        expect(hits).toBe(1);
+        registry.upsert('Proj', samplePreset()); // 原地改写分支
+        expect(hits).toBe(2);
+        registry.remove('Unknown'); // 未注册名：no-op 不通知
+        expect(hits).toBe(2);
+        registry.remove('Proj');
+        expect(hits).toBe(3);
+        off();
+        registry.upsert('Proj', samplePreset());
+        expect(hits).toBe(3); // 已退订
+    });
+});
+
 describe('buildRegisteredSnapshots', () => {
     it('resolves a full preset snapshot with the profile applied (sampling fields preserved)', () => {
         const snaps = buildRegisteredSnapshots(samplePreset() as any);
@@ -67,6 +89,16 @@ describe('buildRegisteredSnapshots', () => {
 });
 
 describe('syncPresetRegistrations', () => {
+    it('resolves the parent record from the current name→index mapping (stale passed index ignored)', () => {
+        const idx = addPreset('Midnight', samplePreset());
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(true); // 初次注册
+
+        // 数组重建/同名替换场景：映射表已指向失效索引。旧索引闭包值不得被使用,
+        // 否则会把别的记录当父注册（marker.parentKey 错标 + 孤儿清扫误删）
+        openai_setting_names['Midnight'] = 99;
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(false);
+    });
+
     it('registers all profiles and reports touched; repeats are no-ops', () => {
         const idx = addPreset('Midnight', samplePreset());
 
@@ -124,9 +156,28 @@ describe('PRESET_DELETED cleanup', () => {
         expect(findRegisteredPresetName('A')).toBe('Midnight - 战斗版');
 
         initPresetRegistration();
+        delete openai_setting_names.Midnight;
         await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: 'Midnight' });
-
+        await new Promise((resolve) => setImmediate(resolve));
         expect(findRegisteredPresetName('A')).toBeUndefined();
+    });
+
+    it('clears an active projection when its parent is deleted after projection unregister', async () => {
+        const idx = addPreset('Midnight', samplePreset());
+        syncPresetRegistrations('Midnight', idx);
+        const projectionName = 'Midnight - 战斗版';
+        oai_settings.preset_settings_openai = projectionName;
+        await unregisterAllForPreset('Midnight');
+        expect(openai_setting_names[projectionName]).toBeUndefined();
+        delete openai_setting_names['Midnight'];
+
+        initPresetRegistration();
+        await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: 'Midnight' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(openai_setting_names[projectionName]).toBeUndefined();
+        expect(oai_settings.preset_settings_openai).toBeNull();
+        expect(getActiveProfile()).toBeUndefined();
     });
 });
 
@@ -171,12 +222,16 @@ describe('refreshProjectionRuntimeIfActive (NEW-2)', () => {
         }
     });
 
-    it('no-op when the projection is not the active preset', () => {
+    it('no-op when the projection is not the active preset', async () => {
         const idx = addPreset('Midnight', samplePreset());
         syncPresetRegistrations('Midnight', idx);
         oai_settings.preset_settings_openai = 'Midnight';
-        refreshProjectionRuntimeIfActive('Midnight'); // 不抛错即可(活动是父预设,非投影)
+        // 守卫：活动预设是无 marker 的父预设 → 不得触发重应用，运行时 prompts 保持哨兵值
+        (oai_settings as any).prompts = [{ identifier: 'sentinel', content: 'untouched' }];
+        refreshProjectionRuntimeIfActive('Midnight');
+        await new Promise((r) => setImmediate(r)); // fastApply 为 void 异步
         expect(oai_settings.preset_settings_openai).toBe('Midnight');
+        expect((oai_settings as any).prompts).toEqual([{ identifier: 'sentinel', content: 'untouched' }]);
     });
 });
 

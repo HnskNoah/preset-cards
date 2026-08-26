@@ -15,6 +15,7 @@ import { getActiveProfile, setActiveProfile } from './activeProfile.js';
 import { fastApplyPreset } from './fastApply.js';
 import { addBaseProfile, clearImageCacheAndRefresh, deletePresetByName, exportPresetFile, importPresetFromHeader, importProfileFile, loadProfile, pickJsonFile, refreshActiveCardSelection, refreshActivePresetUI, refreshGrid, reselectFirstPreset, showConciseProfilesModal } from './presetCardsState.js';
 import { refreshCardInPlace } from './presetCardsRender.js';
+import { openMigrationWizard } from './migrationDialog.js';
 import type { CardsContext } from './presetCardsContext.js';
 
 function updateCount(ctx: CardsContext, visible: number, total: number): void {
@@ -31,9 +32,11 @@ function applyBatchView(ctx: CardsContext): void {
     ctx.dialog.toggleClass('preset_cards_batch_mode', s.isBatchMode);
     ctx.dialog.find('#preset_cards_batch_delete_btn').toggleClass('hidden', !s.isBatchMode);
     ctx.dialog.find('.preset_card').removeClass('batch_selected');
-    for (const name of s.selectedIds) {
-        ctx.dialog.find(`.preset_card[data-preset-name="${name}"]`).addClass('batch_selected');
-    }
+    // 预设名来自文件名/导入数据，含引号或反斜杠会让属性选择器解析错乱——按属性值过滤而非拼选择器
+    const selected = new Set(s.selectedIds);
+    ctx.dialog.find('.preset_card').filter(function () {
+        return selected.has(String($(this).attr('data-preset-name')));
+    }).addClass('batch_selected');
 }
 
 /** 从事件目标提取 profile 行上下文（row + card + profileId + name + idx）。 */
@@ -369,7 +372,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         if (!profile) return;
         // 单 profile 导出：连带父链一起导出（delta 需真实父链才能正确解析），parent 链外 profile 不导出
         const ancestorIds = collectAncestorProfileIds(meta, profileId);
-        exportPresetFile(name, idx, ancestorIds);
+        exportPresetFile(name, idx, ancestorIds, undefined, String(profileId));
     });
 
     // ---- Profiles: Import Configuration ----
@@ -405,5 +408,10 @@ export function bindCardsHandlers(ctx: CardsContext): void {
     // ---- Import button（插件接管文件读取，按类型分流）----
     ctx.dialog.on('click', '#preset_cards_import_btn', async function () {
         await importPresetFromHeader(ctx);
+    });
+
+    // ---- Migrate button（预设更新迁移：旧预设 profile 树 rebase 到新版预设）----
+    ctx.dialog.on('click', '#preset_cards_migrate_btn', async function () {
+        await openMigrationWizard(ctx);
     });
 }

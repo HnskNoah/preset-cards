@@ -186,7 +186,48 @@ describe('mergeImportedProfiles deduplication & cross-file merge', () => {
         expect(result.profiles).toHaveLength(1);
         expect(skipWarning(result.warnings)).toBe(true);
     });
+    it('single-delta import with an embedded base creates a parent anchor with real entries (not empty)', () => {
+        // 顶层单 delta 载荷（assertV3ImportPayload 放行 base.prompts）：内嵌父状态必须落进锚点，
+        // 否则孤立 delta 兜底生成空 'Imported Parent'，继承条目静默丢失。
+        const singleDelta = {
+            kind: 'prompt_delta',
+            formatVersion: 3,
+            id: 'd1',
+            name: 'Delta',
+            baseId: 'b1', // 不在文件内
+            base: { name: 'Base', prompts: [{ identifier: 'a', mounted: true, enabled: true }] },
+            changes: [{ identifier: 'a', enabled: false }],
+        };
+        const result = mergeImportedProfiles(singleDelta, [], 'Delta', {} as any);
+        expect(result.profiles).toHaveLength(2);
+        const base = result.profiles.find((p) => p.kind === 'prompt_base')!;
+        const delta = result.profiles.find((p) => p.kind === 'prompt_delta')!;
+        expect(base.name).toBe('Imported Parent');
+        expect(base.prompts).toEqual([{ identifier: 'a', mounted: true, enabled: true }]);
+        expect(delta.baseId).toBe(base.id);
+    });
+
+    it('targetId inside extensions.preset_cards names the marked profile, not the last one', () => {
+        // 完整 preset 导出（多 profile）带 targetId：按标记命名导出叶子，位置猜测不再误改末位名字
+        const preset = {
+            name: 'My Preset',
+            prompts: [],
+            extensions: {
+                preset_cards: {
+                    targetId: 'b1',
+                    profiles: [baseProfile, makeBaseProfile({ id: 'b2', name: 'Second', prompts: [] })],
+                },
+            },
+        };
+        const result = mergeImportedProfiles(preset, [], 'Exported Leaf', {} as any);
+        const first = result.profiles.find((p) => p.id !== undefined && p.name === 'Exported Leaf');
+        expect(first).toBeDefined();
+        // b1（标记的叶子）被改名，末位 b2 保持原名
+        const second = result.profiles.find((p) => p.name === 'Second');
+        expect(second).toBeDefined();
+    });
 });
+
 
 describe('classifyHeaderImport', () => {
     it('classifies full preset exports as preset (including empty profiles)', () => {
@@ -240,8 +281,11 @@ describe('orderPresetCandidates', () => {
         expect(orderPresetCandidates(['B', 'C'], 'A')).toEqual(['B', 'C']);
     });
 
-    it('returns a copy of the original list without preferredFirst', () => {
-        expect(orderPresetCandidates(['B', 'A'])).toEqual(['B', 'A']);
+    it('returns a new array (not the same reference) without preferredFirst', () => {
+        const input = ['B', 'A'];
+        const out = orderPresetCandidates(input);
+        expect(out).toEqual(['B', 'A']);
+        expect(out).not.toBe(input); // 拷贝语义：调用方改返回值不得污染传入列表
         expect(orderPresetCandidates([])).toEqual([]);
     });
 });

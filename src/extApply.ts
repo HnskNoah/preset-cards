@@ -39,25 +39,24 @@ function setValue(obj: any, path: string, value: any): void {
 /**
  * 应用单条 toggle：支持两种路径格式——
  * - 简单路径："SPreset.ChatSquash.enabled" → 直接遍历设置
- * - 数组条目路径："regex_scripts.{id}.disabled" → 按 id 查找数组条目再设字段
+ * - 数组条目路径："regex_scripts.{id}.disabled" → 从已知字段后缀反向解析，id 可含点号
  */
 function applyToggle(ext: Record<string, any>, path: string, value: boolean): void {
     for (const arrayPath of EXT_ARRAY_PATHS) {
-        const prefix = arrayPath + '.';
-        if (path.startsWith(prefix)) {
-            const rest = path.slice(prefix.length);
-            const dotIdx = rest.indexOf('.');
-            if (dotIdx > 0) {
-                const itemId = rest.slice(0, dotIdx);
-                const field = rest.slice(dotIdx + 1);
-                const arr = resolveArray(ext, arrayPath);
-                if (arr) {
-                    const item = arr.find((x: any) => x.id === itemId);
-                    if (item) item[field] = value;
-                }
-                return;
-            }
+        const prefix = `${arrayPath}.`;
+        if (!path.startsWith(prefix)) continue;
+        const rest = path.slice(prefix.length);
+        for (const field of ['disabled', 'enabled'] as const) {
+            const suffix = `.${field}`;
+            if (!rest.endsWith(suffix)) continue;
+            const itemId = rest.slice(0, -suffix.length);
+            if (!itemId) return;
+            const arr = resolveArray(ext, arrayPath);
+            const item = arr?.find((entry: any) => String(entry?.id) === itemId);
+            if (item) item[field] = value;
+            return;
         }
+        return;
     }
     setValue(ext, path, value);
 }
@@ -65,8 +64,7 @@ function applyToggle(ext: Record<string, any>, path: string, value: boolean): vo
 /**
  * 应用扩展覆盖到预设 clone：
  * 1. unmount：从数组中按 id 移除条目
- * 2. mount：向数组中按 id 新增条目（不重复）
- * 3. toggle：设置布尔值（支持简单路径和数组条目路径）
+ * 2. mount：新增条目；同 id 已存在（祖先层挂载/本层重复）→ 后写定义原位覆盖（后写者胜）
  */
 export function applyExtensions(
     preset: Record<string, any>,
@@ -89,16 +87,15 @@ export function applyExtensions(
         }
     }
 
-    // Mounts：向数组中新增条目（不重复）
+    // Mounts：新增条目；同 id 已存在（祖先层挂载/本层重复）→ 后写定义原位覆盖。
+    // 覆盖语义与跨层开关「后写者胜」一致：祖先挂载的条目被后代整条重捕获时必须能生效。
     if (extProfile.extMounts) {
         for (const [path, entries] of Object.entries(extProfile.extMounts)) {
             const arr = resolveArray(ext, path) ?? [];
-            const existingIds = new Set(arr.map((item: any) => item.id).filter(Boolean));
             for (const entry of entries) {
-                if (!existingIds.has(entry.id)) {
-                    arr.push(structuredClone(entry.definition));
-                    existingIds.add(entry.id);
-                }
+                const idx = arr.findIndex((item: any) => item && item.id === entry.id);
+                if (idx >= 0) arr[idx] = structuredClone(entry.definition);
+                else arr.push(structuredClone(entry.definition));
             }
             setArray(ext, path, arr);
         }
@@ -110,4 +107,15 @@ export function applyExtensions(
             applyToggle(ext, path, value);
         }
     }
+}
+
+/** 构造扩展捕获的继承基线：父预设克隆 ⊕ 祖先层 extProfile 依次应用（纯函数）。
+ * 注册捕获用它对齐「应用沿链重放」的对照态：运行时 vs 该基线的漂移恰好落在活动层可表达的差异。 */
+export function buildInheritedExtensionBaseline(
+    parent: Record<string, any>,
+    ancestorProfiles: { extProfile?: ExtProfileOverride }[],
+): Record<string, any> {
+    const clone = structuredClone(parent);
+    for (const ancestor of ancestorProfiles) applyExtensions(clone, ancestor.extProfile);
+    return clone;
 }

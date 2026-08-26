@@ -42,6 +42,13 @@ describe('promptChain resolution', () => {
         expect(resolveEffectiveExtra(d, [b, d], { a: 0, c: 3 })).toEqual({ a: 1, b: 2, c: 3 });
     });
 
+    it('drops keys later promoted to SAMPLING_KEYS from baseline and legacy layer extras', () => {
+        const b = base('b1');
+        const d = delta('d1', 'b1', { extra: { show_thoughts: true, impersonation_prompt: 'x' } });
+        const out = resolveEffectiveExtra(d, [b, d], { show_thoughts: false, bias: 'y' });
+        expect(out).toEqual({ impersonation_prompt: 'x', bias: 'y' });
+     });
+
     it('collects chain root-first with cycle protection', () => {
         const b = base('b1');
         const d1 = delta('d1', 'b1');
@@ -91,6 +98,40 @@ describe('applyProfileToPreset sampling/extra/model chain', () => {
         const d = delta('d1', 'b1');
         applyProfileToPreset(preset, d, [b, d], { defaultModel: { source: 'openai', name: 'gpt-4o' } });
         expect(preset.openai_model).toBe('gpt-4o');
+    });
+
+
+    it('applies extension overrides along the chain: toggles overlay, mounts persist, unmounts prune', () => {
+        const preset: any = {
+            prompts: [],
+            prompt_order: [],
+            extensions: { regex_scripts: [{ id: 'r1', scriptName: 'X', disabled: true }] },
+        };
+        const b = base('b1', [], {
+            extProfile: {
+                extMounts: { regex_scripts: [{ id: 'r9', definition: { id: 'r9', scriptName: 'Base新增', disabled: true } }] },
+                extToggles: { 'regex_scripts.r1.disabled': false }, // 父层把 r1 打开
+            },
+        });
+        const d = delta('d1', 'b1', {
+            extProfile: {
+                extUnmounts: { regex_scripts: ['r9'] },   // 后代摘除祖先挂载的条目
+                extToggles: { 'regex_scripts.r1.disabled': true }, // 自身开关覆盖父层
+            },
+        });
+        applyProfileToPreset(preset as unknown as Parameters<typeof applyProfileToPreset>[0], d as never, [b as never, d as never]);
+        const scripts = (preset.extensions.regex_scripts ?? []) as Array<{ id: string; disabled?: boolean }>;
+        expect(scripts.map((s) => s.id)).toEqual(['r1']); // r9 被后代摘除
+        expect(scripts[0].disabled).toBe(true);           // 开关后写者胜（delta 覆盖 base）
+    });
+
+    it('keeps ancestor mounts when descendants do not touch them', () => {
+        const preset: any = { prompts: [], prompt_order: [], extensions: {} };
+        const b = base('b1', [], { extProfile: { extMounts: { regex_scripts: [{ id: 'r9', definition: { id: 'r9', scriptName: 'Base新增' } }] } } });
+        const d = delta('d1', 'b1');
+        applyProfileToPreset(preset as unknown as Parameters<typeof applyProfileToPreset>[0], d as never, [b as never, d as never]);
+        const scripts = (preset.extensions.regex_scripts ?? []) as Array<{ id: string }>;
+        expect(scripts.map((s) => s.id)).toEqual(['r9']); // 无关层级的挂载沿链保留
     });
 });
 

@@ -21,6 +21,10 @@
 - **元数据编辑**：描述、适用模型标签（渲染厂商 Logo）、背景图 URL，支持背景图 IndexedDB 缓存与一键清理。
 - **锁定态只读查看**：锁定后隐藏重置 / 提交按钮，点击 prompt 可进入只读查看（表单禁用、无保存），取消按钮显示为返回。
 - **中文界面**：`L()` 用 ST 的 `getCurrentLocale()` 判定语言（回退链 = `localStorage['language']` → `navigator.language` → `en`，与 ST 完全一致），命中内置中英词典即切换中文；未显式设置语言时也跟随浏览器语言，不会默认误判英文。
+- **注册为原生预设（注册链路，2026-08 实现）**：profile 投影为 ST 原生预设出现在 ST 预设下拉，原生 UI 与其他扩展可直接切换；原生切换与卡片点击走同一钩子，激活永远是最新父链解析结果；启动 / reload 自动对账重注册。
+- **原生编辑自动捕获（保存捕获）**：注册 profile 激活期间，用户在原生 PromptManager 里改值 / 开关 / 拖顺序 / 删条目 / 新增条目，保存后自动 diff 捕获回 profile delta——原生编辑不再丢改动，形成「编辑 → 捕获 → 下次激活还原同一状态」闭环。
+- **扩展配置随 profile（扩展捕获）**：profile 可记录预设 extensions 的开关与数组条目增删（正则脚本、SPreset 绑定、tavern_helper 脚本等），加载 profile 时一并应用；在注册 profile 激活期间的扩展变更同样被自动捕获。加载时**沿父链依次应用**（祖先 → 自身）：开关后写者胜、后代可摘除祖先挂载的条目、各层新增并存。
+- **预设更新迁移（实验性，暂不建议用于不可恢复的数据）**：`feature/preset-migration` 已实现 rebase 式逐层重放、图形化冲突编辑器、identifier + 内容指纹匹配、顺序 / 新条目策略，以及可选的来源 prompt/正则带入。**当前合并门仍确认存在投影刷新重入、`undefined` 裁决、过期裁决、孤立 Delta 误接父链、Delta 顺序策略、锁定基线目标、无 id 正则匹配和 sampling/extra/model 三方语义等阻断项，因此尚未合并 `dev-ts`，不可视为可靠发布功能。**入口会提示先导出备份；在阻断项全部修复并通过回归验证前，仅用于可丢弃副本测试。旧预设保持原样，迁移结果按设计应追加到目标预设。
 
 ## 安装与构建
 
@@ -32,7 +36,7 @@ npm run typecheck  # TypeScript 类型检查（tsc --noEmit）
 npm test           # 运行 vitest 单元测试
 ```
 
-插件本体位于 `public/scripts/extensions/preset-cards/`（manifest 的 `js` 字段指向 `dist/index.js`，`hooks.activate` = `init`）。将整个插件目录放入 ST 的 `public/scripts/extensions/` 下，刷新并启动 ST 后即可在侧边栏看到 **Preset Cards** 入口（或使用 `/presetcards` 斜杠命令）。
+插件本体位于 `public/scripts/extensions/preset-cards/`（manifest 的 `js` 字段指向 `dist/index.js`，`hooks.activate` = `init`）。将整个插件目录放入 ST 的 `public/scripts/extensions/` 下，刷新并启动 ST 后即可在侧边栏看到 **Preset Cards** 入口（或使用 `/presetcards` 斜杠命令）。`init.ts` 在模块顶层自执行一次（守卫防重复），兼容 ShareTavern 等非生命周期加载模式（`extensionLifecycle: false` 时不调 manifest hooks 也能初始化）。
 
 ## 使用说明
 
@@ -47,20 +51,20 @@ npm test           # 运行 vitest 单元测试
 
 ## 数据模型
 
-所有扩展数据存于预设对象的 `extensions['preset_cards']`（描述、适用模型、背景图、profiles、隐藏默认基准、出厂采样基线），通过 ST 的 `/api/presets/save` 持久化。
+所有扩展数据存于预设对象的 `extensions['preset_cards']`（描述、适用模型、背景图、profiles、隐藏默认基准、出厂采样基线），通过 ST 的 `/api/presets/save` 持久化。完整字段级格式声明（两种容器形态、Base/Delta 全字段、扩展覆盖、导出文件形状）见 **[PROFILE_FORMAT.md](PROFILE_FORMAT.md)**。
 
 - **Base（`formatVersion: 3`, `kind: 'prompt_base'`）**：`prompts[]` 为 `{ identifier, mounted, enabled, lastActiveIndex?, fields? }`，记录完整挂载状态与开关；可选 `unusedIds`（保存时未挂载的 identifier 集合）、`sampling`、`extra`、`model`。`fields` 只含「与出厂基线有差异」的值字段。
 - **Delta（`formatVersion: 3`, `kind: 'prompt_delta'`）**：`{ baseId, changes[], order? }`，`changes` 为 `{ identifier, mounted?, enabled?, lastActiveIndex?, fields? }`，仅记录相对上级的差异，可嵌套；`order` 记录完整挂载顺序。
 - **值字段白名单**：`content / name / role / injection_position / injection_depth`（`PROMPT_FIELD_KEYS`）；`order`（注入顺序）为内部字段，UI 不编辑、不随 profile 捕获。
 - **sampling / extra / model 链式解析**：加载 = 出厂基线（`defaultSampling` / `defaultExtra` / `defaultModel`）⊕ 父链 sparse diff ⊕ 自身 diff；采集（新建 Base / derive / create-delta）只存真正不同的键，diff 为空不写。旧版全量快照文件按 sparse 叠加结果值相同，无需迁移。
+- **扩展覆盖（`extProfile`，`ExtProfileOverride`）**：Base / Delta 均可携带，只存相对父预设 extensions 的差异——`extMounts`（新增的带 `id` 数组条目 + 定义）、`extUnmounts`（摘除的条目 id）、`extToggles`（布尔开关，含数组条目的 `disabled` / `enabled` 字段）。覆盖路径白名单见 `constants.ts` 的 `EXT_ARRAY_PATHS`（`regex_scripts`、`SPreset.RegexBinding.regexes`、`tavern_helper.scripts`）与 `EXT_BOOLEAN_PATHS`（`SPreset.ChatSquash.enabled`、`SPreset.MacroNest`）；每次捕获全量重算，无差异时该字段自动删除。
 - **隐藏默认基准（`defaultSnapshot`）**：首次为该预设新建 Base 时幂等全量锁定，每条 prompt 记录 `{ identifier, mounted, enabled, lastActiveIndex?, originalFields }`（mounted 与 unused 均记录）。reset 时只还原出厂挂载的条目（`defaultEnabledEntries`），出厂值由 `originalFields` 还原到预设。
 - **出厂采样基线（`defaultSampling`）与 extra 基线（`defaultExtra`）**：与 `defaultSnapshot` 同时锁定，reset 时还原预设采样键与 extra 字段到出厂值。extra 排除连接 / 凭据键（模型、来源、代理、endpoint 等 `is_connection` 字段）。
 - **第三方自管理 prompt 排除**：`SPresetSettings` 等固定名 prompt 不进入 profile 快照（`PROMPT_NEVER_CAPTURE`）。
 
 ## 导入导出与旧版迁移
 
-- **导入（现状）**：两个入口，均并入 profiles——头部「导入预设」由插件接管文件读取并按类型分流：**完整 preset 文件**弹窗「并入现有预设（去重合并）/ 作为新预设导入（ST 原生还原）」，同名候选预设排在目标选择首位；**v3 profile 文件**（base / delta / prompt_tree）弹窗选择目标预设并入；**其余类型**（普通 ST 预设 / v1/v2 / 未知格式）回退 ST 原生导入。卡片「导入配置」为**手动并入**入口（目标 = 当前卡片预设，完整 preset 也只并 profiles）。**跨预设风险确认**：完整 preset 文件内预设名与目标预设名不同，或 v3 profile 无法确认来源预设时，会先弹「跨预设导入风险」确认窗，用户确认后才继续。**并入按内容指纹去重**：与现有（或本批已并入）条目内容相同（kind + 语义字段 + delta 父链指纹）的 profile 跳过并提示；同一预设分多次导出的不同 profile 可合并为同一棵树，共享父节点只并入一次。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 重映射到有效 id；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点（父内容与已有 profile 相同时直接挂到已有父）。v1/v2 需先迁移（见下）。
-- **导入（定稿已实现，2026-08-14）**：头部「导入预设」已由插件接管文件读取，按类型分流——完整 preset 弹窗并入或新建 / v3 profile 弹窗选预设并入 / 其余回退 ST 原生；卡片「导入配置」保留为**手动并入**入口（完整 preset 也接受，但明确只并 profiles）。设计稿见 `docs/plans/import-flow-design.md`（已实现；docs/ 本地 gitignore，不入库；向新接手者交接时需口头/单独提供这些文件）。
+- **导入（已定稿实现，2026-08-14）**：两个入口，均并入 profiles——头部「导入预设」由插件接管文件读取并按类型分流：**完整 preset 文件**弹窗「并入现有预设（去重合并）/ 作为新预设导入（ST 原生还原）」，同名候选预设排在目标选择首位；**v3 profile 文件**（base / delta / prompt_tree）弹窗选择目标预设并入；**其余类型**（普通 ST 预设 / v1/v2 / 未知格式）回退 ST 原生导入。卡片「导入配置」为**手动并入**入口（目标 = 当前卡片预设，完整 preset 也只并 profiles）。**跨预设风险确认**：完整 preset 文件内预设名与目标预设名不同，或 v3 profile 无法确认来源预设时，会先弹「跨预设导入风险」确认窗，用户确认后才继续。**并入按内容指纹去重**：与现有（或本批已并入）条目内容相同（kind + 语义字段 + delta 父链指纹）的 profile 跳过并提示；同一预设分多次导出的不同 profile 可合并为同一棵树，共享父节点只并入一次。v3 载荷经 `assertV3ImportPayload` 校验；完整 preset JSON 经 `extractProfilesFromPresetExport` 提取。所有 profile 重新分配 id，`baseId` 重映射到有效 id；带内嵌父状态（`base.prompts`）的 delta 或孤立 delta 会生成本地 `Imported Parent` base 作为锚点（父内容与已有 profile 相同时直接挂到已有父）。文件内 profile id 重复会被拒绝导入（id 是重映射与父链指向的唯一锚点）。v1/v2 需先迁移（见下）。设计稿见本地 `docs/historical/import-flow-design.md`（docs/ 为本地 gitignore 目录，不入库；交接时需单独提供）。
 - **导出**：统一为导出完整 preset JSON（`exportPresetFile`），脱敏剔除 reverse_proxy / proxy_password / custom_url / azure / workers_ai 等连接与凭据字段。**卡片右上角 / 头部「导出全部」**导出全部 profiles；**单 profile「导出配置」**只导出该 profile 及其父链（`collectAncestorProfileIds`），父链外 profile 不导出。导入侧从该 JSON 的 `extensions['preset_cards']` 提取 profiles 并入当前预设。
 - **v1 / v2 迁移**：旧版 profile 文件**不会**在导入时自动迁移，需先用独立工具转换：
 
@@ -104,16 +108,17 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 
 `onProfileChanged` 覆盖**所有**加载路径（卡片行、concise、`loadProfile`），第三方据此同步 UI。
 
-## 注册链路（已决策，切片实施中）
+## 注册链路（profile → ST 原生预设，已实现）
 
-> v3 现状完全可用；新增方向 = 把 profile 投影为 ST **原生预设**，解决「profile 无法暴露给 ST 生态（原生 UI / 其他扩展）」的痛点。v4 独立文件存储设计已废弃（对应模块归档于分支 `archive/unused-core`）。
+> 解决「profile 无法暴露给 ST 生态（原生 UI / 其他扩展）」的痛点：把 profile 投影为 ST 原生预设，切换从「字段级涂抹」变成「选中一个真预设」。v4 独立文件存储设计已废弃（设计稿存本地 `docs/archive/`，未消费模块已从源码树移除）。
 
-- **投影 + marker**：profile 解析为全量快照 → `buildProjectedPreset` 投影为完整 ST preset 记录，身份 marker（`kind:'profile'` + profileId/profileName/parentKey）藏在 `extensions.preset_cards`。
-- **注册**：`openai_settings.push` + `openai_setting_names[注册名]=索引` + `saveSettingsDebounced()`，复用原生 `saveOpenAIPreset` 的「已有覆盖 / 新建 push」语义；注册名须唯一（候选 `父名 - profile名`，同父重名规则待切片 1 定案）。
-- **激活归一**：`OAI_PRESET_CHANGED_BEFORE` 钩子（ST 原生下拉与卡片点击都触发）读 marker → 沿父链重新解析 → 应用前覆盖记录，**激活永远 = 最新父链解析结果**。
-- **观察者**：`PRESET_CHANGED` 只同步 activeProfile / 卡片高亮 / 通知，绝不重复应用（ST 已应用）。
-- **保存捕获**：`SETTINGS_UPDATED`（ST 保存落盘后触发；原生 PromptManager 每次编辑都以它收尾）diff 运行时 vs 注册记录 → 差异自动捕获回 profile delta；删除 = `mounted:false` + 材料留池；新增 = 定义入父预设 prompts 池 + delta 挂载条目。
-- **切片**：1 基础链路（注册/反查/卡片走 fastApply/命名）→ 2 激活同步（BEFORE + PRESET_CHANGED）→ 3 保存捕获（SETTINGS_UPDATED）。详细设计与 ST 源码依赖清单（文件:行 + 代码摘录）见本地 `docs/current/architecture.md` §2–§6。
+- **投影 + marker**：profile 解析为全量快照 → `buildProjectedPreset` 投影为完整 ST preset 记录，身份 marker（`kind:'profile'` + profileId/profileName/parentKey）藏在 `extensions.preset_cards`；`readPresetMarker` 反查。
+- **注册**：`openai_settings.push` + `openai_setting_names[注册名]=索引`，落盘走 `POST /api/presets/save`（ST 预设为文件型存储）；注册名唯一（占位规则 `父名 - profile名` + 数字后缀去重）。启动 / reload 时全量对账幂等重注册（服务端按预设文件重建数组后不丢投影）。**数据权威仍在父预设的 `extensions['preset_cards']`，注册记录只是投影拷贝**。
+- **激活归一**：`OAI_PRESET_CHANGED_BEFORE` 钩子（ST 原生下拉与卡片点击都触发）读 marker → 沿父链重新解析 → **应用前**覆盖传入记录 + 写回存储，注册记录保持新鲜；**激活永远 = 最新父链解析结果**，父预设被原生编辑导致的过期靠此兜底。
+- **观察者**：`PRESET_CHANGED` 只同步 activeProfile / 卡片高亮 / `onProfileChanged` 通知，绝不重复应用（ST 已应用）。
+- **保存捕获**：`SETTINGS_UPDATED`（ST 保存落盘后触发；原生 PromptManager 每次编辑都以它收尾）diff 运行时 vs 注册记录 → 差异自动捕获回 profile delta。删除 / 摘除 = `mounted:false` + `enabled:false`（渲染开关读 enabled）+ 材料留池；新增 = 定义入父预设 prompts 池 + delta 挂载条目；ST 列表 Remove（detach）识别为 unmounted 而非 enabled 漂移。顶层采样 / extra / 模型漂移按「运行时 vs profile 生效值」判定，回到继承基线时自动删除 override。无基线守卫（注册记录无 prompts 时跳过 prompt 漂移，防全量误捕获）；无差异零写入防重入。
+- **扩展捕获**：注册 profile 激活期间，扩展（extensions）的布尔开关与数组条目增删 diff 运行时 vs **继承基线**（父预设 ⊕ 祖先层覆盖）→ 捕获为 `extProfile` 覆盖（见数据模型节）；加载 profile 时沿父链依次应用（祖先 → 自身），三类覆盖统一逐层重放（开关后写者胜、后代可摘除祖先挂载、各层新增并存、同 id 重复挂载后层定义覆盖）。
+- **生命周期清理**：profile 删除 → 注销注册；父预设删除（含 `PRESET_DELETED` 事件与启动孤儿清扫）→ 注销名下全部注册，ST 下拉不留废项。
 
 ## 开发约定
 
@@ -141,6 +146,16 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `tests/profileEditorContext.test.ts` | `buildBreadcrumb` / `truncateBreadcrumbName`：父链折叠、名字压缩、防环 |
 | `tests/presetStore.test.ts` / `tests/editorStore.test.ts` | core store 纯 reducer 与派生视图（卡片浏览态 / 编辑器 staged） |
 | `tests/projection.test.ts` / `tests/storageMarker.test.ts` / `tests/coreTypes.test.ts` | 投影 preset / 身份 marker 读写 / 领域类型谓词 |
+| `tests/registration.test.ts` | core/registration 纯函数：注册 / marker 反查 / 注销 / 按父查注册 / 变更检测重写 |
+| `tests/presetRegistration.test.ts` | 注册适配层：快照构建与全量对账（启动 / reload 幂等）、PRESET_DELETED 清理与孤儿清扫、激活同步、投影激活时重应用运行时 |
+| `tests/presetCapture.test.ts` | 保存捕获：捕获门与回写（captureIfRegistered / initPresetCapture）、ST 预设键↔设置键映射、顶层 sampling/extra/model override 捕获 |
+| `tests/captureDrift.test.ts` | 保存捕获纯函数：computePromptDrift 漂移计算、applyPromptDriftToProfile（base / delta 回写） |
+| `tests/extCapture.test.ts` | computeExtensionDrift：扩展 mount / unmount / toggle 与数组条目 enabled / disabled 漂移检测 |
+| `tests/extApply.test.ts` | applyExtensions：扩展覆盖应用到预设 clone（摘除 / 新增 / 开关，含数组条目路径） |
+| `tests/presetCardsState.test.ts` | `applyProfileToPresetByName` 持久化失败回滚 |
+| `tests/presetMigration.test.ts` | 迁移适配层：视图构建 / 来源候选 / plan→execute 闭环（冲突 blocked→解决→落盘重锁基线+自动注册投影） |
+| `tests/migrationPlan.test.ts` | 迁移纯函数：池三级匹配（`matchPromptPools`：identifier 主键 + 指纹重映射 + ambiguous）+ 逐层重放分析（`analyzeMigration`：Base/Delta 层三方、多层重放语义、残留 resolution 失效、dangling、基线回退） |
+| `tests/migrationApply.test.ts` | 迁移应用纯函数（经 `replayMigration`）：blocked/applied、解决项写入、指纹重映射、新条目出厂挂载策略（mounted/unmounted）、顺序策略、基线重锁（`relockDefaultSnapshot`） |
 
 > 新增逻辑（尤其纯数据变换层）应尽量作为纯函数测试，而非 DOM 弹窗测试；mocks 提供 `addPreset` 等辅助注册预设。
 
@@ -156,11 +171,19 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/promptCapture.ts` | 值字段白名单、采样 / extra / 模型快照采集与应用 |
 | `src/promptApply.ts` / `src/promptToggle.ts` / `src/promptOrder.ts` | profile 应用、prompt_order 同步与替换 |
 | `src/fastApply.ts` | 快捷应用预设：绕过 ST 原生逐元素同步 reflow，批量直写内存 + DOM，触发与原生一致的事件链 |
+| `src/presetRegistration.ts` | 注册链路适配层：openai_settings 注册表读写、全量对账（启动 / reload）、激活钩子与观察者、删除清理 |
+| `src/presetCapture.ts` | 保存捕获（切片 3）：SETTINGS_UPDATED 门 + 漂移捕获回 profile + 材料留池 / 新增入父池 + 顶层采样 / extra / 模型漂移 + 扩展漂移 |
+| `src/extCapture.ts` | 扩展漂移检测纯函数：运行时 vs 父预设 extensions 的 mount / unmount / toggle 差异 |
+| `src/extApply.ts` | 扩展覆盖应用纯函数：`extProfile` 应用到预设 clone（摘除 / 新增 / 开关） |
+| `src/presetMigration.ts` | 迁移适配层：预设对象 ↔ core/migration 视图、新出厂基线采集、追加式落盘（id 冲突重分配，落盘后注册链路自动投影） |
+| `src/migrationDialog.ts` | 迁移向导 UI：两步向导——选来源/目标与策略选项 → dry-run 报告（列表事件驱动实时刷新、同名条目去重）；确认后进编辑器迁移模式 |
+| `src/migrationEditor.ts` | 编辑器迁移模式（v2 冲突解决）：复用 pc-* 布局，左栏冲突条目置顶成组，右栏三方对照 + 手动编辑第四选项，每次裁决全量重放实时刷新，未解决完「应用迁移」置灰 |
 | `src/presetBuffers.ts` | 会话编辑缓冲（`sessionEdits` / `pendingToggles`）的键管理与应用（纯数据，不接触 DOM） |
 | `src/activeProfile.ts` | 当前激活 profile 引用（localStorage 持久化）、`getActiveProfile` |
 | `src/presetSnapshot.ts` | defaultSnapshot 锁定 / 合并 / reset 基线 |
 | `src/profileMutators.ts` / `src/profileActions.ts` | profile 数据变换与派生 / 级联删除 |
 | `src/importExport.ts` / `src/profileSchema.ts` | 导入导出与 v3 载荷校验 |
+| `src/stableStringify.ts` | 键序稳定 JSON 序列化：导入去重指纹与捕获净零比较共用 |
 | `src/presetList.ts` / `src/profileTree.ts` | 卡片与弹窗共用的条目视图、派生关系森林 |
 | `src/nameWrap.ts` | 名字换行策略：`applyNameWrap` 消费 `presetList.ts` 的 `isRepeatedRunName`（超长重复串检测），对名字元素加 `.pc-name-nowrap` 保留省略号 |
 | `src/editModal.ts` / `src/cache.ts` / `src/i18n.ts` / `src/constants.ts` | 编辑表单、背景图缓存、ST 语言判定 `L()`、中英词典、常量 |
@@ -168,4 +191,7 @@ const unsubscribe = window.presetCards.onProfileChanged(({ presetName, profileId
 | `src/core/store/{PresetStore,EditorStore}.ts` | 卡片浏览态 store（P3 已接入）/ 编辑器 staged store（已挂载，交互未接入） |
 | `src/core/codec/snapshotEntries.ts` | 快照 ↔ entries 转换（编辑器 / 注册链路用） |
 | `src/core/storage/{project,marker}.ts` | profile 投影为 ST preset + 身份 marker（注册链路核心） |
+| `src/core/registration/register.ts` | 注册链路纯函数：注册 / marker 反查 / 注销 / 变更检测（注册表与命名策略可注入） |
+| `src/core/capture/drift.ts` | 保存捕获纯函数：prompt 级漂移计算与回写（fields / enabled / order / 删增 / 挂载态） |
+| `src/core/migration/{plan,replay,apply}.ts` | 预设更新迁移纯函数：池三级匹配（plan）+ v2 逐层重放引擎（replay：Base/Delta 层三方、冲突集为 resolutions 纯函数）+ 应用封装（apply：blocked/applied、dry-run 分析、编辑器预览、基线重锁、排序策略） |
 | `tools/migrate-to-v3.ts` | v1/v2 → v3 迁移 CLI |

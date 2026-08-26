@@ -48,6 +48,28 @@ describe('EditorStore', () => {
         expect(store.getState().dirty).toBe(false);
     });
 
+    it('preserves staged fields when toggling the same identifier (no silent value loss)', () => {
+        const store = createEditorStore({
+            nodeId: 'A',
+            snapshot,
+            staged: { changes: [] },
+            undoStack: [],
+            redoStack: [],
+            dirty: false,
+        });
+
+        store.dispatch({ type: 'EDIT', identifier: 'a', fields: { content: 'B' } });
+        // 净零 toggle（快照里 a 本为 enabled:false 的场景走不到这里，这里验证非净零分支不丢 fields）
+        store.dispatch({ type: 'TOGGLE', identifier: 'a', enabled: false });
+        expect(store.getState().staged.changes).toEqual([
+            { identifier: 'a', enabled: false, fields: { content: 'B' } },
+        ]);
+        expect(store.getState().dirty).toBe(true);
+
+        const next = applyStagedToSnapshot(snapshot, store.getState().staged);
+        expect(next.prompts[0]).toMatchObject({ identifier: 'a', content: 'B' });
+    });
+
     it('stages a full mounted order and clears it when matching the snapshot order', () => {
         const twoPromptSnapshot: PresetSnapshot = {
             name: 'P',

@@ -164,16 +164,20 @@ function orderEntries(snapshot: PresetSnapshot): string[] {
     return [];
 }
 
-/** 设置 enabled 差异；与当前真值一致时净零移除。 */
+/** 设置 enabled 差异；与当前真值一致时净零移除。同 identifier 已 staged 的 fields 保留
+ * （类型模型允许 enabled+fields 共存，applyStagedToSnapshot 按共存处理；整条丢弃会静默
+ * 蒸发用户已编辑的值并让 dirty 翻回 false）。 */
 function toggleEnabled(
     changes: PromptStateChange[],
     identifier: string,
     enabled: boolean,
     currentEnabled: boolean,
 ): PromptStateChange[] {
+    const existing = changes.find((c) => c.identifier === identifier);
     const rest = changes.filter((c) => c.identifier !== identifier);
-    if (enabled === currentEnabled) return rest;
-    return [...rest, { identifier, enabled }];
+    const withFields = existing?.fields ? { identifier, fields: existing.fields } : null;
+    if (enabled === currentEnabled) return withFields ? [...rest, withFields] : rest;
+    return [...rest, withFields ? { ...withFields, enabled } : { identifier, enabled }];
 }
 
 /** 合并某 identifier 的值字段变更：已有 change 则合并 fields，否则新增。 */

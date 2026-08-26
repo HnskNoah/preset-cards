@@ -604,7 +604,7 @@
     min-height: 64px;
 }
 
-/* 采样参数区块：T/P/K/Context/Tokens/Stream 三列网格 */
+/* 采样参数区块：12 轨网格——上排 4 项各跨 3（T/P/K/思维链），下排 3 项各跨 4（上下文/Tokens/流式），两行各自满宽 */
 .preset_edit_section_title {
     font-size: 12px;
     font-weight: 600;
@@ -617,9 +617,17 @@
 
 .preset_edit_sampling_grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(12, 1fr);
     gap: 8px;
     margin-bottom: 4px;
+}
+
+.preset_edit_sampling_grid .preset_edit_span3 {
+    grid-column: span 3;
+}
+
+.preset_edit_sampling_grid .preset_edit_span4 {
+    grid-column: span 4;
 }
 
 .preset_edit_sampling_grid .preset_edit_field input[type="number"] {
@@ -646,6 +654,7 @@
 
 .preset_edit_stream_wrap {
     display: flex;
+    justify-content: center;
     align-items: center;
     height: 36px;
 }
@@ -2251,4 +2260,187 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* ---- 预设更新迁移向导（migrationDialog）---- */
+.preset_cards_migration h4 {
+    margin: 0 0 6px;
+}
+
+.preset_cards_migration_hint {
+    opacity: 0.8;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.preset_cards_migration_row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.preset_cards_migration_row > label:first-child {
+    min-width: 9em;
+    opacity: 0.85;
+}
+
+.preset_cards_migration_row select {
+    flex: 1;
+    min-width: 12em;
+}
+
+.preset_cards_migration_summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.preset_cards_migration_actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+.preset_cards_migration_conflict_group {
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    padding-top: 8px;
+    margin-top: 8px;
+}
+
+.preset_cards_migration_conflict_profile {
+    font-weight: bold;
+    margin-bottom: 6px;
+}
+
+.preset_cards_migration_conflict_row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.preset_cards_migration_field {
+    min-width: 10em;
+    max-width: 16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    align-self: center;
+}
+
+.preset_cards_migration_conflict_row > button {
+    flex: 1;
+    min-width: 9em;
+    max-width: 14em;
+    padding: 4px 8px;
+    text-align: left;
+    white-space: normal;
+}
+
+.preset_cards_migration_conflict_row > button.active {
+    outline: 2px solid var(--SmartThemeQuoteColor, #8a2be2);
+}
+
+.preset_cards_migration_choice_label {
+    font-size: 0.8em;
+    opacity: 0.75;
+    display: block;
+}
+
+.preset_cards_migration_choice_value {
+    overflow-wrap: anywhere;
+    display: block;
+    max-height: 6em;
+    overflow: hidden;
+}
+
+/* ---- 编辑器迁移模式（migrationEditor，复用 pc-manager 布局）---- */
+.pc-migration-conflict-group {
+    margin-bottom: 8px;
+}
+
+.pc-migration-group-title {
+    font-weight: bold;
+    opacity: 0.85;
+    padding: 4px 6px;
+}
+
+.pc-migration-conflict-card {
+    border-left: 3px solid var(--fullRed, #e75a5a);
+    cursor: pointer;
+}
+
+.pc-migration-warn {
+    color: var(--fullRed, #e75a5a);
+    margin-right: 6px;
+}
+
+.pc-migration-placeholder {
+    opacity: 0.7;
+    padding: 12px;
+    text-align: center;
+}
+
+.pc-migration-panel {
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 10px;
+}
+
+.pc-migration-panel-title {
+    font-weight: bold;
+    margin-bottom: 8px;
+    overflow-wrap: anywhere;
+}
+
+.pc-migration-choices {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.pc-migration-choice {
+    flex: 1;
+    min-width: 10em;
+    max-width: 16em;
+    padding: 4px 8px;
+    text-align: left;
+    white-space: normal;
+}
+
+.pc-migration-choice.active {
+    outline: 2px solid var(--SmartThemeQuoteColor, #8a2be2);
+}
+
+.pc-migration-choice-label {
+    display: block;
+    font-size: 0.8em;
+    opacity: 0.75;
+}
+
+.pc-migration-choice-value {
+    display: block;
+    overflow-wrap: anywhere;
+    max-height: 6em;
+    overflow: hidden;
+}
+
+.pc-migration-manual {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pc-migration-manual-input {
+    width: 100%;
+    min-height: 2.2em;
+    resize: vertical;
 }
