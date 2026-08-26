@@ -1,4 +1,5 @@
-import { openai_settings } from '@sillytavern/scripts/openai';
+import { oai_settings, openai_settings, settingsToUpdate } from '@sillytavern/scripts/openai';
+import { saveSettingsDebounced } from '@sillytavern/script';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { POPUP_TYPE, POPUP_RESULT, callGenericPopup } from '@sillytavern/scripts/popup';
 import { t } from '@sillytavern/scripts/i18n';
@@ -105,6 +106,19 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
         bgImage: newBgImage,
     }), presetName, presetIndex, { patch: samplingPatch });
     if (!ok) return;
+    // 活动预设：把采样补丁同步进 ST 运行时与面板 DOM（镜像 doSaveMeta 的 extensions 镜像语义）——
+    // 否则当前会话不生效，且下次原生「保存预设」会用旧运行时值覆盖预设文件里的新值。
+    if (oai_settings.preset_settings_openai === presetName) {
+        for (const [presetKey, value] of Object.entries(samplingPatch)) {
+            const meta = settingsToUpdate[presetKey];
+            const settingsKey = meta ? meta[1] : presetKey;
+            (oai_settings as Record<string, any>)[settingsKey] = value;
+            if (!meta) continue;
+            if (meta[2]) $(meta[0]).prop('checked', value === true);
+            else $(meta[0]).val(value as number);
+        }
+        saveSettingsDebounced(); // 运行时变更随 ST 自身节奏落 settings.json,与原生面板改动同路径
+    }
     toastr.success(t`Preset updated`);
     if (onSaved) onSaved();
 }
