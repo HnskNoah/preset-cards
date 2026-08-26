@@ -113,9 +113,8 @@ profile 可记录预设 `extensions` 下第三方数据的开关与数组条目�
 
 ## 10. 迁移对格式的影响
 
-预设更新迁移（rebase 式三方合并）向目标预设**追加** profiles：与目标已有 profile 冲突的 `id` 自动重分配并同步重映射 delta 的 `baseId`；出厂基线仅目标未锁定时写入。开启「从来源预设带入」（跨预设场景）时额外写入两处：
+预设更新迁移对目标格式的**设计写入**是追加 profiles：与目标已有 profile 冲突的 `id` 重分配并同步重映射 Delta 的 `baseId`；出厂基线仅目标未锁定时写入。开启「从来源预设带入」时还会追加目标缺失、且被迁移 profile 引用的 prompt 定义（含 `unusedIds` 形态），并合并 `extensions.regex_scripts`（uuid 或名称重叠时内容保留目标版、`disabled` 随来源，其余整条追加）。
 
-- 目标缺失且被迁移 profile 引用的 **prompt 定义**（含 `unusedIds` 形态的未挂载引用）追加进目标的 `prompts` 池；
-- 来源 `extensions.regex_scripts` 并入目标：uuid 或名称重叠的条目内容保留目标版但 `disabled` 开关以来源为准，其余整条追加。
+> 状态（2026-08-26）：上述是格式契约与预期语义，不表示当前实验性实现已通过合并门。`feature/preset-migration` 尚有投影刷新门重入、孤立 Delta、无 id 正则匹配、锁定基线目标和顶层 sampling/extra/model 三方迁移等阻断项；未修复前不得据此假定所有输出都满足契约，也不应将该分支合并进 `dev-ts`。共享持久化 patch 竞态与活动扩展回灌已在非迁移修复轮关闭。
 
-作者更新语义默认两项均关闭（新版删除的条目保持引用跳过，不复活）。
+作者更新语义下「从来源预设带入 prompt 定义 / 正则」两项默认关闭（新版删除的条目保持引用跳过，不复活）。
