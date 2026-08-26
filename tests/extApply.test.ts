@@ -1,6 +1,7 @@
 // extApply.test.ts：扩展 mount/unmount/toggle 应用测试
 import { describe, it, expect } from 'vitest';
 import { applyExtensions, buildInheritedExtensionBaseline } from '../src/extApply.js';
+import { computeExtensionDrift } from '../src/extCapture.js';
 
 describe('applyExtensions', () => {
     it('mounts an item to an existing array', () => {
@@ -149,5 +150,24 @@ describe('applyExtensions', () => {
         ]);
         expect((baseline.extensions.regex_scripts as any[]).map((s) => s.id)).toEqual(['a']);
         expect(parent.extensions.regex_scripts).toHaveLength(0);
+    });
+
+    it('round-trips toggles for array ids containing dots', () => {
+        const runtime = {
+            extensions: {
+                regex_scripts: [{ id: 'script.v2', findRegex: 'a', disabled: true }],
+            },
+        };
+        const parent = {
+            extensions: {
+                regex_scripts: [{ id: 'script.v2', findRegex: 'a', disabled: false }],
+            },
+        };
+        const drift = computeExtensionDrift(runtime, parent);
+        expect(drift).toEqual({ extToggles: { 'regex_scripts.script.v2.disabled': true } });
+
+        const applied = structuredClone(parent);
+        applyExtensions(applied, drift!);
+        expect(applied.extensions.regex_scripts[0].disabled).toBe(true);
     });
 });

@@ -89,8 +89,10 @@ const MERGE_WINDOW_MS = 300;
 
 interface MergePending {
     presetIndex: number;
+    /** 合并窗口打开时的目标对象身份；名称映射/数组槽变化时拒绝，绝不写到替换后的同名对象。 */
+    target: Preset;
     meta: PresetMeta;
-    /** 随本次 meta 一并落盘的预设本体补丁（如采样字段）；落盘成功才写回活对象，失败不污染内存。 */
+    /** 随本次 meta 一并落盘的预设本体补丁（如采样字段）；窗口内按字段合并，extensions 递归合并。 */
     patch?: Record<string, any>;
     timer: ReturnType<typeof setTimeout>;
     promise: Promise<void>;
@@ -102,16 +104,43 @@ const mergePending = new Map<string, MergePending>();
 /** per-preset 串行尾链：同一预设的落盘不并发（避免 last-write-wins 竞态）。 */
 const tailByPreset = new Map<string, Promise<void>>();
 
+function isPlainRecord(value: unknown): value is Record<string, any> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** 合并同一保存窗口的本体 patch：后写字段胜出；普通对象递归合并；数组作为完整值替换。 */
+function mergePresetPatch(
+    previous: Record<string, any> | undefined,
+    next: Record<string, any> | undefined,
+): Record<string, any> | undefined {
+    if (!next) return previous;
+    const merged = previous ? structuredClone(previous) : {};
+    for (const [key, value] of Object.entries(next)) {
+        const prior = merged[key];
+        merged[key] = isPlainRecord(prior) && isPlainRecord(value)
+            ? mergePresetPatch(prior, value)
+            : structuredClone(value);
+    }
+    return merged;
+}
+
 /**
  * Persist metadata into the preset's extensions field and save to disk.
  * 统一机制：per-preset 合并窗口（窗口内末次 meta 胜出）+ per-preset 串行尾链。
  * 网络失败时 reject 给调用方（调用方决定回滚/提示），不阻塞后续保存。
  */
 export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta, patch?: Record<string, any>): Promise<void> {
+    const target = openai_settings[presetIndex] as Preset | undefined;
+    if (!target || openai_setting_names[presetName] !== presetIndex) {
+        return Promise.reject(new Error('Preset target changed before save'));
+    }
     const existing = mergePending.get(presetName);
     if (existing) {
+        if (existing.presetIndex !== presetIndex || existing.target !== target) {
+            return Promise.reject(new Error('Preset target changed before save'));
+        }
         existing.meta = meta;
-        existing.patch = patch;
+        existing.patch = mergePresetPatch(existing.patch, patch);
         return existing.promise;
     }
     let resolveFn!: () => void;
@@ -119,13 +148,14 @@ export function saveMeta(presetName: string, presetIndex: number, meta: PresetMe
     const promise = new Promise<void>((res, rej) => { resolveFn = res; rejectFn = rej; });
     const pending: MergePending = {
         presetIndex,
+        target,
         meta,
-        patch,
+        patch: mergePresetPatch(undefined, patch),
         timer: setTimeout(() => {
             mergePending.delete(presetName);
             const tail = tailByPreset.get(presetName) ?? Promise.resolve();
             const run = tail.then(async () => {
-                await doSaveMeta(presetName, pending.presetIndex, pending.meta, pending.patch);
+                await doSaveMeta(presetName, pending.presetIndex, pending.target, pending.meta, pending.patch);
                 // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
                 // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
                 for (const listener of [...metaPersistedListeners]) {
@@ -181,13 +211,20 @@ export function onMetaPersisted(listener: MetaPersistedListener): () => void {
     return () => { metaPersistedListeners.delete(listener); };
 }
 
-async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetMeta, patch?: Record<string, any>): Promise<void> {
+async function doSaveMeta(
+    presetName: string,
+    presetIndex: number,
+    target: Preset,
+    meta: PresetMeta,
+    patch?: Record<string, any>,
+): Promise<void> {
+    const currentIndex = openai_setting_names[presetName];
     const preset = openai_settings[presetIndex] as Preset | undefined;
-    if (!preset) return;
-    // 合并窗口延迟落盘：预设若在窗口内被删除（openai_setting_names 已移除），放弃本次落盘，
-    // 避免用旧 body 把已删除的预设重新创建到服务器（删除与延迟保存的竞态）。
-    if (openai_setting_names[presetName] === undefined) return;
-
+    // 延迟窗口内删除、同名替换、数组槽位漂移都必须显式失败：调用方据此回滚/报错，
+    // 不能把旧目标内容写入新对象，也不能把 no-op 当成保存成功。
+    if (currentIndex !== presetIndex || !preset || preset !== target) {
+        throw new Error('Preset target changed before save');
+    }
     // 副本先行：新 meta 与本体补丁只进请求体，/api/presets/save 成功后才写回活对象——
     // 失败（网络错误 / 非 ok 响应）时内存与磁盘都保持原状，「失败不污染」对 extensions
     // 与 patch 字段同时成立。
@@ -222,12 +259,13 @@ async function doSaveMeta(presetName: string, presetIndex: number, meta: PresetM
         throw new Error('Failed to save preset metadata');
     }
 
-    // 成功：请求体内容写回活对象（保持引用身份），活动预设同步 oai_settings 镜像。
+    // 成功：请求体内容写回活对象（保持引用身份），活动预设同步完整 extensions 镜像。
     if (patch) Object.assign(preset, patch); // 与请求体同序：先补丁后容器覆写
     if (!preset.extensions) preset.extensions = {};
     preset.extensions[EXTENSION_KEY] = presetBody.extensions[EXTENSION_KEY];
     if (oai_settings.preset_settings_openai === presetName) {
-        if (!oai_settings.extensions) oai_settings.extensions = {};
-        oai_settings.extensions[EXTENSION_KEY] = preset.extensions[EXTENSION_KEY];
+        // 原生保存会从 oai_settings 读取完整 extensions；只镜像 preset_cards 会让正则等 patch
+        // 在下一次原生保存时被旧运行时值覆盖回去。
+        oai_settings.extensions = structuredClone(preset.extensions);
     }
 }

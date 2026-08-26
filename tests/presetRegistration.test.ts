@@ -16,6 +16,7 @@ import {
     onActiveProfileChangedBySwitch,
     createStRegistry,
     onPresetRegistryChanged,
+    unregisterAllForPreset,
 } from '../src/presetRegistration.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
@@ -155,9 +156,28 @@ describe('PRESET_DELETED cleanup', () => {
         expect(findRegisteredPresetName('A')).toBe('Midnight - 战斗版');
 
         initPresetRegistration();
+        delete openai_setting_names.Midnight;
         await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: 'Midnight' });
-
+        await new Promise((resolve) => setImmediate(resolve));
         expect(findRegisteredPresetName('A')).toBeUndefined();
+    });
+
+    it('clears an active projection when its parent is deleted after projection unregister', async () => {
+        const idx = addPreset('Midnight', samplePreset());
+        syncPresetRegistrations('Midnight', idx);
+        const projectionName = 'Midnight - 战斗版';
+        oai_settings.preset_settings_openai = projectionName;
+        await unregisterAllForPreset('Midnight');
+        expect(openai_setting_names[projectionName]).toBeUndefined();
+        delete openai_setting_names['Midnight'];
+
+        initPresetRegistration();
+        await eventSource.emit(event_types.PRESET_DELETED, { apiId: 'openai', name: 'Midnight' });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(openai_setting_names[projectionName]).toBeUndefined();
+        expect(oai_settings.preset_settings_openai).toBeNull();
+        expect(getActiveProfile()).toBeUndefined();
     });
 });
 

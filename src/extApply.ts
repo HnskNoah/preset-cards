@@ -39,25 +39,24 @@ function setValue(obj: any, path: string, value: any): void {
 /**
  * 应用单条 toggle：支持两种路径格式——
  * - 简单路径："SPreset.ChatSquash.enabled" → 直接遍历设置
- * - 数组条目路径："regex_scripts.{id}.disabled" → 按 id 查找数组条目再设字段
+ * - 数组条目路径："regex_scripts.{id}.disabled" → 从已知字段后缀反向解析，id 可含点号
  */
 function applyToggle(ext: Record<string, any>, path: string, value: boolean): void {
     for (const arrayPath of EXT_ARRAY_PATHS) {
-        const prefix = arrayPath + '.';
-        if (path.startsWith(prefix)) {
-            const rest = path.slice(prefix.length);
-            const dotIdx = rest.indexOf('.');
-            if (dotIdx > 0) {
-                const itemId = rest.slice(0, dotIdx);
-                const field = rest.slice(dotIdx + 1);
-                const arr = resolveArray(ext, arrayPath);
-                if (arr) {
-                    const item = arr.find((x: any) => x.id === itemId);
-                    if (item) item[field] = value;
-                }
-                return;
-            }
+        const prefix = `${arrayPath}.`;
+        if (!path.startsWith(prefix)) continue;
+        const rest = path.slice(prefix.length);
+        for (const field of ['disabled', 'enabled'] as const) {
+            const suffix = `.${field}`;
+            if (!rest.endsWith(suffix)) continue;
+            const itemId = rest.slice(0, -suffix.length);
+            if (!itemId) return;
+            const arr = resolveArray(ext, arrayPath);
+            const item = arr?.find((entry: any) => String(entry?.id) === itemId);
+            if (item) item[field] = value;
+            return;
         }
+        return;
     }
     setValue(ext, path, value);
 }

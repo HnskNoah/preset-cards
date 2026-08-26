@@ -217,13 +217,21 @@ export function refreshProjectionRuntimeIfActive(parentPresetName: string): void
 }
 
 /** 注销某父预设名下全部注册（删除父预设时调用；不抛错，失败仅本地清理）。
- * 返回被注销的注册名列表（供调用方清理悬空的活动指针/activeProfile 引用）。 */
+ * 同步清理活动投影和 activeProfile；调用方可能先注销再发 PRESET_DELETED，不能依赖事件时仍能反查投影名。 */
 export async function unregisterAllForPreset(presetName: string): Promise<string[]> {
     const registry = createStRegistry();
     const owned = findRegistrationsByParent(registry, presetName);
+    const removedNames = owned.map((reg) => reg.name);
     for (const reg of owned) registry.remove(reg.name);
     if (owned.length > 0) saveSettingsDebounced();
-    return owned.map((reg) => reg.name);
+
+    if (removedNames.includes(String(oai_settings.preset_settings_openai))) {
+        oai_settings.preset_settings_openai = null;
+        saveSettingsDebounced();
+    }
+    const activeRef = getActiveProfile();
+    if (activeRef?.presetName === presetName) setActiveProfile(undefined);
+    return removedNames;
 }
 
 /** 初始化：订阅 meta 持久化成功事件，自动对账注册；并在设置加载后全量对账一次
