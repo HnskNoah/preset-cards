@@ -18,6 +18,7 @@ import {
     onPresetRegistryChanged,
     unregisterAllForPreset,
 } from '../src/presetRegistration.js';
+import { openEditModal } from '../src/editModal.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
 
@@ -218,6 +219,72 @@ describe('refreshProjectionRuntimeIfActive (NEW-2)', () => {
 
             expect((oai_settings.prompts as any[]).find((p: any) => p.identifier === 'p1').content).toBe('v2');
         } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('re-applies the active projection after editing its parent preset sampling in the modal', async () => {
+        vi.useFakeTimers();
+        const nativeControls: Record<string, { checked: boolean; value: string }> = {
+            '#stream_openai': { checked: false, value: '' },
+            '#openai_show_thoughts': { checked: false, value: '' },
+        };
+        const field = (selector = '') => {
+            const api = {
+                find: (next: string) => field(next),
+                on: () => api,
+                toggleClass: () => api,
+                val: () => '',
+                is: (query: string) => query === ':checked' && (selector === '#preset_edit_stream' || selector === '#preset_edit_thoughts'),
+                map: () => ({ get: () => [] }),
+                get: () => [],
+                data: () => undefined,
+                prop: (name: string, value: unknown) => {
+                    if (name === 'checked' && nativeControls[selector]) nativeControls[selector].checked = value === true;
+                    return api;
+                },
+            };
+            return api;
+        };
+
+        vi.stubGlobal('document', {
+            querySelector: vi.fn((selector: string) => nativeControls[selector] ?? null),
+            createElement: vi.fn(() => ({ value: '', innerText: '' })),
+        });
+        vi.stubGlobal('$', vi.fn((selector?: unknown) => field(typeof selector === 'string' ? selector : '')));
+        try {
+            const parent = samplePreset();
+            parent.stream_openai = false;
+            parent.show_thoughts = false;
+            const idx = addPreset('Midnight', parent);
+            syncPresetRegistrations('Midnight', idx);
+            const regName = 'Midnight - 战斗版';
+            const regIdx = openai_setting_names[regName];
+            expect((openai_settings[regIdx] as any).stream_openai).toBe(false);
+            expect((openai_settings[regIdx] as any).show_thoughts).toBe(false);
+
+            oai_settings.preset_settings_openai = regName;
+            oai_settings.stream_openai = false;
+            oai_settings.show_thoughts = false;
+
+            const pending = openEditModal('Midnight', idx);
+            await vi.advanceTimersByTimeAsync(350);
+            await pending;
+            await vi.advanceTimersByTimeAsync(1);
+            await Promise.resolve();
+
+            const updatedProjection = openai_settings[openai_setting_names[regName]] as any;
+            expect((openai_settings[idx] as any).stream_openai).toBe(true);
+            expect((openai_settings[idx] as any).show_thoughts).toBe(true);
+            expect(updatedProjection.stream_openai).toBe(true);
+            expect(updatedProjection.show_thoughts).toBe(true);
+            expect(oai_settings.preset_settings_openai).toBe(regName);
+            expect(oai_settings.stream_openai).toBe(true);
+            expect(oai_settings.show_thoughts).toBe(true);
+            expect(nativeControls['#stream_openai'].checked).toBe(true);
+            expect(nativeControls['#openai_show_thoughts'].checked).toBe(true);
+        } finally {
+            vi.useRealTimers();
             vi.unstubAllGlobals();
         }
     });

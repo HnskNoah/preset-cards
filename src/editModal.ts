@@ -6,6 +6,7 @@ import { t } from '@sillytavern/scripts/i18n';
 import { AVAILABLE_MODELS, EXTENSION_NAME, LOGO_BASE } from './constants.js';
 import { readMeta, persistMetaTransaction, type Preset, type PromptFields } from './meta.js';
 import { findPromptInPreset } from './promptToggle.js';
+import { refreshProjectionRuntimeIfActive, syncPresetRegistrations } from './presetRegistration.js';
 import { L } from './i18n.js';
 
 /**
@@ -118,6 +119,11 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
             else $(meta[0]).val(value as number);
         }
         saveSettingsDebounced(); // 运行时变更随 ST 自身节奏落 settings.json,与原生面板改动同路径
+    } else {
+        // 当前活动项可能是本预设的注册投影（"父预设 - profile"）。编辑父预设的采样字段后，
+        // 显式刷新投影记录并重应用活动投影，让 ST 原生勾选框无需手动再次激活即可跟随。
+        syncPresetRegistrations(presetName, presetIndex);
+        refreshProjectionRuntimeIfActive(presetName);
     }
     toastr.success(t`Preset updated`);
     if (onSaved) onSaved();
