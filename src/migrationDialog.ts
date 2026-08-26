@@ -3,7 +3,7 @@
 // 有冲突 → 进入编辑器迁移模式（migrationEditor，pcmanager 式图形化解决）。
 // 逻辑全部下沉 presetMigration / core/migration；本文件只做 DOM 组装与事件绑定。
 import { openai_settings, openai_setting_names } from '@sillytavern/scripts/openai';
-import { POPUP_TYPE, callGenericPopup } from '@sillytavern/scripts/popup';
+import { POPUP_RESULT, POPUP_TYPE, callGenericPopup } from '@sillytavern/scripts/popup';
 import type { Preset } from './meta.js';
 import { L } from './i18n.js';
 import { onMetaPersisted } from './meta.js';
@@ -220,6 +220,12 @@ export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
         void callGenericPopup(L('Need at least two presets to migrate'), POPUP_TYPE.TEXT);
         return;
     }
+    // 实验性能力告知：迁移会跨预设批量改写，进入向导前强制确认
+    const ack = await callGenericPopup(
+        L('Migration is an experimental feature and may not be reliable. Back up your presets (export) before use.'),
+        POPUP_TYPE.CONFIRM,
+    );
+    if (ack !== POPUP_RESULT.AFFIRMATIVE) return;
 
     const picked = await pickPresets(readSources, readAllNames);
     if (!picked) return;

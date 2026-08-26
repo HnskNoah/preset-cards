@@ -81,6 +81,7 @@ export const EXT_BOOLEAN_PATHS = [
 export const LOCAL_DICT: Record<string, string> = {
     'Configurations': '配置快照',
     'Migrate configurations to updated preset': '迁移配置到更新版预设',
+    'Migration is an experimental feature and may not be reliable. Back up your presets (export) before use.': '迁移功能为实验性特性，不保证可靠。使用前请先导出备份预设，应用后请自行核对结果。',
     'Migrate configurations': '迁移配置',
     'Copy all profiles from an old preset onto its updated version, merging your edits with the author\'s changes (three-way merge).': '把旧预设的全部配置拷贝到更新版预设上，按三方合并把你的修改与作者的更新融为一体。',
     'Source preset (old)': '来源预设（旧版）',

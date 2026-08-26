@@ -18,6 +18,12 @@
             <label>K</label>
             <input type="number" step="1" id="preset_edit_top_k" value="{{sampling.topK}}" placeholder="—" />
         </div>
+        <div class="preset_edit_field preset_edit_stream_field">
+            <label>{{i18n.thoughtsTitle}}</label>
+            <div class="preset_edit_stream_wrap">
+                <input type="checkbox" id="preset_edit_thoughts" {{#if sampling.thoughts}}checked{{/if}} />
+            </div>
+        </div>
         <div class="preset_edit_field">
             <label>{{i18n.contextTitle}}</label>
             <input type="number" step="1" id="preset_edit_context" value="{{sampling.contextTokens}}" placeholder="—" />
@@ -30,12 +36,6 @@
             <label>{{i18n.streamTitle}}</label>
             <div class="preset_edit_stream_wrap">
                 <input type="checkbox" id="preset_edit_stream" {{#if sampling.streaming}}checked{{/if}} />
-            </div>
-        </div>
-        <div class="preset_edit_field preset_edit_stream_field">
-            <label>{{i18n.thoughtsTitle}}</label>
-            <div class="preset_edit_stream_wrap">
-                <input type="checkbox" id="preset_edit_thoughts" {{#if sampling.thoughts}}checked{{/if}} />
             </div>
         </div>
     </div>
