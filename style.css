@@ -644,18 +644,21 @@
     opacity: 0.4;
 }
 
-.preset_edit_stream_wrap {
+.preset_edit_stream_field .preset_edit_check_label {
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
+    gap: 8px;
     height: 36px;
+    cursor: pointer;
 }
 
-.preset_edit_stream_wrap input[type="checkbox"] {
+.preset_edit_check_label input[type="checkbox"] {
     width: 18px;
     height: 18px;
     accent-color: var(--SmartThemeQuoteColor);
     cursor: pointer;
+    flex: 0 0 auto;
 }
 
 /* Model selector in edit */
