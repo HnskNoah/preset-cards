@@ -604,7 +604,7 @@
     min-height: 64px;
 }
 
-/* 采样参数区块：T/P/K/思维链 + Context/Tokens/Stream 四列网格（数字输入随列宽收窄） */
+/* 采样参数区块：12 轨网格——上排 4 项各跨 3（T/P/K/思维链），下排 3 项各跨 4（上下文/Tokens/流式），两行各自满宽 */
 .preset_edit_section_title {
     font-size: 12px;
     font-weight: 600;
@@ -617,9 +617,17 @@
 
 .preset_edit_sampling_grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(12, 1fr);
     gap: 8px;
     margin-bottom: 4px;
+}
+
+.preset_edit_sampling_grid .preset_edit_span3 {
+    grid-column: span 3;
+}
+
+.preset_edit_sampling_grid .preset_edit_span4 {
+    grid-column: span 4;
 }
 
 .preset_edit_sampling_grid .preset_edit_field input[type="number"] {
