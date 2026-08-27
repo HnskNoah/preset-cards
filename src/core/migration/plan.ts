@@ -22,6 +22,10 @@ export interface MigrationSource {
     /** 目标策略 order 列表（适配层已解析；元素含 identifier/enabled）。 */
     order: any[];
     defaultSnapshot?: PromptDefaultSnapshotEntry[];
+    /** 旧版出厂采样/extra/模型基线，用于 profile 顶层字段三方迁移。 */
+    defaultSampling?: PromptSampling;
+    defaultExtra?: Record<string, any>;
+    defaultModel?: PromptModel;
     profiles: PresetProfile[];
 }
 

@@ -102,6 +102,49 @@ describe('applyMigration', () => {
         expect(result.report.netZeroDropped).toBe(1);
     });
 
+    it('accepts undefined as a valid base conflict resolution', () => {
+        const { source, target } = fixture([baseProfile({
+            prompts: [{ identifier: 'p1', mounted: true, enabled: true, fields: { content: 'MY' } }],
+        })]);
+        delete (target.prompts[0] as Record<string, unknown>).content;
+
+        const blocked = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        expect(blocked.status).toBe('blocked');
+        if (blocked.status === 'blocked') expect(blocked.unresolved[0]).toMatchObject({ profileId: 'b1', field: 'content', ours: 'MY', theirs: undefined });
+
+        const result = applyMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [{ profileId: 'b1', newIdentifier: 'p1', field: 'content', value: undefined }],
+        });
+        expect(result.status).toBe('applied');
+        if (result.status !== 'applied') return;
+        const migrated = result.meta.profiles[0] as PromptBaseProfile;
+        expect(migrated.prompts.find((e) => e.identifier === 'p1')?.fields).toBeUndefined();
+        expect(result.report.conflictsResolved).toBe(1);
+    });
+
+    it('accepts undefined as a valid delta conflict resolution', () => {
+        const { source, target } = fixture([
+            baseProfile({ prompts: [{ identifier: 'p1', mounted: true, enabled: true }] }),
+            deltaProfile({ changes: [{ identifier: 'p1', fields: { content: 'DELTA' } }] }),
+        ]);
+        delete (target.prompts[0] as Record<string, unknown>).content;
+
+        const blocked = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        expect(blocked.status).toBe('blocked');
+        if (blocked.status === 'blocked') expect(blocked.unresolved[0]).toMatchObject({ profileId: 'd1', field: 'content', ours: 'DELTA', theirs: undefined });
+
+        const result = applyMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [{ profileId: 'd1', newIdentifier: 'p1', field: 'content', value: undefined }],
+        });
+        expect(result.status).toBe('applied');
+        if (result.status !== 'applied') return;
+        const migratedDelta = result.meta.profiles[1] as PromptDeltaProfile;
+        expect(migratedDelta.changes.find((e) => e.identifier === 'p1')?.fields).toBeUndefined();
+        expect(result.report.conflictsResolved).toBe(1);
+    });
+
     it('保留用户覆盖：theirs == base 时 ours 原样保留', () => {
         const { source, target } = fixture([baseProfile({
             prompts: [{ identifier: 'p2', mounted: true, enabled: true, fields: { content: 'MY-P2' } }],
@@ -145,6 +188,23 @@ describe('applyMigration', () => {
         // 未修复时 base.mounted/enabled=undefined，mergeMount 恒判 ours 有意 → p1 停留 true
         expect(migrated.prompts.find((e) => e.identifier === 'p1')?.enabled).toBe(false);
         expect(result.report.mountFollowed).toBe(1);
+    });
+
+    it('drops explicit delta order when following the new version order, but keeps it for keep-mine', () => {
+        const { source, target } = fixture([
+            baseProfile({ prompts: [{ identifier: 'p1', mounted: true, enabled: true }, { identifier: 'p2', mounted: true, enabled: true }] }),
+            deltaProfile({ order: ['p2', 'p1'] }),
+        ]);
+
+        const keepMine = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        expect(keepMine.status).toBe('applied');
+        if (keepMine.status !== 'applied') return;
+        expect((keepMine.meta.profiles[1] as PromptDeltaProfile).order).toEqual(['p2', 'p1']);
+
+        const followNew = applyMigration(source, target, { orderStrategy: 'follow-new' });
+        expect(followNew.status).toBe('applied');
+        if (followNew.status !== 'applied') return;
+        expect((followNew.meta.profiles[1] as PromptDeltaProfile).order).toBeUndefined();
     });
 
     it('mountFollowed 计数：ours == base 且出厂翻转的条目计入', () => {
@@ -297,6 +357,99 @@ describe('applyMigration', () => {
         expect(migrated.sampling).toEqual({ top_p: 0.9 });
         expect(migrated.extra).toBeUndefined();
         expect(result.meta.defaultSampling).toEqual({ temperature: 0.7 });
+    });
+
+    it('model 净零：等于新出厂或迁移后父链模型的覆盖被清除', () => {
+        const { source, target } = fixture([
+            baseProfile({
+                prompts: [{ identifier: 'p1', mounted: true, enabled: true }],
+                model: { source: 'openai', name: 'gpt-new' },
+            }),
+            deltaProfile({ model: { source: 'openai', name: 'gpt-new' } }),
+        ]);
+        const withModel: MigrationTarget = {
+            ...target,
+            defaultModel: { source: 'openai', name: 'gpt-new' },
+        };
+        const result = applyMigration(source, withModel, { orderStrategy: 'keep-mine' });
+        if (result.status !== 'applied') throw new Error('expected applied');
+        expect((result.meta.profiles[0] as PromptBaseProfile).model).toBeUndefined();
+        expect((result.meta.profiles[1] as PromptDeltaProfile).model).toBeUndefined();
+        expect(result.meta.defaultModel).toEqual({ source: 'openai', name: 'gpt-new' });
+    });
+
+    it('sampling / extra / model 双方同时修改且不同：进入顶层冲突列表', () => {
+        const { source, target } = fixture([baseProfile({
+            prompts: [{ identifier: 'p1', mounted: true, enabled: true }],
+            sampling: { temperature: 0.8 },
+            extra: { impersonation_prompt: 'mine-extra' },
+            model: { source: 'openai', name: 'mine-model' },
+        })]);
+        source.defaultSampling = { temperature: 0.7 };
+        source.defaultExtra = { impersonation_prompt: 'factory-extra' };
+        source.defaultModel = { source: 'openai', name: 'factory-model' };
+        target.defaultSampling = { temperature: 1.0 };
+        target.defaultExtra = { impersonation_prompt: 'author-extra' };
+        target.defaultModel = { source: 'openai', name: 'author-model' };
+
+        const blocked = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        expect(blocked.status).toBe('blocked');
+        if (blocked.status !== 'blocked') return;
+        expect(blocked.unresolved.map((c) => c.field).sort()).toEqual(['extra.impersonation_prompt', 'model', 'sampling.temperature']);
+        expect(blocked.unresolved.every((c) => c.newIdentifier === '__top_level__')).toBe(true);
+    });
+
+    it('顶层冲突 resolution 携带三方签名：签名过期则不消费', () => {
+        const { source, target } = fixture([baseProfile({
+            prompts: [{ identifier: 'p1', mounted: true, enabled: true }],
+            sampling: { temperature: 0.8 },
+        })]);
+        source.defaultSampling = { temperature: 0.7 };
+        target.defaultSampling = { temperature: 1.0 };
+
+        const blocked = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        if (blocked.status !== 'blocked') throw new Error('expected blocked');
+        const conflict = blocked.unresolved[0]!;
+        const stale = applyMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [{ profileId: conflict.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, signature: 'stale', value: conflict.theirs }],
+        });
+        expect(stale.status).toBe('blocked');
+
+        const applied = applyMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [{ profileId: conflict.profileId, newIdentifier: conflict.newIdentifier, field: conflict.field, signature: conflict.signature, value: conflict.theirs }],
+        });
+        expect(applied.status).toBe('applied');
+        if (applied.status !== 'applied') return;
+        expect((applied.meta.profiles[0] as PromptBaseProfile).sampling).toBeUndefined();
+        expect(applied.report.conflictsResolved).toBe(1);
+    });
+
+    it('delta 顶层冲突随父级 resolution 重新计算', () => {
+        const { source, target } = fixture([
+            baseProfile({
+                prompts: [{ identifier: 'p1', mounted: true, enabled: true }],
+                sampling: { temperature: 0.8 },
+            }),
+            deltaProfile({ sampling: { temperature: 0.9 } }),
+        ]);
+        source.defaultSampling = { temperature: 0.7 };
+        target.defaultSampling = { temperature: 1.0 };
+
+        const baseBlocked = applyMigration(source, target, { orderStrategy: 'keep-mine' });
+        if (baseBlocked.status !== 'blocked') throw new Error('expected base conflict');
+        expect(baseBlocked.unresolved).toHaveLength(1);
+        const baseConflict = baseBlocked.unresolved[0]!;
+
+        const deltaBlocked = applyMigration(source, target, {
+            orderStrategy: 'keep-mine',
+            resolutions: [{ profileId: baseConflict.profileId, newIdentifier: baseConflict.newIdentifier, field: baseConflict.field, signature: baseConflict.signature, value: baseConflict.theirs }],
+        });
+        expect(deltaBlocked.status).toBe('blocked');
+        if (deltaBlocked.status !== 'blocked') return;
+        expect(deltaBlocked.unresolved).toHaveLength(1);
+        expect(deltaBlocked.unresolved[0]).toMatchObject({ profileId: 'd1', field: 'sampling.temperature', base: 0.8, ours: 0.9, theirs: 1.0 });
     });
 
     it('成环 delta 保守原样保留，不阻塞其余迁移', () => {

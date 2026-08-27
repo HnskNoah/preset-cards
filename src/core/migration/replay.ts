@@ -19,14 +19,28 @@ import type {
     PromptDefaultSnapshotEntry,
     PromptDeltaProfile,
     PromptFields,
+    PromptModel,
     PromptProfileEntry,
+    PromptSampling,
 } from '../domain/types.js';
+
+const TOP_LEVEL_CONFLICT_IDENTIFIER = '__top_level__';
+const TOP_LEVEL_ENTRY_NAME = 'Preset settings';
+
+export type TopLevelConflictField = `sampling.${string}` | `extra.${string}` | 'model';
+export type MigrationConflictField = PromptFieldKey | TopLevelConflictField;
+
+function topLevelField(section: 'sampling' | 'extra', key: string): TopLevelConflictField {
+    return `${section}.${key}` as TopLevelConflictField;
+}
 
 /** 冲突解决项：value 为最终采用的绝对值（第四选项「手动编辑」也走这里）。 */
 export interface ConflictResolution {
     profileId: string;
     newIdentifier: string;
-    field: PromptFieldKey;
+    field: MigrationConflictField;
+    /** 编辑器打开时看到的三方值签名；旧调用方缺省时按兼容路径消费。 */
+    signature?: string;
     value: unknown;
 }
 
@@ -45,10 +59,12 @@ export interface LevelFieldConflict {
     chainLevel: number;
     newIdentifier: string;
     entryName: string;
-    field: PromptFieldKey;
+    field: MigrationConflictField;
     base: unknown;
     ours: unknown;
     theirs: unknown;
+    /** 三方值稳定签名，用于拒绝编辑器打开后的 stale resolution。 */
+    signature: string;
 }
 
 export interface MountStateChange {
@@ -101,8 +117,31 @@ export interface MigrationReplayResult {
 
 /** 冲突解决项的键（JSON 编码，避免 identifier 含 \t 等分隔符时反解错位）。
  * 编辑器（migrationEditor）写 resolutions 与引擎查表必须走同一构造，锁步契约。 */
-export function resolutionKey(profileId: string, newIdentifier: string, field: PromptFieldKey): string {
+export function resolutionKey(profileId: string, newIdentifier: string, field: MigrationConflictField): string {
     return JSON.stringify([profileId, newIdentifier, field]);
+}
+
+function normalizedForCompare(value: unknown): unknown {
+    if (value === undefined) return { '\u0000pcUndefined': true };
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(normalizedForCompare);
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        out[key] = normalizedForCompare((value as Record<string, unknown>)[key]);
+    }
+    return out;
+}
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+    return JSON.stringify(normalizedForCompare(a)) === JSON.stringify(normalizedForCompare(b));
+}
+
+export function conflictSignature(base: unknown, ours: unknown, theirs: unknown): string {
+    return JSON.stringify([normalizedForCompare(base), normalizedForCompare(ours), normalizedForCompare(theirs)]);
+}
+
+function makeConflict(conflict: Omit<LevelFieldConflict, 'signature'>): LevelFieldConflict {
+    return { ...conflict, signature: conflictSignature(conflict.base, conflict.ours, conflict.theirs) };
 }
 
 /** 白名单拾取（镜像 promptCapture.capturePromptFields：跳过 undefined）。 */
@@ -237,15 +276,17 @@ function newEffOfDelta(delta: PromptDeltaProfile, parentEff: Map<string, ChainSt
     return oldEffOfDelta(delta, parentEff); // 形状相同：sparse 叠加
 }
 
-/** sparse map 净零：删掉与解析态等值的键（浅比较；入参 object 规避接口无索引签名收窄）。 */
-function dropNetZeroKeys(override: object | undefined, effective: object | undefined): Record<string, unknown> {
-    if (!override) return {};
-    const eff = (effective ?? {}) as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(override)) {
-        if (value !== eff[key]) out[key] = value;
+
+function modelsEqual(a: MigrationTarget['defaultModel'] | undefined, b: MigrationTarget['defaultModel'] | undefined): boolean {
+    return valuesEqual(a, b);
+}
+
+function chainEffectiveModel(chain: PresetProfile[], rootBaseline: MigrationTarget['defaultModel'] | undefined): MigrationTarget['defaultModel'] | undefined {
+    let model = rootBaseline;
+    for (const p of chain) {
+        if (p.model) model = p.model;
     }
-    return out;
+    return model;
 }
 
 /** 链上 sparse 解析态（root → 叶 last-writer-wins；无祖先设定时落到新出厂基线）。 */
@@ -298,12 +339,25 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
 
     // 键用 JSON 编码而非分隔符拼接：identifier 是预设作者自定义串，含 \t 时
     // split 反解会错位，导致编辑器写入的 resolution 永远匹配不上（Apply 卡死）。
-    const resolutions = new Map<string, unknown>();
+    const resolutions = new Map<string, ConflictResolution>();
     for (const r of options.resolutions ?? []) {
-        resolutions.set(resolutionKey(r.profileId, r.newIdentifier, r.field), r.value);
+        resolutions.set(resolutionKey(r.profileId, r.newIdentifier, r.field), r);
     }
-    const resolutionOf = (profileId: string, newId: string, field: PromptFieldKey): unknown =>
-        resolutions.get(resolutionKey(profileId, newId, field));
+    const resolutionOf = (
+        profileId: string,
+        newId: string,
+        field: MigrationConflictField,
+        base: unknown,
+        ours: unknown,
+        theirs: unknown,
+    ): { has: boolean; value: unknown } => {
+        const r = resolutions.get(resolutionKey(profileId, newId, field));
+        if (!r) return { has: false, value: undefined };
+        if (r.signature !== undefined && r.signature !== conflictSignature(base, ours, theirs)) {
+            return { has: false, value: undefined };
+        }
+        return { has: true, value: r.value };
+    };
 
     const conflicts: LevelFieldConflict[] = [];
     const report: MigrationReplayReport = {
@@ -321,6 +375,7 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
     // ---- 旧树逐层解析（delta base 侧）----
     const oldEffById = new Map<string, Map<string, ChainState>>();
     const oldLevelById = new Map<string, number>();
+    const oldChainById = new Map<string, PresetProfile[]>();
     {
         const pending = [...source.profiles];
         let progress = true;
@@ -335,10 +390,13 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
                 if (profile.kind === 'prompt_base') {
                     oldEffById.set(profile.id, oldEffOfBase(profile, oldDefById));
                     oldLevelById.set(profile.id, 0);
+                    oldChainById.set(profile.id, [profile]);
                 } else {
                     const parent = oldEffById.get(profile.baseId) ?? new Map<string, ChainState>();
+                    const parentChain = oldChainById.get(profile.baseId) ?? [];
                     oldEffById.set(profile.id, oldEffOfDelta(profile, parent));
                     oldLevelById.set(profile.id, (oldLevelById.get(profile.baseId) ?? 0) + 1);
+                    oldChainById.set(profile.id, [...parentChain, profile]);
                 }
                 pending.splice(i, 1);
                 i--;
@@ -370,14 +428,15 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
                 chainById.set(profile.id, [next]);
                 levelById.set(profile.id, 0);
             } else {
-                const parentChain = chainById.get(profile.baseId) ?? [];
+                const parentNewChain = chainById.get(profile.baseId) ?? [];
+                const parentOldChain = oldChainById.get(profile.baseId) ?? [];
                 const parentOldEff = oldEffById.get(profile.baseId) ?? new Map<string, ChainState>();
                 const parentNewEff = newEffById.get(profile.baseId) ?? new Map<string, ChainState>();
                 const level = (levelById.get(profile.baseId) ?? 0) + 1;
-                const next = replayDelta(profile, parentOldEff, parentNewEff, parentChain, level);
+                const next = replayDelta(profile, parentOldEff, parentNewEff, parentOldChain, parentNewChain, level);
                 migrated.set(profile.id, next);
                 newEffById.set(profile.id, newEffOfDelta(next, parentNewEff));
-                chainById.set(profile.id, [...parentChain, next]);
+                chainById.set(profile.id, [...parentNewChain, next]);
                 levelById.set(profile.id, level);
             }
             pending.splice(i, 1);
@@ -400,7 +459,7 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
 
     const profiles = source.profiles.map((p) => migrated.get(p.id) ?? p);
     report.profilesMigrated = migrated.size;
-    const unresolved = conflicts.filter((c) => resolutionOf(c.profileId, c.newIdentifier, c.field) === undefined);
+    const unresolved = conflicts.filter((c) => !resolutionOf(c.profileId, c.newIdentifier, c.field, c.base, c.ours, c.theirs).has);
 
     return {
         match,
@@ -465,10 +524,15 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
         const next: PromptBaseProfile = { ...base, prompts };
         if (unusedIds.length > 0) next.unusedIds = unusedIds;
         else delete next.unusedIds;
-        if (base.sampling) next.sampling = dropNetZeroKeys(base.sampling, target.defaultSampling) as PromptBaseProfile['sampling'];
-        if (base.extra) next.extra = dropNetZeroKeys(base.extra, target.defaultExtra);
-        if (next.sampling && Object.keys(next.sampling).length === 0) delete next.sampling;
-        if (next.extra && Object.keys(next.extra).length === 0) delete next.extra;
+        const sampling = mergeTopLevelMap(base, 0, 'sampling', base.sampling, source.defaultSampling, target.defaultSampling);
+        if (sampling) next.sampling = sampling as PromptSampling;
+        else delete next.sampling;
+        const extra = mergeTopLevelMap(base, 0, 'extra', base.extra, source.defaultExtra, target.defaultExtra);
+        if (extra) next.extra = extra;
+        else delete next.extra;
+        const model = mergeTopLevelModel(base, 0, source.defaultModel, target.defaultModel);
+        if (model) next.model = model;
+        else delete next.model;
         return next;
     }
 
@@ -495,15 +559,15 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
             if (ours === undefined) continue;
             const baseVal = fieldOf(snapshotById.get(entry.identifier)?.originalFields, field) ?? fieldOf(view.oldDef, field);
             const theirs = fieldOf(view.newDef, field);
-            const resolution = resolutionOf(base.id, view.newId, field);
+            const resolution = resolutionOf(base.id, view.newId, field, baseVal, ours, theirs);
             // 真冲突才消费决策：上游重选使三方收敛后，残留的手动编辑值不得再生效
             // （设计：上层解决后才确定下层是否有冲突，无冲突的层不消费 resolutions）。
             const conflicted = ours !== baseVal && theirs !== baseVal && ours !== theirs;
-            const resolvedNow = conflicted && resolution !== undefined;
-            const final = resolvedNow ? resolution : ours;
+            const resolvedNow = conflicted && resolution.has;
+            const final = resolvedNow ? resolution.value : ours;
             if (resolvedNow) report.conflictsResolved++;
-            if (conflicted && resolution === undefined) {
-                conflicts.push({ profileId: base.id, profileName: base.name, kind: 'prompt_base', chainLevel: 0, newIdentifier: view.newId, entryName, field, base: baseVal, ours, theirs });
+            if (conflicted && !resolution.has) {
+                conflicts.push(makeConflict({ profileId: base.id, profileName: base.name, kind: 'prompt_base', chainLevel: 0, newIdentifier: view.newId, entryName, field, base: baseVal, ours, theirs }));
             }
             if (final !== theirs) {
                 (fields as Record<string, unknown>)[field] = final;
@@ -522,12 +586,96 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
         };
     }
 
+    function mergeTopLevelMap(
+        profile: PromptBaseProfile | PromptDeltaProfile,
+        level: number,
+        section: 'sampling' | 'extra',
+        override: object | undefined,
+        oldEffective: object | undefined,
+        newEffective: object | undefined,
+    ): Record<string, unknown> | undefined {
+        const out: Record<string, unknown> = {};
+        const baseMap = (oldEffective ?? {}) as Record<string, unknown>;
+        const theirsMap = (newEffective ?? {}) as Record<string, unknown>;
+        for (const [key, ours] of Object.entries(override ?? {})) {
+            const baseVal = baseMap[key];
+            const theirs = theirsMap[key];
+            const field = topLevelField(section, key);
+            const userChanged = !valuesEqual(ours, baseVal);
+            const authorChanged = !valuesEqual(theirs, baseVal);
+            const conflicted = userChanged && authorChanged && !valuesEqual(ours, theirs);
+            const resolution = resolutionOf(profile.id, TOP_LEVEL_CONFLICT_IDENTIFIER, field, baseVal, ours, theirs);
+            const resolvedNow = conflicted && resolution.has;
+            const final = resolvedNow ? resolution.value : userChanged ? ours : theirs;
+            if (resolvedNow) report.conflictsResolved++;
+            if (conflicted && !resolution.has) {
+                conflicts.push(makeConflict({
+                    profileId: profile.id,
+                    profileName: profile.name,
+                    kind: profile.kind,
+                    chainLevel: level,
+                    newIdentifier: TOP_LEVEL_CONFLICT_IDENTIFIER,
+                    entryName: TOP_LEVEL_ENTRY_NAME,
+                    field,
+                    base: baseVal,
+                    ours,
+                    theirs,
+                }));
+            }
+            if (!valuesEqual(final, theirs)) {
+                out[key] = final;
+                if (!resolvedNow) report.preservedOurs++;
+            } else {
+                report.netZeroDropped++;
+            }
+        }
+        return Object.keys(out).length > 0 ? out : undefined;
+    }
+
+    function mergeTopLevelModel(
+        profile: PromptBaseProfile | PromptDeltaProfile,
+        level: number,
+        oldEffective: PromptModel | undefined,
+        newEffective: PromptModel | undefined,
+    ): PromptModel | undefined {
+        const ours = profile.model;
+        if (ours === undefined) return undefined;
+        const userChanged = !modelsEqual(ours, oldEffective);
+        const authorChanged = !modelsEqual(newEffective, oldEffective);
+        const conflicted = userChanged && authorChanged && !modelsEqual(ours, newEffective);
+        const resolution = resolutionOf(profile.id, TOP_LEVEL_CONFLICT_IDENTIFIER, 'model', oldEffective, ours, newEffective);
+        const resolvedNow = conflicted && resolution.has;
+        const final = resolvedNow ? resolution.value : userChanged ? ours : newEffective;
+        if (resolvedNow) report.conflictsResolved++;
+        if (conflicted && !resolution.has) {
+            conflicts.push(makeConflict({
+                profileId: profile.id,
+                profileName: profile.name,
+                kind: profile.kind,
+                chainLevel: level,
+                newIdentifier: TOP_LEVEL_CONFLICT_IDENTIFIER,
+                entryName: TOP_LEVEL_ENTRY_NAME,
+                field: 'model',
+                base: oldEffective,
+                ours,
+                theirs: newEffective,
+            }));
+        }
+        if (modelsEqual(final as PromptModel | undefined, newEffective)) {
+            report.netZeroDropped++;
+            return undefined;
+        }
+        if (!resolvedNow) report.preservedOurs++;
+        return final as PromptModel;
+    }
+
     // ===== Delta 层：三方 = 旧父解析 / 本层差异 / 迁移后父解析 =====
     function replayDelta(
         delta: PromptDeltaProfile,
         parentOldEff: Map<string, ChainState>,
         parentNewEff: Map<string, ChainState>,
-        parentChain: PresetProfile[],
+        parentOldChain: PresetProfile[],
+        parentNewChain: PresetProfile[],
         level: number,
     ): PromptDeltaProfile {
         const changes: PromptDeltaProfile['changes'] = [];
@@ -545,13 +693,13 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
                 const newParentState = view ? parentNewEff.get(view.newId) : undefined;
                 const baseVal = oldParentState?.fields[field] ?? (view ? fieldOf(view.oldDef, field) : undefined);
                 const theirs = newParentState?.fields[field] ?? (view ? fieldOf(view.newDef, field) : undefined);
-                const resolution = view ? resolutionOf(delta.id, view.newId, field) : undefined;
+                const resolution = view ? resolutionOf(delta.id, view.newId, field, baseVal, ours, theirs) : { has: false, value: undefined };
                 const conflicted = view !== undefined && ours !== baseVal && theirs !== baseVal && ours !== theirs;
-                const resolvedNow = conflicted && resolution !== undefined;
-                const final = resolvedNow ? resolution : ours;
+                const resolvedNow = conflicted && resolution.has;
+                const final = resolvedNow ? resolution.value : ours;
                 if (resolvedNow) report.conflictsResolved++;
-                if (conflicted && resolution === undefined) {
-                    conflicts.push({ profileId: delta.id, profileName: delta.name, kind: 'prompt_delta', chainLevel: level, newIdentifier: view.newId, entryName, field, base: baseVal, ours, theirs });
+                if (conflicted && !resolution.has) {
+                    conflicts.push(makeConflict({ profileId: delta.id, profileName: delta.name, kind: 'prompt_delta', chainLevel: level, newIdentifier: view.newId, entryName, field, base: baseVal, ours, theirs }));
                 }
                 if (final !== theirs) {
                     (fields as Record<string, unknown>)[field] = final;
@@ -583,11 +731,17 @@ export function replayMigration(source: MigrationSource, target: MigrationTarget
         }
 
         const next: PromptDeltaProfile = { ...delta, changes };
-        if (delta.order) next.order = delta.order.map((id) => matchByOldId.get(id)?.newId ?? id);
-        if (delta.sampling) next.sampling = dropNetZeroKeys(delta.sampling, chainEffectiveMap(parentChain, (p) => p.sampling, target.defaultSampling)) as PromptDeltaProfile['sampling'];
-        if (delta.extra) next.extra = dropNetZeroKeys(delta.extra, chainEffectiveMap(parentChain, (p) => p.extra, target.defaultExtra));
-        if (next.sampling && Object.keys(next.sampling).length === 0) delete next.sampling;
-        if (next.extra && Object.keys(next.extra).length === 0) delete next.extra;
+        if (delta.order && options.orderStrategy === 'keep-mine') next.order = delta.order.map((id) => matchByOldId.get(id)?.newId ?? id);
+        else delete next.order;
+        const sampling = mergeTopLevelMap(delta, level, 'sampling', delta.sampling, chainEffectiveMap(parentOldChain, (p) => p.sampling, source.defaultSampling), chainEffectiveMap(parentNewChain, (p) => p.sampling, target.defaultSampling));
+        if (sampling) next.sampling = sampling as PromptSampling;
+        else delete next.sampling;
+        const extra = mergeTopLevelMap(delta, level, 'extra', delta.extra, chainEffectiveMap(parentOldChain, (p) => p.extra, source.defaultExtra), chainEffectiveMap(parentNewChain, (p) => p.extra, target.defaultExtra));
+        if (extra) next.extra = extra;
+        else delete next.extra;
+        const model = mergeTopLevelModel(delta, level, chainEffectiveModel(parentOldChain, source.defaultModel), chainEffectiveModel(parentNewChain, target.defaultModel));
+        if (model) next.model = model;
+        else delete next.model;
         return next;
     }
 

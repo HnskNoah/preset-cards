@@ -5,7 +5,7 @@
 //   - 落盘成功后 onMetaPersisted → syncPresetRegistrations 自动把新预设上的 profiles 注册为投影
 import { openai_settings } from '@sillytavern/scripts/openai';
 import { readMeta, persistMetaTransaction, isPromptBaseProfile, isPromptDeltaProfile, newProfileId } from './meta.js';
-import type { Preset } from './meta.js';
+import type { Preset, PromptDefaultSnapshotEntry } from './meta.js';
 import { L } from './i18n.js';
 import { findOrderList, resolvePromptOrderTarget } from './promptOrder.js';
 import { captureExtra, captureModel, captureSampling } from './promptToggle.js';
@@ -24,6 +24,28 @@ function targetOrderList(preset: Preset): any[] {
     return Array.isArray(list?.order) ? list.order : [];
 }
 
+function currentPromptPool(preset: Preset): Record<string, any>[] {
+    return Array.isArray(preset.prompts) ? preset.prompts : [];
+}
+
+function lockedFactoryPrompts(preset: Preset, snapshot: PromptDefaultSnapshotEntry[]): Record<string, any>[] {
+    const snapshotById = new Map(snapshot.map((entry) => [String(entry.identifier), entry]));
+    return currentPromptPool(preset).map((prompt) => {
+        const clone = structuredClone(prompt);
+        const entry = snapshotById.get(String(prompt?.identifier));
+        if (entry?.originalFields) Object.assign(clone, entry.originalFields);
+        return clone;
+    });
+}
+
+function lockedFactoryOrder(snapshot: PromptDefaultSnapshotEntry[]): any[] {
+    return snapshot
+        .map((entry, index) => ({ entry, index }))
+        .filter(({ entry }) => entry.mounted === true)
+        .sort((a, b) => (a.entry.lastActiveIndex ?? a.index) - (b.entry.lastActiveIndex ?? b.index))
+        .map(({ entry }) => ({ identifier: entry.identifier, enabled: entry.enabled === true }));
+}
+
 /** 旧预设 → 迁移源视图（含出厂基线与全部 v3 profiles——全量拷贝已决策）。 */
 export function buildMigrationSource(preset: Preset): MigrationSource {
     const meta = readMeta(preset);
@@ -31,20 +53,27 @@ export function buildMigrationSource(preset: Preset): MigrationSource {
         prompts: Array.isArray(preset.prompts) ? preset.prompts : [],
         order: targetOrderList(preset),
         defaultSnapshot: meta.defaultSnapshot,
+        defaultSampling: meta.defaultSampling,
+        defaultExtra: meta.defaultExtra,
+        defaultModel: meta.defaultModel,
         profiles: (meta.profiles ?? []).filter(
             (p: any) => isPromptBaseProfile(p) || isPromptDeltaProfile(p),
         ) as MigrationSource['profiles'],
     };
 }
 
-/** 新预设 → 迁移目标视图（出厂采样/extra/模型基线由既有捕获函数采集）。 */
+/** 新预设 → 迁移目标视图。目标已锁定默认基线时，必须用锁定的出厂态，不能读取当前活 profile 改过的运行时状态。 */
 export function buildMigrationTarget(preset: Preset): MigrationTarget {
+    const meta = readMeta(preset);
+    const lockedSnapshot = meta.defaultSnapshotLocked === true && Array.isArray(meta.defaultSnapshot)
+        ? meta.defaultSnapshot
+        : undefined;
     return {
-        prompts: Array.isArray(preset.prompts) ? preset.prompts : [],
-        order: targetOrderList(preset),
-        defaultSampling: captureSampling(preset) ?? undefined,
-        defaultExtra: captureExtra(preset as Record<string, unknown>) ?? undefined,
-        defaultModel: captureModel(preset) ?? undefined,
+        prompts: lockedSnapshot ? lockedFactoryPrompts(preset, lockedSnapshot) : currentPromptPool(preset),
+        order: lockedSnapshot ? lockedFactoryOrder(lockedSnapshot) : targetOrderList(preset),
+        defaultSampling: lockedSnapshot ? meta.defaultSampling : captureSampling(preset) ?? undefined,
+        defaultExtra: lockedSnapshot ? meta.defaultExtra : captureExtra(preset as Record<string, unknown>) ?? undefined,
+        defaultModel: lockedSnapshot ? meta.defaultModel : captureModel(preset) ?? undefined,
     };
 }
 
@@ -56,7 +85,15 @@ export function planMigration(sourcePreset: Preset, targetPreset: Preset): Migra
 export interface MigrationExecution {
     status: 'blocked' | 'applied' | 'persist-failed';
     unresolved?: LevelFieldConflict[];
+    blockedReason?: string;
     report?: MigrationReplayResult['report'];
+}
+
+function findOrphanDeltaNames(profiles: MigrationSource['profiles']): string[] {
+    const ids = new Set(profiles.map((p) => String(p.id)));
+    return profiles
+        .filter((p) => isPromptDeltaProfile(p) && !ids.has(String(p.baseId)))
+        .map((p) => p.name || String(p.id));
 }
 
 /** 与目标已有 profile 冲突的 id 重新分配，并同步重映射树内 baseId 引用（追加不替换，设计 §7）。 */
@@ -91,7 +128,12 @@ export async function executeMigration(
 ): Promise<MigrationExecution> {
     const targetPreset = openai_settings[targetIdx] as Preset | undefined;
     if (!targetPreset) return { status: 'persist-failed' };
-    const result = applyMigration(buildMigrationSource(sourcePreset), buildMigrationTarget(targetPreset), options);
+    const source = buildMigrationSource(sourcePreset);
+    const orphanDeltas = findOrphanDeltaNames(source.profiles);
+    if (orphanDeltas.length > 0) {
+        return { status: 'blocked', unresolved: [], blockedReason: `${L('Cannot migrate delta profiles with missing parent')}: ${orphanDeltas.join(', ')}` };
+    }
+    const result = applyMigration(source, buildMigrationTarget(targetPreset), options);
     if (result.status === 'blocked') return { status: 'blocked', unresolved: result.unresolved };
 
     const targetMeta = readMeta(targetPreset);
@@ -120,24 +162,37 @@ export async function executeMigration(
             .map((p) => structuredClone(p));
         if (carried.length > 0) patch = { ...(patch ?? {}), prompts: [...((targetPreset.prompts ?? []) as unknown[]), ...carried] };
 
-        // 预设正则（extensions.regex_scripts）：uuid 或 scriptName 任一重叠 → 内容保留目标版，
-        // 但开关（disabled）以来源为准；未重叠条目整条带入（含自身开关态）。
+        // 预设正则（extensions.regex_scripts）：非空 id 优先，否则非空 scriptName；两者都没有稳定标识时不配对。
+        // 重叠条目内容保留目标版，但开关（disabled）以来源为准；未重叠条目整条带入（含自身开关态）。
         interface RegexScriptLike { id?: unknown; scriptName?: unknown; disabled?: unknown }
         const isScript = (s: unknown): s is RegexScriptLike =>
-            s !== null && typeof s === 'object' && ('id' in s || 'scriptName' in s);
+            s !== null && typeof s === 'object' && ('id' in s || 'scriptName' in s || 'disabled' in s);
+        const keyOf = (value: unknown): string | undefined => {
+            if (value === undefined || value === null) return undefined;
+            const key = String(value);
+            return key === '' ? undefined : key;
+        };
         const srcExt = (sourcePreset.extensions ?? {}) as { regex_scripts?: unknown[] };
         if (Array.isArray(srcExt.regex_scripts) && srcExt.regex_scripts.length > 0) {
             const srcRegex: unknown[] = srcExt.regex_scripts;
             const mergedExt = structuredClone((targetPreset.extensions ?? {}) as Record<string, unknown>);
             const tgtRegex: unknown[] = Array.isArray(mergedExt.regex_scripts) ? mergedExt.regex_scripts : [];
             const srcScripts = srcRegex.filter(isScript);
-            const srcById = new Map(srcScripts.map((s): [string, RegexScriptLike] => [String(s.id), s]));
-            const srcByName = new Map(srcScripts.map((s): [string, RegexScriptLike] => [String(s.scriptName), s]));
+            const srcByScriptId = new Map(srcScripts.flatMap((s): [string, RegexScriptLike][] => {
+                const key = keyOf(s.id);
+                return key ? [[key, s]] : [];
+            }));
+            const srcByName = new Map(srcScripts.flatMap((s): [string, RegexScriptLike][] => {
+                const key = keyOf(s.scriptName);
+                return key ? [[key, s]] : [];
+            }));
             let touched = false;
             const kept: unknown[] = [];
             for (const t of tgtRegex) {
                 if (!isScript(t)) { kept.push(t); continue; }
-                const src = srcById.get(String(t.id)) ?? srcByName.get(String(t.scriptName));
+                const idKey = keyOf(t.id);
+                const nameKey = keyOf(t.scriptName);
+                const src = (idKey ? srcByScriptId.get(idKey) : undefined) ?? (nameKey ? srcByName.get(nameKey) : undefined);
                 if (src !== undefined && 'disabled' in src) {
                     t.disabled = src.disabled; // 开关随来源迁移
                     touched = true;
@@ -146,9 +201,12 @@ export async function executeMigration(
             }
             const additions = srcScripts.filter((s) => !kept.some((t) => {
                 if (!isScript(t)) return false;
-                const sameId = t.id !== undefined && String(t.id) === String(s.id);
-                const sameName = t.scriptName !== undefined && String(t.scriptName) === String(s.scriptName);
-                return sameId || sameName;
+                const tId = keyOf(t.id);
+                const sId = keyOf(s.id);
+                const tName = keyOf(t.scriptName);
+                const sName = keyOf(s.scriptName);
+                return (tId !== undefined && sId !== undefined && tId === sId)
+                    || (tName !== undefined && sName !== undefined && tName === sName);
             }));
             if (additions.length > 0) {
                 mergedExt.regex_scripts = [...kept, ...additions.map((s) => structuredClone(s))]; // 克隆：避免来源/目标共享同一脚本对象（开关互串）

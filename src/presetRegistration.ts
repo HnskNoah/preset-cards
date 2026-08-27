@@ -192,9 +192,9 @@ export function syncPresetRegistrations(presetName: string, _presetIndex?: numbe
  * 先等捕获周期（含持久化窗口内被挡事件的待重跑轮）落定再应用——否则窗口内的用户编辑
  * 会被旧时点记录覆盖丢失（编辑 A 触发捕获 → 持久化期间编辑 B 被防重入记为待重跑 →
  * 若立刻用 A 时点记录重应用,B 即被抹掉）。
- * refreshing 防级联重入：捕获落盘 → onMetaPersisted → sync → 本函数的递归调用直接跳过,
- * 由本次调用的收尾 fastApply 统一应用最新记录。 */
-let refreshing = false;
+ * refreshInFlight 按「父预设 + 活动投影名」隔离：同一投影的级联重入跳过，A 投影等待捕获时
+ * 不得吞掉用户切到 B 后 B 父预设触发的刷新。 */
+const refreshInFlight = new Set<string>();
 export function refreshProjectionRuntimeIfActive(parentPresetName: string): void {
     const activeName = oai_settings.preset_settings_openai;
     if (typeof activeName !== 'string') return;
@@ -202,17 +202,22 @@ export function refreshProjectionRuntimeIfActive(parentPresetName: string): void
     if (idx === undefined) return;
     const marker = readPresetMarker(openai_settings[idx]);
     if (!marker || marker.kind !== 'profile' || marker.parentKey !== parentPresetName) return;
-    if (refreshing) return;
-    refreshing = true;
+    const refreshKey = `${parentPresetName}\u0000${activeName}`;
+    if (refreshInFlight.has(refreshKey)) return;
+    refreshInFlight.add(refreshKey);
     void whenCaptureSettled()
         .then(() => {
-            refreshing = false;
+            refreshInFlight.delete(refreshKey);
             // 捕获窗口（合并窗口 + 网络 RTT，可被待重跑轮延长）内用户可能已切换预设：
             // 仅当活动名未变时才重应用——fastApplyPreset 会无条件改写 preset_settings_openai，
             // 否则会把用户显式切走的选择静默拉回本投影。
             if (oai_settings.preset_settings_openai !== activeName) return;
-            // 捕获周期(及其触发的对账级联)完成后应用最新记录;级联内已被 refreshing 拦截,此处为唯一应用点
+            // 捕获周期(及其触发的对账级联)完成后应用最新记录;同一投影级联内已被 refreshInFlight 拦截。
             void fastApplyPreset(idx, activeName).catch((err) => console.error('preset-cards: fastApply failed', err));
+        })
+        .catch((err) => {
+            refreshInFlight.delete(refreshKey);
+            console.error('preset-cards: refresh projection failed', err);
         });
 }
 

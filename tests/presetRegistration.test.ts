@@ -18,6 +18,7 @@ import {
     onPresetRegistryChanged,
     unregisterAllForPreset,
 } from '../src/presetRegistration.js';
+import { initPresetCapture } from '../src/presetCapture.js';
 import { openEditModal } from '../src/editModal.js';
 import { getActiveProfile, setActiveProfile } from '../src/activeProfile.js';
 import { readPresetMarker } from '../src/core/storage/marker.js';
@@ -219,6 +220,51 @@ describe('refreshProjectionRuntimeIfActive (NEW-2)', () => {
 
             expect((oai_settings.prompts as any[]).find((p: any) => p.identifier === 'p1').content).toBe('v2');
         } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('does not let one pending projection refresh block another active projection after switching presets', async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('document', { querySelector: () => null });
+        try {
+            initPresetCapture();
+            const alphaIdx = addPreset('Alpha', samplePreset());
+            const betaIdx = addPreset('Beta', samplePreset());
+            syncPresetRegistrations('Alpha', alphaIdx);
+            syncPresetRegistrations('Beta', betaIdx);
+            const alphaName = 'Alpha - 战斗版';
+            const betaName = 'Beta - 战斗版';
+            const alphaRegIdx = openai_setting_names[alphaName];
+            const betaRegIdx = openai_setting_names[betaName];
+
+            // A 正在捕获并持久化：refreshProjectionRuntimeIfActive('Alpha') 会等待 capture settled。
+            oai_settings.preset_settings_openai = alphaName;
+            oai_settings.prompts = structuredClone((openai_settings[alphaRegIdx] as any).prompts);
+            (oai_settings.prompts as any[])[0].content = 'captured-alpha';
+            oai_settings.prompt_order = structuredClone((openai_settings[alphaRegIdx] as any).prompt_order);
+            await eventSource.emit(event_types.SETTINGS_UPDATED);
+            await Promise.resolve();
+            refreshProjectionRuntimeIfActive('Alpha');
+
+            // 用户在 A 捕获窗口内切到 B；B 父预设更新后也需要刷新活动投影。
+            const betaParent = openai_settings[betaIdx] as Record<string, any>;
+            betaParent.extensions.preset_cards.profiles[0].prompts[0].fields = { content: 'beta-refreshed' };
+            refreshRegisteredSnapshot('Beta', betaParent as any, 'A');
+            oai_settings.preset_settings_openai = betaName;
+            oai_settings.prompts = [{ identifier: 'p1', content: 'stale-beta' }];
+            oai_settings.prompt_order = structuredClone((openai_settings[betaRegIdx] as any).prompt_order);
+            refreshProjectionRuntimeIfActive('Beta');
+
+            await vi.advanceTimersByTimeAsync(350);
+            await Promise.resolve();
+            await vi.advanceTimersByTimeAsync(1);
+            await Promise.resolve();
+
+            expect(oai_settings.preset_settings_openai).toBe(betaName);
+            expect((oai_settings.prompts as any[]).find((p) => p.identifier === 'p1')?.content).toBe('beta-refreshed');
+        } finally {
+            vi.useRealTimers();
             vi.unstubAllGlobals();
         }
     });
