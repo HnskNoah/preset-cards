@@ -12,28 +12,23 @@ import {
     type LevelFieldConflict,
     type MigrationReplayResult,
 } from './core/migration/apply.js';
-import { resolutionKey, type ConflictResolution, type ReplayOptions } from './core/migration/replay.js';
-import type { PromptFieldKey } from './core/migration/plan.js';
+import { resolutionKey, type ConflictResolution, type MigrationConflictField, type ReplayOptions } from './core/migration/replay.js';
 import type { CardsContext } from './presetCardsContext.js';
 import { refreshGrid } from './presetCardsState.js';
 
 /** 手动编辑表单的字段控件（第四选项，按字段类型给控件）。 */
-function manualEditInput(field: PromptFieldKey, value: unknown): JQuery<HTMLElement> {
+function manualEditInput(field: MigrationConflictField, value: unknown): JQuery<HTMLElement> {
     if (field === 'content') {
         return $('<textarea class="text_pole textarea_compact pc-migration-manual-input"></textarea>')
             .val(typeof value === 'string' ? value : '');
     }
     if (field === 'injection_position') {
-        const select = $('<select class="text_pole textarea_compact pc-migration-manual-input"></select>');
+        const select = $('<select class="text_pole textarea_compact pc-migration-manual-input" data-pc-value-type="number"></select>');
         for (const [label, v] of [['Relative', 0], ['In-chat', 1], ['Absolute Depth', 2]] as [string, number][]) {
             select.append($('<option></option>').val(String(v)).text(`${label} (${v})`));
         }
         select.val(String(typeof value === 'number' ? value : 0));
         return select;
-    }
-    if (field === 'injection_depth') {
-        return $('<input type="number" class="text_pole textarea_compact pc-migration-manual-input"></input>')
-            .val(typeof value === 'number' ? value : 0);
     }
     if (field === 'role') {
         const select = $('<select class="text_pole textarea_compact pc-migration-manual-input"></select>');
@@ -43,17 +38,37 @@ function manualEditInput(field: PromptFieldKey, value: unknown): JQuery<HTMLElem
         select.val(typeof value === 'string' && ['system', 'user', 'assistant'].includes(value) ? value : 'system');
         return select;
     }
+    if (typeof value === 'boolean') {
+        const select = $('<select class="text_pole textarea_compact pc-migration-manual-input" data-pc-value-type="boolean"></select>');
+        select.append($('<option></option>').val('true').text('true'));
+        select.append($('<option></option>').val('false').text('false'));
+        select.val(String(value));
+        return select;
+    }
+    if (field === 'model' || (value !== undefined && value !== null && typeof value === 'object')) {
+        return $('<textarea class="text_pole textarea_compact pc-migration-manual-input" data-pc-value-type="json"></textarea>')
+            .val(value === undefined ? '' : JSON.stringify(value, null, 2));
+    }
+    if (field === 'injection_depth' || field.startsWith('sampling.')) {
+        return $('<input type="number" class="text_pole textarea_compact pc-migration-manual-input" data-pc-value-type="number"></input>')
+            .val(typeof value === 'number' ? value : 0);
+    }
     return $('<input type="text" class="text_pole textarea_compact pc-migration-manual-input"></input>')
         .val(typeof value === 'string' ? value : '');
 }
 
-function parseManualValue(field: PromptFieldKey, el: JQuery<HTMLElement>): unknown {
+function parseManualValue(_field: MigrationConflictField, el: JQuery<HTMLElement>): unknown {
     const raw = ((el.val() as string) ?? '').trim();
-    if (field === 'injection_position' || field === 'injection_depth') {
-        // 空输入视为无效（Number('')===0 会误写 injection_depth:0，同 editModal 的守卫）
+    const type = el.attr('data-pc-value-type');
+    if (type === 'number') {
         if (raw === '') return undefined;
         const n = Number(raw);
         return Number.isFinite(n) ? n : undefined;
+    }
+    if (type === 'boolean') return raw === 'true';
+    if (type === 'json') {
+        if (raw === '') return undefined;
+        try { return JSON.parse(raw); } catch { return undefined; }
     }
     return raw === '' ? undefined : raw;
 }
@@ -65,6 +80,11 @@ function previewText(value: unknown): { text: string; title: string } {
 
 function keyOf(c: LevelFieldConflict): string {
     return resolutionKey(c.profileId, c.newIdentifier, c.field);
+}
+
+interface PendingResolution {
+    value: unknown;
+    signature: string;
 }
 
 /** 编辑器迁移模式会话。返回是否完成应用（false = 用户关闭放弃）。 */
@@ -81,12 +101,12 @@ export async function openMigrationEditor(params: {
     const { ctx, sourcePreset, targetPreset, targetName, targetIdx } = params;
     const source = buildMigrationSource(sourcePreset);
     const target = buildMigrationTarget(targetPreset);
-    const resolutions = new Map<string, unknown>();
+    const resolutions = new Map<string, PendingResolution>();
 
     const resolutionsList = (): ConflictResolution[] =>
-        [...resolutions.entries()].map(([k, v]) => {
-            const [profileId, newIdentifier, field] = JSON.parse(k) as [string, string, PromptFieldKey];
-            return { profileId, newIdentifier, field, value: v };
+        [...resolutions.entries()].map(([k, r]) => {
+            const [profileId, newIdentifier, field] = JSON.parse(k) as [string, string, MigrationConflictField];
+            return { profileId, newIdentifier, field, signature: r.signature, value: r.value };
         });
     const recompute = (): MigrationReplayResult => previewMigration(source, target, {
         orderStrategy: params.orderStrategy,
@@ -205,10 +225,10 @@ export async function openMigrationEditor(params: {
             const preview = previewText(value);
             const btn = $('<button class="menu_button pc-migration-choice"></button>')
                 .attr('title', preview.title)
-                .toggleClass('active', resolutions.has(key) && resolutions.get(key) === value);
+                .toggleClass('active', resolutions.has(key) && resolutions.get(key)?.value === value);
             btn.append($('<span class="pc-migration-choice-label"></span>').text(label));
             btn.append($('<span class="pc-migration-choice-value"></span>').text(preview.text));
-            btn.on('click', () => { resolutions.set(key, value); render(); });
+            btn.on('click', () => { resolutions.set(key, { value, signature: c.signature }); render(); });
             row.append(btn);
         }
         panel.append(row);
@@ -218,12 +238,13 @@ export async function openMigrationEditor(params: {
         manualWrap.append($('<span class="pc-migration-choice-label"></span>').text(L('Manually edit merged value')));
         const input = manualEditInput(c.field, c.ours);
         const manualBtn = $('<button class="menu_button"></button>').text(L('Use edited value'));
-        const isManual = resolutions.has(key) && !choices.some(([, v]) => resolutions.get(key) === v);
-        if (isManual) input.val(String(resolutions.get(key) ?? ''));
+        const currentResolution = resolutions.get(key);
+        const isManual = currentResolution !== undefined && !choices.some(([, v]) => currentResolution.value === v);
+        if (isManual) input.val(typeof currentResolution.value === 'string' ? currentResolution.value : JSON.stringify(currentResolution.value, null, 2));
         manualBtn.on('click', () => {
             const parsed = parseManualValue(c.field, input);
             if (parsed === undefined) return;
-            resolutions.set(key, parsed);
+            resolutions.set(key, { value: parsed, signature: c.signature });
             render();
         });
         manualWrap.append(input, manualBtn);
@@ -258,7 +279,7 @@ export async function openMigrationEditor(params: {
             });
             if (result.status === 'persist-failed') return;
             if (result.status === 'blocked') {
-                void callGenericPopup(L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
+                void callGenericPopup(result.blockedReason ?? L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
                 return;
             }
             applied = true;

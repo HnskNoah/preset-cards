@@ -114,6 +114,32 @@ describe('presetMigration 适配层', () => {
         expect(tgt.defaultSampling?.temperature).toBe(0.8);
     });
 
+    it('buildMigrationTarget：目标已锁定基线时使用 factory 状态而非当前活 profile 状态', () => {
+        const target = newPresetFixture();
+        target.prompts[0].content = 'profile-live';
+        target.prompt_order[0].order = [{ identifier: 'p3', enabled: true }];
+        target.temperature = 1.3;
+        target.impersonation_prompt = 'profile-extra';
+        target.chat_completion_source = 'openai';
+        target.openai_model = 'profile-model';
+        target.extensions.preset_cards.defaultSnapshotLocked = true;
+        target.extensions.preset_cards.defaultSnapshot = [
+            { identifier: 'p1', mounted: true, enabled: false, lastActiveIndex: 0, originalFields: { content: 'factory-v2' } },
+            { identifier: 'p3', mounted: false, enabled: true, originalFields: { content: 'new' } },
+        ];
+        target.extensions.preset_cards.defaultSampling = { temperature: 0.8 };
+        target.extensions.preset_cards.defaultExtra = { impersonation_prompt: 'factory-extra' };
+        target.extensions.preset_cards.defaultModel = { source: 'openai', name: 'factory-model' };
+
+        const view = buildMigrationTarget(target as Preset);
+
+        expect(view.prompts.find((p) => p.identifier === 'p1')?.content).toBe('factory-v2');
+        expect(view.order).toEqual([{ identifier: 'p1', enabled: false }]);
+        expect(view.defaultSampling).toEqual({ temperature: 0.8 });
+        expect(view.defaultExtra).toEqual({ impersonation_prompt: 'factory-extra' });
+        expect(view.defaultModel).toEqual({ source: 'openai', name: 'factory-model' });
+    });
+
     it('listMigrationSourceNames：只列有 v3 profile 的预设，排除目标', () => {
         addPreset('Midnight', oldPresetFixture());
         addPreset('Plain', { name: 'Plain', extensions: {} });
@@ -211,6 +237,34 @@ describe('presetMigration 适配层', () => {
         expect(newMeta.defaultSnapshotLocked).toBe(true);
     });
 
+    it('rejects orphan delta profiles instead of binding them to a target profile with the same baseId', async () => {
+        const source = oldPresetFixture();
+        source.extensions.preset_cards.profiles = [{
+            formatVersion: 3,
+            kind: 'prompt_delta',
+            id: 'd-orphan',
+            name: '孤立派生',
+            baseId: 'b-existing',
+            changes: [{ identifier: 'p2', enabled: false }],
+        }];
+        const target = newPresetFixture();
+        target.extensions.preset_cards.profiles = [{
+            formatVersion: 3,
+            kind: 'prompt_base',
+            id: 'b-existing',
+            name: '目标已有配置',
+            prompts: [],
+        }];
+        const targetIdx = addPreset('Midnight v2', target);
+
+        const result = await executeMigration(source as Preset, 'Midnight v2', targetIdx, { orderStrategy: 'keep-mine' });
+
+        expect(result.status).toBe('blocked');
+        expect(result.blockedReason).toContain('孤立派生');
+        expect(readMeta(openai_settings[targetIdx] as Preset).profiles).toHaveLength(1);
+        expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    });
+
     it('carryMissingDefs：跨预设迁移带入缺失 prompt 定义与预设正则（重叠目标优先）；默认均不带入', async () => {
         // 夹具为宽松字面量，结构与 Preset 对齐；经 unknown 断言后按类型读取
         const asPreset = (p: unknown): Preset => p as Preset;
@@ -270,5 +324,36 @@ describe('presetMigration 适配层', () => {
         expect(regexStates(tgtIdx2)).toEqual(['B正则:false', 'A正则:false', 'A正则三:true']); // 重叠开关随来源，新增整条带入
         const extAfter = ((openai_settings[tgtIdx2] as Preset).extensions ?? {}) as { preset_cards?: unknown };
         expect(extAfter.preset_cards).toBeDefined(); // 插件自身 meta 字段不被合并破坏
+    });
+
+    it('matches carried regexes by non-empty id or scriptName only and appends anonymous scripts', async () => {
+        const asPreset = (p: unknown): Preset => p as Preset;
+        const source = oldPresetFixture();
+        source.extensions.regex_scripts = [
+            { scriptName: '同名正则', disabled: true },
+            { scriptName: '仅来源正则', disabled: true },
+            { findRegex: 'anonymous-source', disabled: true },
+        ];
+        const target = newPresetFixture();
+        target.prompts[0].content = 'v1'; // 本用例只验证正则匹配，避免旧夹具的 p1 内容冲突挡住 carryMissingDefs
+        target.extensions.regex_scripts = [
+            { scriptName: '同名正则', disabled: false },
+            { findRegex: 'anonymous-target', disabled: false },
+        ];
+        const sourceIdx = addPreset('SrcNoId', source);
+        const targetIdx = addPreset('TgtNoId', target);
+
+        await executeMigration(asPreset(openai_settings[sourceIdx]), 'TgtNoId', targetIdx, { orderStrategy: 'keep-mine', carryMissingDefs: true });
+
+        const targetPresetAfter = openai_settings[targetIdx] as Preset;
+        // 测试夹具明确写入 regex_scripts；此处只取迁移后扩展数组断言顺序与开关。
+        const targetExtensions = (targetPresetAfter.extensions ?? {}) as { regex_scripts?: Array<Record<string, unknown>> };
+        const scripts = targetExtensions.regex_scripts ?? [];
+        expect(scripts.map((s) => `${String(s.scriptName ?? s.findRegex)}:${String(s.disabled)}`)).toEqual([
+            '同名正则:true',
+            'anonymous-target:false',
+            '仅来源正则:true',
+            'anonymous-source:true',
+        ]);
     });
 });

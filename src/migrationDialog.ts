@@ -251,9 +251,9 @@ export async function openMigrationWizard(ctx: CardsContext): Promise<void> {
     const result = await executeMigration(sourcePreset, targetName, targetIdx, { orderStrategy, mountNew, carryMissingDefs });
     if (result.status === 'persist-failed') return;
     if (result.status === 'blocked') {
-        // 分析与执行之间源/目标可能已变（如捕获周期追加了 delta）产生新冲突：
+        // 分析与执行之间源/目标可能已变（如捕获周期追加了 delta）产生新冲突，或来源树不合法：
         // 与编辑器路径同样提示，而不是对 undefined report 解引用崩溃。
-        void callGenericPopup(L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
+        void callGenericPopup(result.blockedReason ?? L('Unresolved conflicts remain'), POPUP_TYPE.TEXT);
         return;
     }
     const r = result.report!;
