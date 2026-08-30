@@ -1,6 +1,7 @@
 import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
+import { getActiveProfile } from './activeProfile.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptFields, PromptProfileEntry } from './meta.js';
 import { applyBufferedEdits, bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
@@ -354,6 +355,79 @@ export async function resetProfileToParent(ctx: EditorContext): Promise<'reset' 
     const result = await resetProfileCore(preset, meta, profile, ctx.name, ctx.idx);
     if (result === 'reset') ctx.refreshActivePresetUI(ctx.name);
     return result;
+}
+
+/** 打开编辑器时把「父预设当前持有本 profile 字段级应用态」的漂移预填进会话缓冲（可见的 staged 项）。
+ * 字段级流下原生 PM 的开关/挂载/顺序/值编辑是唯一漂移来源；种子化后用户可逐项撤销或随 commit 固化，
+ * 不再有「commit 时静默折叠进基线」。注册投影流下父预设状态与本 profile 无关，不种子
+ * （漂移由 SETTINGS_UPDATED 捕获链路处理）。 */
+export function seedPresetDriftIntoBuffers(ctx: EditorContext): void {
+    if (oai_settings.preset_settings_openai !== ctx.name) return;
+    const active = getActiveProfile();
+    if (!active || active.presetName !== ctx.name || active.profileId !== String(ctx.profileId)) return;
+
+    const preset = openai_settings[ctx.idx] as Preset;
+    const meta = readMeta(preset);
+    const resolved = resolveBaselineEntries(ctx);
+    if (resolved.length === 0) return;
+
+    const targetId = resolvePromptOrderTarget();
+    const list = findOrderList(preset, targetId);
+    const presetOrder: { identifier: string; enabled: boolean }[] = Array.isArray(list?.order)
+        ? list.order
+            .filter((o: any) => o && typeof o.identifier === 'string')
+            .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
+        : [];
+
+    const resolvedById = new Map(resolved.map((e) => [e.identifier, e]));
+    const resolvedMounted = resolved.filter((e) => e.mounted);
+    const resolvedMountIdx = new Map(resolvedMounted.map((e, i) => [e.identifier, i]));
+
+    // 种子 sessionOrder = 预设当前 order ∩ profile 解析域（保持预设现行顺序；域外条目不属于本 profile）
+    const seeded = presetOrder.filter((o) => resolvedById.has(o.identifier));
+    ctx.sessionOrder = seeded.map((o) => ({ ...o }));
+    const seededIdx = new Map(seeded.map((o, i) => [o.identifier, i]));
+
+    for (const entry of resolvedMounted) {
+        const key = bufferKey(ctx.name, entry.identifier);
+        const presetIdx = seededIdx.get(entry.identifier);
+        if (presetIdx === undefined) {
+            // 漂移卸载：profile 挂载、预设 order 已摘除 → 预填卸载（记录解析态原位供 undo 插回）
+            ctx.pendingMounts.set(key, false);
+            ctx.unmountPositions.set(key, resolvedMountIdx.get(entry.identifier) ?? 0);
+            continue;
+        }
+        // 开关漂移：预设真值 ≠ profile 解析值 → 预填 toggle
+        if (seeded[presetIdx].enabled !== entry.enabled) {
+            ctx.pendingToggles.set(key, seeded[presetIdx].enabled);
+        }
+        // 顺序漂移
+        if (presetIdx !== resolvedMountIdx.get(entry.identifier)) {
+            ctx.reorderedIds.add(entry.identifier);
+        }
+    }
+    // 漂移重挂载：profile 未挂载、预设 order 有 → 预填挂载
+    for (const o of seeded) {
+        const entry = resolvedById.get(o.identifier)!;
+        if (!entry.mounted) {
+            ctx.pendingMounts.set(bufferKey(ctx.name, o.identifier), true);
+        }
+    }
+    // 值漂移：预设定义 ≠ 有效值字段（出厂 ⊕ 解析）→ 预填会话值编辑
+    for (const entry of resolved) {
+        const def = findPromptInPreset(preset, entry.identifier);
+        if (!def) continue;
+        const eff = effectiveFieldsFor(meta, entry, def);
+        const drift: PromptFields = {};
+        for (const f of PROMPT_FIELD_WHITELIST) {
+            const defValue = (def as any)[f];
+            if (defValue !== undefined && defValue !== (eff as any)[f]) {
+                (drift as any)[f] = defValue;
+            }
+        }
+        if (Object.keys(drift).length === 0) continue;
+        ctx.sessionEdits.set(bufferKey(ctx.name, entry.identifier), { initial: { ...eff }, edited: { ...eff, ...drift } });
+    }
 }
 
 /** commit「更新当前配置」。返回是否成功。

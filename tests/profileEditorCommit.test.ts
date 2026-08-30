@@ -14,7 +14,8 @@ import {
 import { mergeBaseSnapshot } from '../src/presetSnapshot.js';
 import { snapshotToChanges, resolveParentStates, findPromptInPreset } from '../src/promptToggle.js';
 import { applyPromptDelta } from '../src/promptState.js';
-import { commitUpdate, commitCreateDelta } from '../src/profileEditorState.js';
+import { commitUpdate, commitCreateDelta, seedPresetDriftIntoBuffers, stagedItems } from '../src/profileEditorState.js';
+import { setActiveProfile } from '../src/activeProfile.js';
 import { readMeta } from '../src/meta.js';
 import type { Preset, PromptFields } from '../src/meta.js';
 
@@ -332,5 +333,103 @@ describe('提交写回与顶层采集按运行时归属分流', () => {
         const delta = profiles.find((p: any) => p.name === 'New');
         expect(delta.sampling).toMatchObject({ temperature: 0.7 });
         expect(delta.model).toEqual({ source: 'openai', name: 'gpt-parent' });
+    });
+});
+
+describe('漂移种子化（字段级流的原生编辑预填为 staged 项）', () => {
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('字段级流：开关/挂载/顺序/值漂移全部预填进会话缓冲', () => {
+        // 预设现状（原生 PM 漂移后）：p2 开（profile 是关）、p4 被摘除、p1/p2 换序、p1 内容被改
+        const preset = installPreset([B]);
+        (preset.prompts as any[])[0].content = 'drifted';
+        (preset.prompt_order as any[])[0].order = [
+            { identifier: 'p2', enabled: true },
+            { identifier: 'p1', enabled: true },
+            { identifier: 'p3', enabled: true },
+        ];
+        // 出厂基线（defaultSnapshot 存在时有效基线 = 出厂值 ⊕ 解析 fields，才能检出定义层漂移）
+        (preset.extensions as any)[EXTENSION_KEY].defaultSnapshot = [
+            {
+                identifier: 'p1', mounted: true, enabled: true,
+                originalFields: { content: 'c1', name: 'P1', role: 'system', injection_position: 0, injection_depth: 0 },
+            },
+        ];
+        setActiveProfile({ presetName: 'P', profileId: 'b1' });
+
+        const ctx = makeCtx('b1');
+        seedPresetDriftIntoBuffers(ctx);
+
+        // 开关漂移：p2 预填为预设真值「开」
+        expect(ctx.pendingToggles.get(bufferKey('P', 'p2'))).toBe(true);
+        expect(ctx.sessionOrder.find((o) => o.identifier === 'p2')?.enabled).toBe(true);
+        // 挂载漂移：p4 预填卸载（记录解析原位供 undo）
+        expect(ctx.pendingMounts.get(bufferKey('P', 'p4'))).toBe(false);
+        expect(ctx.sessionOrder.some((o) => o.identifier === 'p4')).toBe(false);
+        // 顺序漂移：p1/p2 换序
+        expect(ctx.reorderedIds.has('p1')).toBe(true);
+        expect(ctx.reorderedIds.has('p2')).toBe(true);
+        // 值漂移：p1 内容预填为预设值
+        const session = ctx.sessionEdits.get(bufferKey('P', 'p1'));
+        expect(session?.edited.content).toBe('drifted');
+        // staged 面板可见
+        expect(stagedItems(ctx).length).toBeGreaterThan(0);
+    });
+
+    it('注册投影流：不种子（父预设状态与本 profile 无关）', () => {
+        const preset = installPreset([B]);
+        (preset.prompt_order as any[])[0].order = [
+            { identifier: 'p2', enabled: true },
+            { identifier: 'p1', enabled: true },
+            { identifier: 'p3', enabled: true },
+        ];
+        setActiveProfile({ presetName: 'P', profileId: 'b1' });
+        oai_settings.preset_settings_openai = 'P - B'; // 活动预设是投影
+
+        const ctx = makeCtx('b1');
+        seedPresetDriftIntoBuffers(ctx);
+
+        expect(ctx.pendingToggles.size).toBe(0);
+        expect(ctx.pendingMounts.size).toBe(0);
+        expect(ctx.sessionEdits.size).toBe(0);
+        expect(stagedItems(ctx).length).toBe(0);
+    });
+
+    it('种子后的 commit 把漂移折叠进 profile（端到端）', async () => {
+        const preset = installPreset([B]);
+        (preset.prompt_order as any[])[0].order = [
+            { identifier: 'p1', enabled: true },
+            { identifier: 'p2', enabled: true },
+            { identifier: 'p3', enabled: true },
+        ];
+        setActiveProfile({ presetName: 'P', profileId: 'b1' });
+
+        const ctx = makeCtx('b1');
+        seedPresetDriftIntoBuffers(ctx);
+        expect(ctx.pendingToggles.get(bufferKey('P', 'p2'))).toBe(true); // 漂移：p2 被原生打开
+
+        const snapshot = applyBufferedAndSnapshot(
+            preset, 'P', ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder,
+            buildEffectiveMap(preset, ctx),
+        );
+        vi.useFakeTimers();
+        const committing = commitUpdate(ctx, snapshot, { captureTopLevel: false });
+        await vi.advanceTimersByTimeAsync(400);
+        const ok = await committing;
+        vi.useRealTimers();
+        expect(ok).toBe(true);
+
+        const merged = (preset.extensions as any)[EXTENSION_KEY].profiles[0];
+        const byId = new Map(merged.prompts.map((p: any) => [p.identifier, p]));
+        expect(byId.get('p2')?.enabled).toBe(true); // 漂移折叠：p2 开进 profile
+        expect(byId.get('p3')?.enabled).toBe(true); // 未漂移条目不受影响
+        // 卸载漂移折叠：p4 从挂载集移除（进 unusedIds）
+        expect(byId.has('p4')).toBe(false);
+        expect(merged.unusedIds).toContain('p4');
     });
 });
