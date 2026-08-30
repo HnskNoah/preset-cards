@@ -101,6 +101,8 @@ interface MergePending {
     patch?: Record<string, any>;
     timer: ReturnType<typeof setTimeout>;
     promise: Promise<void>;
+    resolve: () => void;
+    reject: (e: unknown) => void;
 }
 
 /** per-preset 合并窗口内的待保存项。 */
@@ -159,26 +161,44 @@ export function saveMeta(presetName: string, presetIndex: number, transform: Met
         patch: mergePresetPatch(undefined, patch),
         timer: setTimeout(() => {
             mergePending.delete(presetName);
-            const tail = tailByPreset.get(presetName) ?? Promise.resolve();
-            const run = tail.then(async () => {
-                await doSaveMeta(presetName, pending.presetIndex, pending.target, pending.transforms, pending.patch);
-                // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
-                // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
-                for (const listener of [...metaPersistedListeners]) {
-                    try {
-                        listener(presetName, pending.presetIndex);
-                    } catch (err) {
-                        console.error('preset-cards: meta persisted listener failed', err);
-                    }
-                }
-            });
-            tailByPreset.set(presetName, run.then(() => undefined, () => undefined));
-            run.then(resolveFn, rejectFn);
+            settlePending(presetName, pending);
         }, MERGE_WINDOW_MS),
         promise,
+        resolve: resolveFn,
+        reject: rejectFn,
     };
     mergePending.set(presetName, pending);
     return promise;
+}
+
+/** 把待保存项交给串行尾链落盘（合并窗口到期与关页 flush 共用），完成后结清 promise。 */
+function settlePending(presetName: string, pending: MergePending): void {
+    const tail = tailByPreset.get(presetName) ?? Promise.resolve();
+    const run = tail.then(async () => {
+        await doSaveMeta(presetName, pending.presetIndex, pending.target, pending.transforms, pending.patch);
+        // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
+        // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
+        for (const listener of [...metaPersistedListeners]) {
+            try {
+                listener(presetName, pending.presetIndex);
+            } catch (err) {
+                console.error('preset-cards: meta persisted listener failed', err);
+            }
+        }
+    });
+    tailByPreset.set(presetName, run.then(() => undefined, () => undefined));
+    run.then(pending.resolve, pending.reject);
+}
+
+/** 关页前尽力落盘全部挂起的保存（合并窗口内未落盘的改动）。
+ * best-effort：异步 fetch 在页面卸载时不保证完成，但正常关闭路径多数能送达。 */
+export function flushPendingSaves(): void {
+    for (const [presetName, pending] of [...mergePending]) {
+        clearTimeout(pending.timer);
+        mergePending.delete(presetName);
+        settlePending(presetName, pending);
+        pending.promise.catch(() => undefined); // 关页路径调用方可能不在 await，防 unhandled rejection
+    }
 }
 
 /** 历史别名：与 saveMeta 语义一致（合并窗口 + 串行尾链）。 */

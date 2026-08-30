@@ -6,6 +6,7 @@ import { getActiveProfile, initActiveProfile, validateActiveProfile } from './ac
 import { eventSource, event_types } from '@sillytavern/scripts/events';
 import { applyProfileToPresetByName, getPresetProfiles, getProfileModel, listPresetsWithProfiles, notifyProfileChanged, onProfileChanged } from './presetCardsState.js';
 import { initPresetOrderNormalization } from './fastApply.js';
+import { flushPendingSaves } from './meta.js';
 import { initPresetRegistration, initRegisteredPresetActivation, initRegisteredPresetObserver, onActiveProfileChangedBySwitch, syncAllPresetRegistrations } from './presetRegistration.js';
 import { initPresetCapture } from './presetCapture.js';
 import type { PresetCardsApi } from './types/presetCardsApi.js';
@@ -58,6 +59,9 @@ export function init(): void {
 
     // 对外入口：供其它扩展（如 ST-Quicker-Api 便捷方案）加载 preset-cards 的 profile
     window.presetCards = exposePresetCardsApi();
+
+    // 关页/刷新前尽力落盘合并窗口内挂起的保存（best-effort：异步 fetch 在卸载时不保证完成）
+    window.addEventListener('pagehide', flushPendingSaves);
 
     mountWandButton();
 

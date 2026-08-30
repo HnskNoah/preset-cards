@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { saveMeta, saveMetaMerged, onMetaPersisted, persistMetaTransaction } from '../src/meta.js';
+import { saveMeta, saveMetaMerged, onMetaPersisted, persistMetaTransaction, flushPendingSaves } from '../src/meta.js';
 import { addPreset, oai_settings, openai_setting_names, openai_settings } from './mocks/openai.js';
 
 beforeEach(() => {
@@ -173,6 +173,20 @@ describe('saveMeta 持久化统一机制', () => {
         const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
         expect(fetchMock).not.toHaveBeenCalled();
         expect((openai_settings[replacementIdx] as Record<string, any>).marker).toBe('replacement');
+    });
+
+    it('flushPendingSaves 立即落盘窗口内挂起的保存（关页保护）', async () => {
+        addPreset('Flush', { prompts: [], extensions: {} });
+        const idx = openai_settings.length - 1;
+        const p = saveMeta('Flush', idx, (m) => ({ ...m, description: 'flushed' }));
+        flushPendingSaves();
+        await p;
+        const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+        expect(body.preset.extensions.preset_cards.description).toBe('flushed');
+        // 落盘后写回活 extensions
+        expect((openai_settings[idx] as any).extensions.preset_cards.description).toBe('flushed');
     });
 
     it('保存失败 reject 给调用方且不阻塞后续保存', async () => {
