@@ -502,3 +502,106 @@ describe('切片 2：激活同步', () => {
         expect(getActiveProfile()).toBeUndefined();
     });
 });
+
+describe('注册对账增量化（指纹命中复用投影快照）', () => {
+    /** 两个 profile 的预设：base A + delta B（B 派生自 A）。 */
+    function samplePresetTwo(): Record<string, any> {
+        return {
+            name: 'Midnight',
+            prompts: [{ identifier: 'p1', content: 'hi', role: 'system', system_prompt: false, marker: false }],
+            prompt_order: [{ name: 'main', order: [{ identifier: 'p1', enabled: true }] }],
+            temperature: 0.7,
+            extensions: {
+                preset_cards: {
+                    description: '',
+                    models: [],
+                    bgImage: '',
+                    profiles: [
+                        {
+                            formatVersion: 3, kind: 'prompt_base', id: 'A', name: '战斗版',
+                            prompts: [{ identifier: 'p1', mounted: true, enabled: true }],
+                        },
+                        {
+                            formatVersion: 3, kind: 'prompt_delta', id: 'B', name: '防守版', baseId: 'A',
+                            changes: [{ identifier: 'p1', enabled: false }],
+                        },
+                    ],
+                    defaultSnapshotLocked: true,
+                    defaultSnapshot: [{ identifier: 'p1', mounted: true, enabled: true, originalFields: { content: 'hi' } }],
+                },
+            },
+        };
+    }
+
+    function savePostNames(): string[] {
+        return (fetch as unknown as ReturnType<typeof vi.fn>)
+            .mock.calls.filter((c: any[]) => String(c[0]).includes('/api/presets/save'))
+            .map((c: any[]) => JSON.parse(c[1].body as string).name);
+    }
+
+    it('指纹命中：内容不变时第二次对账零 POST、零写入', () => {
+        const idx = addPreset('Midnight', samplePresetTwo());
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(true);
+        const firstCount = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(false);
+        expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(firstCount);
+    });
+
+    it('单点变化：只改一个 profile，仅该 profile 的注册被重写', () => {
+        const idx = addPreset('Midnight', samplePresetTwo());
+        syncPresetRegistrations('Midnight', idx);
+        (fetch as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+        const preset = openai_settings[idx] as Record<string, any>;
+        preset.extensions.preset_cards.profiles[0].prompts[0].enabled = false;
+
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(true);
+        expect(savePostNames()).toEqual(['Midnight - 战斗版']);
+    });
+
+    it('父链传播：改 base 的解析内容，派生 delta 的注册同步重建', () => {
+        const idx = addPreset('Midnight', samplePresetTwo());
+        syncPresetRegistrations('Midnight', idx);
+        (fetch as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+        // base 的 p1 加值差异 → delta 解析态继承该字段 → 投影内容变化
+        const preset = openai_settings[idx] as Record<string, any>;
+        preset.extensions.preset_cards.profiles[0].prompts[0].fields = { content: 'changed' };
+
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(true);
+        const names = savePostNames();
+        expect(names).toContain('Midnight - 战斗版');
+        expect(names).toContain('Midnight - 防守版');
+        // delta 的投影携带继承自 base 的值差异
+        const record = openai_settings[openai_setting_names['Midnight - 防守版']];
+        expect(record.prompts.find((p: any) => p.identifier === 'p1').content).toBe('changed');
+    });
+
+    it('池变化：预设 prompts 新增定义触发全部投影重建', () => {
+        const idx = addPreset('Midnight', samplePresetTwo());
+        syncPresetRegistrations('Midnight', idx);
+        (fetch as unknown as ReturnType<typeof vi.fn>).mockClear();
+
+        const preset = openai_settings[idx] as Record<string, any>;
+        preset.prompts.push({ identifier: 'p2', content: 'new', role: 'system', system_prompt: false, marker: false });
+
+        expect(syncPresetRegistrations('Midnight', idx)).toBe(true);
+        expect(savePostNames().length).toBe(2);
+        // 新定义以未挂载形态出现在投影池里
+        const record = openai_settings[openai_setting_names['Midnight - 战斗版']];
+        expect(record.prompts.some((p: any) => p.identifier === 'p2')).toBe(true);
+    });
+
+    it('命中复用的快照与全量构建逐字节一致', () => {
+        const idx = addPreset('Midnight', samplePresetTwo());
+        syncPresetRegistrations('Midnight', idx);
+
+        const regName = findRegisteredPresetName('B')!;
+        const stored = openai_settings[openai_setting_names[regName]];
+        // 全量新鲜构建（激活路径同款，不走缓存）作为标准答案
+        const freshRecord = resolveFreshRegisteredRecord('Midnight', 'B')!;
+        for (const key of ['prompts', 'prompt_order', 'temperature']) {
+            expect(JSON.stringify(stored[key])).toBe(JSON.stringify((freshRecord as any)[key]));
+        }
+    });
+});

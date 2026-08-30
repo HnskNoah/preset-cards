@@ -1,15 +1,17 @@
-import { openai_settings } from '@sillytavern/scripts/openai';
+import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { L } from './i18n.js';
 import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction } from './meta.js';
 import type { Preset } from './meta.js';
-import { applyBufferedEdits, bufferKey } from './presetBuffers.js';
+import { bufferKey } from './presetBuffers.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
-import { findOrderList, findPromptInPreset, resolvePromptOrderTarget } from './promptToggle.js';
+import { findPromptInPreset } from './promptToggle.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, projectSessionOrder, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
+import { buildEffectiveFieldsMap } from './profileEditorBaseline.js';
+import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent } from './profileEditorState.js';
+import { stagedItems } from './profileEditorStaged.js';
 import { applyLockVisual, applySearch, refreshCounts, refreshEntryRow, renderDialog, renderRightPane, setupSortable } from './profileEditorRender.js';
-import { resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
+import { buildProfileSeedOrder, resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
 
 /** 提交/reset 后的会话收尾：清缓冲、退出编辑视图、重渲染 + 刷新。
  * advanceBaseline=true（默认）：把基线推进到当前运行时态（此后净零检测/插回/discard 以最近 commit 为基线）。
@@ -19,14 +21,10 @@ async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true)
     clearSessionBuffers(ctx);
     ctx.reorderedIds.clear();
     if (advanceBaseline) {
-        // 基线推进：commit 后以当前运行时 order 作为新 initialOrder（净零检测、insertAtInitialPosition 共用）
+        // 基线推进：commit 后以 profile 最新解析态为新基线（净零检测/插回/discard 共用）。
+        // 不读父预设 prompt_order——注册投影流下它与 profile 无关。
         const preset = openai_settings[ctx.idx] as Preset;
-        const list = findOrderList(preset, resolvePromptOrderTarget());
-        ctx.initialOrder = Array.isArray(list?.order)
-            ? list.order
-                .filter((o: any) => o && typeof o.identifier === 'string')
-                .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
-            : [];
+        ctx.initialOrder = buildProfileSeedOrder(preset, ctx.profileId);
         ctx.initialOrderIndex = new Map(ctx.initialOrder.map((o, i) => [o.identifier, i]));
     }
     ctx.sessionOrder = ctx.initialOrder.map((o) => ({ ...o }));
@@ -201,12 +199,12 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             const newName = key === 'Escape' ? currentName : (input.val() as string).trim() || currentName;
 
             if (newName !== currentName && key !== 'Escape') {
-                const profileToRename = snapshot.profile;
-                const meta = resolveEditorSnapshot(ctx)?.meta ?? snapshot.meta;
-                // 事务：副本上重命名，持久化成功后写回；失败时内存未变（无需回滚）
-                const ok = await persistMetaTransaction(meta, (m) => ({
+                // 事务：按 id 替换名字（重放落盘前活 profiles 可能已被其他保存替换，对象身份不可依赖），
+                // 持久化成功后刷新；失败时内存未变（无需回滚）
+                const renameId = String(snapshot.profile.id);
+                const ok = await persistMetaTransaction((m) => ({
                     ...m,
-                    profiles: m.profiles.map((p) => p === profileToRename ? { ...p, name: newName } : p),
+                    profiles: (m.profiles ?? []).map((p) => String(p.id) === renameId ? { ...p, name: newName } : p),
                 }), ctx.name, ctx.idx);
                 if (!ok) {
                     await renderDialog(ctx);
@@ -279,20 +277,22 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         ctx.committing = true;
         try {
             const preset = openai_settings[ctx.idx] as Preset;
-            const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder);
+            // 运行时归属：父预设是否为当前活动预设。注册投影流下活动预设是投影记录，
+            // 父预设顶层值/order 与编辑态无关——不写回、不采集（运行时刷新由
+            // onMetaPersisted → syncPresetRegistrations → refreshProjectionRuntimeIfActive 闭环负责）
+            const isParentRuntime = oai_settings.preset_settings_openai === ctx.name;
+            // 有效值字段表（出厂 ⊕ profile 解析）：提交快照与编辑预填共用的基线
+            const effectiveFields = buildEffectiveFieldsMap(preset, ctx);
+            const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder, effectiveFields);
 
             try {
                 let ok = true;
                 if (choice === 'update') {
-                    ok = await commitUpdate(ctx, snapshotData);
-                    if (ok) {
-                        // 副作用后置：update 持久化成功后，先把 sessionOrder 投影回预设（唯一写回点），
-                        // 再把缓冲写进运行时（此时=已提交态，天然一致）
-                        projectSessionOrder(ctx);
-                        applyBufferedEdits(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles);
-                    }
+                    // 写回与顶层采集由 commitUpdate 内部按 isParentRuntime 分流（字段级写回父预设；
+                    // 注册投影流不写父预设，运行时刷新走 onMetaPersisted → sync → refreshProjectionRuntimeIfActive）
+                    ok = await commitUpdate(ctx, snapshotData, { captureTopLevel: isParentRuntime });
                 } else {
-                    await commitCreateDelta(ctx, deltaName as string, snapshotData);
+                    await commitCreateDelta(ctx, deltaName as string, snapshotData, { captureTopLevel: isParentRuntime });
                     // create-delta：编辑属于新 delta，源 profile 运行时不写（无 prompts 残留）；编辑期也从未改过预设 prompt_order
                 }
                 if (!ok) return;

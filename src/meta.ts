@@ -87,18 +87,25 @@ export function readMeta(preset: Preset | undefined): PresetMeta {
 /** 合并保存窗口（ms）：同一预设的多次保存合并为一次全量保存，避免高频操作逐次全量 POST。 */
 const MERGE_WINDOW_MS = 300;
 
+/** meta 变换：接收「落盘时刻」的最新 meta，返回持久化用的 meta（纯函数，不得有副作用）。
+ * 变换在串行尾链落盘前依次重放于活 extensions 现值——窗口内并发修改先到先改、互不覆盖。 */
+export type MetaTransform = (meta: PresetMeta) => PresetMeta;
+
 interface MergePending {
     presetIndex: number;
     /** 合并窗口打开时的目标对象身份；名称映射/数组槽变化时拒绝，绝不写到替换后的同名对象。 */
     target: Preset;
-    meta: PresetMeta;
+    /** 窗口内的变换队列（先到先改，落盘前依次重放）。 */
+    transforms: MetaTransform[];
     /** 随本次 meta 一并落盘的预设本体补丁（如采样字段）；窗口内按字段合并，extensions 递归合并。 */
     patch?: Record<string, any>;
     timer: ReturnType<typeof setTimeout>;
     promise: Promise<void>;
+    resolve: () => void;
+    reject: (e: unknown) => void;
 }
 
-/** per-preset 合并窗口内的待保存项（窗口内末次 meta 胜出）。 */
+/** per-preset 合并窗口内的待保存项。 */
 const mergePending = new Map<string, MergePending>();
 
 /** per-preset 串行尾链：同一预设的落盘不并发（避免 last-write-wins 竞态）。 */
@@ -126,10 +133,11 @@ function mergePresetPatch(
 
 /**
  * Persist metadata into the preset's extensions field and save to disk.
- * 统一机制：per-preset 合并窗口（窗口内末次 meta 胜出）+ per-preset 串行尾链。
+ * 统一机制：per-preset 合并窗口（窗口内变换依次重放于最新状态）+ per-preset 串行尾链。
+ * transform 在落盘前基于活 extensions 现值执行，读到的总是最新状态——并发保存不丢改动。
  * 网络失败时 reject 给调用方（调用方决定回滚/提示），不阻塞后续保存。
  */
-export function saveMeta(presetName: string, presetIndex: number, meta: PresetMeta, patch?: Record<string, any>): Promise<void> {
+export function saveMeta(presetName: string, presetIndex: number, transform: MetaTransform, patch?: Record<string, any>): Promise<void> {
     const target = openai_settings[presetIndex] as Preset | undefined;
     if (!target || openai_setting_names[presetName] !== presetIndex) {
         return Promise.reject(new Error('Preset target changed before save'));
@@ -139,7 +147,7 @@ export function saveMeta(presetName: string, presetIndex: number, meta: PresetMe
         if (existing.presetIndex !== presetIndex || existing.target !== target) {
             return Promise.reject(new Error('Preset target changed before save'));
         }
-        existing.meta = meta;
+        existing.transforms.push(transform);
         existing.patch = mergePresetPatch(existing.patch, patch);
         return existing.promise;
     }
@@ -149,56 +157,71 @@ export function saveMeta(presetName: string, presetIndex: number, meta: PresetMe
     const pending: MergePending = {
         presetIndex,
         target,
-        meta,
+        transforms: [transform],
         patch: mergePresetPatch(undefined, patch),
         timer: setTimeout(() => {
             mergePending.delete(presetName);
-            const tail = tailByPreset.get(presetName) ?? Promise.resolve();
-            const run = tail.then(async () => {
-                await doSaveMeta(presetName, pending.presetIndex, pending.target, pending.meta, pending.patch);
-                // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
-                // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
-                for (const listener of [...metaPersistedListeners]) {
-                    try {
-                        listener(presetName, pending.presetIndex);
-                    } catch (err) {
-                        console.error('preset-cards: meta persisted listener failed', err);
-                    }
-                }
-            });
-            tailByPreset.set(presetName, run.then(() => undefined, () => undefined));
-            run.then(resolveFn, rejectFn);
+            settlePending(presetName, pending);
         }, MERGE_WINDOW_MS),
         promise,
+        resolve: resolveFn,
+        reject: rejectFn,
     };
     mergePending.set(presetName, pending);
     return promise;
 }
 
-/** 历史别名：与 saveMeta 语义一致（合并窗口 + 串行尾链）。 */
-export function saveMetaMerged(presetName: string, presetIndex: number, meta: PresetMeta): Promise<void> {
-    return saveMeta(presetName, presetIndex, meta);
+/** 把待保存项交给串行尾链落盘（合并窗口到期与关页 flush 共用），完成后结清 promise。 */
+function settlePending(presetName: string, pending: MergePending): void {
+    const tail = tailByPreset.get(presetName) ?? Promise.resolve();
+    const run = tail.then(async () => {
+        await doSaveMeta(presetName, pending.presetIndex, pending.target, pending.transforms, pending.patch);
+        // 注册链路同步钩子：任何 meta 落盘成功后通知（saveMeta 与 persistMetaTransaction
+        // 统一在此触发——编辑器提交走 saveMetaMerged 也要对账注册；解耦避免循环依赖）
+        for (const listener of [...metaPersistedListeners]) {
+            try {
+                listener(presetName, pending.presetIndex);
+            } catch (err) {
+                console.error('preset-cards: meta persisted listener failed', err);
+            }
+        }
+    });
+    tailByPreset.set(presetName, run.then(() => undefined, () => undefined));
+    run.then(pending.resolve, pending.reject);
 }
 
-/** 统一「副本 → 变换 → 持久化 → 写回活 meta」事务：失败时不污染内存与磁盘，返回是否成功。
- * transform 不得修改传入的 meta（副本模式）；成功后 Object.assign 写回活 meta（保持对象身份）。
+/** 关页前尽力落盘全部挂起的保存（合并窗口内未落盘的改动）。
+ * best-effort：异步 fetch 在页面卸载时不保证完成，但正常关闭路径多数能送达。 */
+export function flushPendingSaves(): void {
+    for (const [presetName, pending] of [...mergePending]) {
+        clearTimeout(pending.timer);
+        mergePending.delete(presetName);
+        settlePending(presetName, pending);
+        pending.promise.catch(() => undefined); // 关页路径调用方可能不在 await，防 unhandled rejection
+    }
+}
+
+/** 历史别名：与 saveMeta 语义一致（合并窗口 + 串行尾链）。 */
+export function saveMetaMerged(presetName: string, presetIndex: number, transform: MetaTransform, patch?: Record<string, any>): Promise<void> {
+    return saveMeta(presetName, presetIndex, transform, patch);
+}
+
+/** 统一「变换 → 持久化 → 写回活 extensions」事务：失败时不污染内存与磁盘，返回是否成功。
+ * transform 不得修改传入的 meta（副本模式）；成功后由 doSaveMeta 把重放结果写回活 extensions。
  * opts.toastMessage 指定失败提示文案（后台路径如保存捕获应给出明确归属的提示,而非通用预设保存失败）。 */
 export async function persistMetaTransaction(
-    meta: PresetMeta,
-    transform: (m: PresetMeta) => PresetMeta,
+    transform: MetaTransform,
     name: string,
     idx: number,
     opts?: { toastMessage?: string; patch?: Record<string, any> },
 ): Promise<boolean> {
-    const nextMeta = transform(meta);
     try {
-        await saveMeta(name, idx, nextMeta, opts?.patch);
+        await saveMeta(name, idx, transform, opts?.patch);
     } catch (err) {
         console.error('Persist preset metadata failed', err);
         toastr.error(opts?.toastMessage ?? L('Failed to save preset metadata'));
         return false;
     }
-    Object.assign(meta, nextMeta);
     // 注册链路同步钩子已在 saveMeta 成功路径统一触发（本事务也走 saveMeta），此处不重复。
     return true;
 }
@@ -215,7 +238,7 @@ async function doSaveMeta(
     presetName: string,
     presetIndex: number,
     target: Preset,
-    meta: PresetMeta,
+    transforms: MetaTransform[],
     patch?: Record<string, any>,
 ): Promise<void> {
     const currentIndex = openai_setting_names[presetName];
@@ -225,6 +248,8 @@ async function doSaveMeta(
     if (currentIndex !== presetIndex || !preset || preset !== target) {
         throw new Error('Preset target changed before save');
     }
+    // 重放：变换作用于落盘时刻的活 extensions 现值——窗口内并发的多次修改依次生效，互不覆盖
+    const nextMeta = transforms.reduce((meta, transform) => transform(meta), readMeta(preset));
     // 副本先行：新 meta 与本体补丁只进请求体，/api/presets/save 成功后才写回活对象——
     // 失败（网络错误 / 非 ok 响应）时内存与磁盘都保持原状，「失败不污染」对 extensions
     // 与 patch 字段同时成立。
@@ -232,15 +257,15 @@ async function doSaveMeta(
     if (patch) Object.assign(presetBody, patch); // 补丁先行：插件元数据容器始终以本次 transform 为准（补丁可能整体携带旧 extensions 克隆）
     if (!presetBody.extensions) presetBody.extensions = {};
     presetBody.extensions[EXTENSION_KEY] = {
-        description: meta.description || '',
-        models: meta.models || [],
-        profiles: meta.profiles || [],
-        bgImage: meta.bgImage || '',
-        defaultSnapshot: meta.defaultSnapshot,
-        defaultSnapshotLocked: meta.defaultSnapshotLocked === true,
-        defaultSampling: meta.defaultSampling,
-        defaultExtra: meta.defaultExtra,
-        defaultModel: meta.defaultModel,
+        description: nextMeta.description || '',
+        models: nextMeta.models || [],
+        profiles: nextMeta.profiles || [],
+        bgImage: nextMeta.bgImage || '',
+        defaultSnapshot: nextMeta.defaultSnapshot,
+        defaultSnapshotLocked: nextMeta.defaultSnapshotLocked === true,
+        defaultSampling: nextMeta.defaultSampling,
+        defaultExtra: nextMeta.defaultExtra,
+        defaultModel: nextMeta.defaultModel,
     };
 
     const response = await fetch('/api/presets/save', {

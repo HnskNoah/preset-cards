@@ -280,7 +280,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const deltaName = await Popup.show.input(L('Derived profile name:'), '');
         if (!deltaName) return;
         // 副本模式事务：持久化含新 delta 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 delta）
-        const ok = await persistMetaTransaction(meta, (m) => {
+        const ok = await persistMetaTransaction((m) => {
             const profiles = Array.isArray(m.profiles) ? m.profiles : [];
             const allProfiles = profiles as (PromptBaseProfile | PromptDeltaProfile)[];
             const samplingDiff = diffSampling(captureSampling(preset), resolveEffectiveSampling(parent, allProfiles, m.defaultSampling));
@@ -348,7 +348,7 @@ export function bindCardsHandlers(ctx: CardsContext): void {
         const deleteIds = new Set([String(profileId), ...descendantIds]);
         // 副本模式事务：删除/级联结果先在 nextMeta 上计算，持久化成功后才写回活 meta 并清 activeProfile
         // （失败时内存与磁盘保持一致，不残留"已删但未落盘"的中间态）
-        const ok = await persistMetaTransaction(meta, (m) => ({
+        const ok = await persistMetaTransaction((m) => ({
             ...m,
             profiles: (m.profiles || []).filter(p => !deleteIds.has(String(p.id))),
         }), name, idx);

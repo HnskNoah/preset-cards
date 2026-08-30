@@ -15,6 +15,9 @@ import { fastApplyPreset } from './fastApply.js';
 import { whenCaptureSettled } from './presetCapture.js';
 import { buildProfileMarker, readPresetMarker } from './core/storage/marker.js';
 import { buildProjectedPreset } from './core/storage/project.js';
+import { buildRegisteredSnapshotsCached, type RegisteredProfileSnapshot } from './presetSyncCache.js';
+
+export type { RegisteredProfileSnapshot };
 import {
     findRegisteredPreset,
     findRegistrationsByParent,
@@ -22,13 +25,6 @@ import {
     type PresetRegistry,
     type PresetNaming,
 } from './core/registration/register.js';
-
-/** 单个 profile 的注册快照（已全量解析）。 */
-export interface RegisteredProfileSnapshot {
-    profileId: string;
-    profileName: string;
-    snapshot: Record<string, any>;
-}
 
 /** 占位命名策略：`父名 - profile名`，撞名加 ` (n)` 后缀。**命名规则待定**，定案时替换此实现即可。 */
 export const placeholderNaming: PresetNaming = {
@@ -159,7 +155,9 @@ export function syncPresetRegistrations(presetName: string, _presetIndex?: numbe
     const registry = createStRegistry();
     let touched = false;
 
-    const snapshots = buildRegisteredSnapshots(preset);
+    // 增量构建：指纹命中的 profile 复用上次投影快照（跳过 structuredClone + 全量解析），
+    // 只有内容/基线/池/目标序变化的才重建——MB 级预设 × N profile 的对账从 N 次深拷贝降到脏的个数
+    const snapshots = buildRegisteredSnapshotsCached(preset);
     const currentIds = new Set(snapshots.map((s) => s.profileId));
     for (const reg of findRegistrationsByParent(registry, presetName)) {
         if (!currentIds.has(String(reg.marker.profileId))) {

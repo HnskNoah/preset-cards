@@ -100,7 +100,7 @@ export async function openEditModal(presetName: string, presetIndex: number, onS
     if (context !== undefined) samplingPatch['openai_max_context'] = context;
     if (maxTokens !== undefined) samplingPatch['openai_max_tokens'] = maxTokens;
 
-    const ok = await persistMetaTransaction(meta, (m) => ({
+    const ok = await persistMetaTransaction((m) => ({
         ...m,
         description: newDesc,
         models: newModels,

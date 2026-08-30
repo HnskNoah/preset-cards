@@ -4,7 +4,9 @@ import { L } from './i18n.js';
 import { createEditorContext, type ProfileEditorDeps } from './profileEditorContext.js';
 import { bindEditorHandlers } from './profileEditorHandlers.js';
 import { renderDialog } from './profileEditorRender.js';
-import { clearSessionBuffers, stagedItems } from './profileEditorState.js';
+import { seedPresetDriftIntoBuffers } from './profileEditorBaseline.js';
+import { clearSessionBuffers } from './profileEditorState.js';
+import { stagedItems } from './profileEditorStaged.js';
 import { getProfile, readMeta } from './meta.js';
 import { resolveProfilePrompts } from './promptToggle.js';
 import { createEditorStore } from './core/store/EditorStore.js';
@@ -24,6 +26,8 @@ export async function openProfileEditorPopup(
     profileId: string,
 ): Promise<void> {
     const ctx = createEditorContext(deps, name, idx, profileId);
+    // 漂移种子化：字段级流下把父预设相对 profile 的原生编辑预填为可见 staged 项（可逐项撤销/随 commit 固化）
+    seedPresetDriftIntoBuffers(ctx);
     // P4：编辑器会话拥有 EditorStore（初始快照 = 当前 profile 的 v4 快照，staged 空）
     ctx.editorStore = createEditorStore(initialEditorState(ctx, profileId));
     bindEditorHandlers(ctx);

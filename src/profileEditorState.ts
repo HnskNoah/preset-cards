@@ -1,10 +1,8 @@
 import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
-import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
-import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
-import { bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
-import type { ProfileEntryView } from './presetList.js';
+import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptFields, PromptProfileEntry } from './meta.js';
+import { applyBufferedEdits, bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
 import {
     PROMPT_FIELD_WHITELIST,
     buildPromptSnapshot,
@@ -28,24 +26,12 @@ import { buildDerivedProfile } from './profileActions.js';
 import { resetProfileCore } from './profileMutators.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
 
-/** 右栏 staged diff 的一条记录。 */
-export interface StagedItem {
-    identifier: string;
-    key: string;
-    label: string;
-    /** 主列表条目的完整展示数据（复用主列表卡片渲染）。 */
-    entry?: ProfileEntryView;
-    toggle?: { original: boolean; target: boolean };
-    /** 挂载态变化：original 为 profile 当前挂载态，target 为目标挂载态（true=挂载 / false=卸载）。 */
-    mount?: { original: boolean; target: boolean };
-    /** R1：本条目存在「清除值变更」待提交（commit 时删除 profile 快照 fields）。 */
-    clear?: boolean;
-    /** 顺序变化（reorder）：from=打开时 index，to=当前 index。位置改变统一由 index 比较判定，进 diff。 */
-    reorder?: { from: number; to: number };
-}
+/** 右栏 staged diff 的数据推导见 profileEditorStaged（StagedItem / stagedItems）。 */
+
+/** 编辑器基线解析与漂移种子见 profileEditorBaseline（resolveBaselineEntries / effectiveFieldsFor）。 */
 
 /** 采集当前缓冲（开关/值编辑）叠加后的快照——纯函数，不写运行时。
- * 构造临时视图 preset（浅克隆 prompts + 叠加字段 edited；目标 order 由会话 sessionOrder 表达），
+ * 构造临时视图 preset（浅克隆 prompts + 叠加有效值字段与字段 edited；目标 order 由会话 sessionOrder 表达），
  * 使 buildPromptSnapshot 采到与「提交后」一致的状态；运行时 prompts/order 保持未动。
  * 副作用（applyBufferedEdits 写真实 prompt/镜像）由调用方在 commit 成功后执行。 */
 export function applyBufferedAndSnapshot(
@@ -55,6 +41,7 @@ export function applyBufferedAndSnapshot(
     pendingToggles: Map<string, boolean>,
     pendingClears: Map<string, true>,
     sessionOrder: { identifier: string; enabled: boolean }[],
+    effectiveFields: Map<string, PromptFields>,
 ): { entries: PromptProfileEntry[]; unusedIds: string[] } {
     const prefix = bufferPrefix(name);
     // 临时视图：prompts 浅克隆叠加字段 edited；目标 order 用 sessionOrder（含开关目标值）替换。
@@ -79,6 +66,12 @@ export function applyBufferedAndSnapshot(
             : [],
         prompt_order: clonedLists,
     };
+    // 基线叠加：白名单值字段以「出厂 ⊕ profile 解析」的有效值为准，再叠会话编辑——
+    // 注册流下父预设定义不代表编辑态，直接采集定义会把无关值钉进 profile fields
+    for (const prompt of view.prompts) {
+        const eff = effectiveFields.get(String(prompt.identifier));
+        if (eff) Object.assign(prompt, eff);
+    }
     const viewById = new Map(view.prompts.map((p: any) => [p.identifier, p]));
     for (const [key, session] of sessionEdits) {
         if (!key.startsWith(prefix)) continue;
@@ -142,76 +135,6 @@ export function applyPendingClearsToProfile(
             if (ids.has(c.identifier)) delete c.fields;
         }
     }
-}
-
-/** 计算当前 staged diff 条目（未提交的缓冲改动：开关切换 / 值修改 / 清除）。 */
-export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): StagedItem[] {
-    const resolved = snapshot ?? resolveEditorSnapshot(ctx);
-    if (!resolved) return [];
-    const nameById = new Map(resolved.entries.map((e) => [e.identifier, e.name]));
-    // 会话内改名：staged 面板 label 用缓冲 edited.name（否则显示旧名）
-    for (const [key, session] of ctx.sessionEdits) {
-        if (key.startsWith(ctx.prefix) && session.edited.name !== undefined) {
-            nameById.set(key.slice(ctx.prefix.length), session.edited.name);
-        }
-    }
-    const enabledById = new Map(resolved.entries.map((e) => [e.identifier, e.enabled]));
-
-    const keys = new Set<string>();
-    for (const k of ctx.pendingToggles.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    for (const k of ctx.sessionEdits.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    for (const k of ctx.pendingClears.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    for (const k of ctx.pendingMounts.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    // 顺序变化（reorder）：reorderedIds 由 computeReorder 用 initialOrderIndex 比较产生（专指用户拖拽），
-    // 是 reorder diff 的唯一来源——不重新做 index 比较，避免挂载连带的位置漂移（卸载导致后移）被误标为 reorder。
-    const reorderDiff = new Map<string, { from: number; to: number }>();
-    const curIdx = new Map(resolved.entries.map((e, i) => [e.identifier, i]));
-    for (const id of ctx.reorderedIds) {
-        const key = bufferKey(ctx.name, id);
-        // 挂载态变化的条目走 mount diff，不标 reorder（卸载/挂载连带的位置漂移非用户拖拽）
-        if (ctx.pendingMounts.has(key)) continue;
-        const from = ctx.initialOrderIndex.get(id);
-        const to = curIdx.get(id);
-        if (from !== undefined && to !== undefined && from !== to) {
-            reorderDiff.set(id, { from, to });
-            keys.add(key);
-        }
-    }
-
-    const items: StagedItem[] = [];
-    const entryById = new Map(resolved.entries.map((e) => [e.identifier, e]));
-    // 挂载差异基线用 profile 解析态（与 commit diff 语义一致）；未知条目回退 initialOrder
-    const profileMountedMap = resolveProfileMountedMap(resolved);
-    for (const key of keys) {
-        const identifier = key.slice(ctx.prefix.length);
-        const entry = entryById.get(identifier);
-        const item: StagedItem = { identifier, key, label: nameById.get(identifier) ?? identifier, entry };
-        const rd = reorderDiff.get(identifier);
-        if (rd) item.reorder = rd;
-        const mountTarget = ctx.pendingMounts.get(key);
-        if (mountTarget !== undefined) {
-            const originalMounted = profileMountedMap.get(identifier)
-                ?? ctx.initialOrder.some((o) => o.identifier === identifier);
-            item.mount = { original: originalMounted, target: mountTarget };
-        }
-        const toggleTarget = ctx.pendingToggles.get(key);
-        if (toggleTarget !== undefined) {
-            item.toggle = { original: enabledById.get(identifier) ?? true, target: toggleTarget };
-        }
-        // F2：clear 后重新编辑（session 存在）视为清除被覆盖，不渲染 clear 项
-        if (ctx.pendingClears.has(key) && !ctx.sessionEdits.has(key)) {
-            item.clear = true;
-        }
-        items.push(item);
-    }
-    // 按 entries（prompt_order 展示顺序）排序，而非 identifier 字母序；未知 identifier 排最后
-    const orderIdx = new Map(resolved.entries.map((e, i) => [e.identifier, i]));
-    items.sort((a, b) => {
-        const ia = orderIdx.get(a.identifier);
-        const ib = orderIdx.get(b.identifier);
-        return (ia ?? Number.MAX_SAFE_INTEGER) - (ib ?? Number.MAX_SAFE_INTEGER);
-    });
-    return items;
 }
 
 /** 撤销单个 reorder：把该条目移回打开时基线位置（initialOrderIndex），更新 reorderedIds。 */
@@ -329,10 +252,15 @@ export async function resetProfileToParent(ctx: EditorContext): Promise<'reset' 
     return result;
 }
 
-/** commit「更新当前配置」。返回是否成功。 */
+/** 打开编辑器时的漂移种子化见 profileEditorBaseline.seedPresetDriftIntoBuffers。 */
+
+/** commit「更新当前配置」。返回是否成功。
+ * opts.captureTopLevel：父预设是否为当前运行时（字段级流）。注册投影流下编辑器没有
+ * 模型/采样 UI，父预设顶层值与编辑态无关，不得盖进 profile。 */
 export async function commitUpdate(
     ctx: EditorContext,
     snapshot: { entries: PromptProfileEntry[]; unusedIds: string[] },
+    opts?: { captureTopLevel?: boolean },
 ): Promise<boolean> {
     const editor = readEditableProfile(ctx);
     if (!editor) return false;
@@ -341,52 +269,67 @@ export async function commitUpdate(
     // 副本上应用清除值变更：不直接改活 profile（失败回滚语义见 commitBufferedEditsToProfile）
     const nextProfile = structuredClone(profile);
     applyPendingClearsToProfile(nextProfile, ctx.pendingClears, ctx.name);
-    const model = captureModel(preset);
-    if (model) nextProfile.model = model;
-    else delete nextProfile.model;
-    return commitBufferedEditsToProfile(nextProfile, snapshot, meta, ctx.name, ctx.idx, ctx.sessionEdits, 'full-changes');
+    if (opts?.captureTopLevel !== false) {
+        const model = captureModel(preset);
+        if (model) nextProfile.model = model;
+        else delete nextProfile.model;
+    }
+    const ok = await commitBufferedEditsToProfile(nextProfile, snapshot, meta, ctx.name, ctx.idx, ctx.sessionEdits, 'full-changes');
+    if (ok && opts?.captureTopLevel !== false) {
+        // 字段级流（父预设=当前运行时）：持久化成功后把 sessionOrder 投影回预设（唯一写回点），
+        // 再把缓冲写进运行时（此时=已提交态，天然一致）。注册投影流不写父预设——
+        // 运行时刷新由 onMetaPersisted → syncPresetRegistrations → refreshProjectionRuntimeIfActive 闭环负责。
+        projectSessionOrder(ctx);
+        applyBufferedEdits(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles);
+    }
+    return ok;
 }
 
-/** commit「新建为子配置」。 */
+/** commit「新建为子配置」。
+ * opts.captureTopLevel：父预设是否为当前运行时（字段级流）。注册投影流下新 delta
+ * 继承父链（不写 sampling/extra/model 键），不采集父预设顶层值。 */
 export async function commitCreateDelta(
     ctx: EditorContext,
     deltaName: string,
     snapshot: { entries: PromptProfileEntry[]; unusedIds: string[] },
+    opts?: { captureTopLevel?: boolean },
 ): Promise<void> {
     const editor = readEditableProfile(ctx);
     if (!editor) return;
     const { meta, profile } = editor;
     const preset = openai_settings[ctx.idx] as Preset;
-    const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
     const parentEntries = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
     // previousChanges 传空：新建 delta 只存「相对父链解析状态」的净差异（本次快照 + 本次编辑），
     // 不冗余拷贝源 profile 已持久化的字段差异（否则数据膨胀/导出树冗余）。
     // unusedIds 传入以产出 unmount（mounted:false）change；顺序差异走 order（与 update 路径对称）。
     const deltaState = snapshotToDelta(snapshot.entries, parentEntries, snapshot.unusedIds);
     const changes = snapshotToChanges(snapshot.entries, parentEntries, [], snapshot.unusedIds);
-    // sampling/extra 只存相对父链解析态的 sparse 差异（diff 为空不写）
+    // sampling/extra 只存相对父链解析态的 sparse 差异（diff 为空不写）；注册投影流下不采集父预设顶层值
+    const captureTopLevel = opts?.captureTopLevel !== false;
     const allProfiles = meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[];
-    const samplingDiff = diffSampling(captureSampling(preset), resolveEffectiveSampling(profile, allProfiles, meta.defaultSampling));
-    const extraDiff = diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(profile, allProfiles, meta.defaultExtra));
-    // 先构建新 profiles（含 delta），持久化成功后才赋给 meta——saveMeta 失败重试不产生重复 delta。
+    const samplingDiff = captureTopLevel
+        ? diffSampling(captureSampling(preset), resolveEffectiveSampling(profile, allProfiles, meta.defaultSampling))
+        : null;
+    const extraDiff = captureTopLevel
+        ? diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(profile, allProfiles, meta.defaultExtra))
+        : null;
+    // 先构建新 delta，持久化成功才生效——saveMeta 失败重试不产生重复 delta。
+    // 变换在尾链落盘前重放：追加到最新 profiles（合并窗口内并发的其他修改不被覆盖）。
     // 单向数据流：编辑期从未改过预设的 prompt_order，源预设落盘即为打开时状态，无需 clean-order 处理。
-    const newProfiles = [...profiles, buildDerivedProfile(profile, deltaName, changes, samplingDiff ?? undefined, deltaState.order, captureModel(preset) ?? undefined, extraDiff ?? undefined)];
-    recordDefaultOriginalFields(meta, ctx.name, ctx.sessionEdits);
-    const nextMeta = { ...meta, profiles: newProfiles };
-    const newDeltaId = String((newProfiles[newProfiles.length - 1] as PromptDeltaProfile).id);
-    try {
-        await saveMeta(ctx.name, ctx.idx, nextMeta);
-    } catch (err) {
-        // doSaveMeta 已在 fetch 前把含 delta 的 profiles 写进 preset.extensions；失败时回滚，
-        // 否则「保留缓冲可重试」会 readMeta 读到含失败 delta 的数组而重复生成
-        const ext = preset.extensions?.[EXTENSION_KEY];
-        const extProfiles = ext?.profiles;
-        if (ext && Array.isArray(extProfiles)) {
-            ext.profiles = extProfiles.filter((p: any) => String(p?.id) !== newDeltaId);
-        }
-        throw err;
-    }
-    meta.profiles = newProfiles;
+    const newDelta = buildDerivedProfile(
+        profile,
+        deltaName,
+        changes,
+        samplingDiff ?? undefined,
+        deltaState.order,
+        captureTopLevel ? (captureModel(preset) ?? undefined) : undefined,
+        extraDiff ?? undefined,
+    );
+    await saveMeta(ctx.name, ctx.idx, (m) => {
+        const next = { ...m, profiles: [...(Array.isArray(m.profiles) ? m.profiles : []), newDelta] };
+        recordDefaultOriginalFields(next, ctx.name, ctx.sessionEdits);
+        return next;
+    });
     toastr.success(L('Derived profile created'));
 }
 
