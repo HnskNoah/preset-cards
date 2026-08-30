@@ -207,7 +207,7 @@ export async function applyProfileToPresetByName(
     });
     setActiveProfile({ presetName: name, profileId: String(profileId) });
     try {
-        await saveMeta(name, idx, meta);
+        await saveMeta(name, idx, (m) => m);
     } catch (err) {
         for (const key of Object.keys(preset)) delete preset[key];
         Object.assign(preset, presetBefore);
@@ -309,8 +309,6 @@ export async function addBaseProfile(
     try {
         await lockDefaultSnapshot(preset, name, idx);
 
-        const meta = readMeta(preset);
-
         // 新 base 快照须包含本会话缓冲的开关/值编辑：先统一应用缓冲再采集快照
         const missing = applyBufferedEdits(preset, name, ctx.sessionEdits, ctx.pendingToggles);
         if (missing.length > 0) {
@@ -318,7 +316,7 @@ export async function addBaseProfile(
         }
 
         // 副本模式事务：持久化含新 base 的 nextMeta，成功后才写回活 meta（失败重试不重复产生 base）
-        const ok = await persistMetaTransaction(meta, (m) => ({
+        const ok = await persistMetaTransaction((m) => ({
             ...m,
             profiles: [
                 ...(Array.isArray(m.profiles) ? m.profiles : []),
@@ -521,8 +519,7 @@ async function mergeParsedToPreset(
 
         // 先采集出厂基线（lockDefaultSnapshot 内部幂等判 defaultSnapshotLocked），再副本事务落盘
         await lockDefaultSnapshot(preset, targetName, targetIdx);
-        const lockedMeta = readMeta(preset);
-        const ok = await persistMetaTransaction(lockedMeta, (m) => ({ ...m, profiles }), targetName, targetIdx);
+        const ok = await persistMetaTransaction((m) => ({ ...m, profiles }), targetName, targetIdx);
         if (!ok) return false;
         toastr.success(L('Configuration saved'));
         await refreshGrid(ctx, { applyBackgrounds: true });

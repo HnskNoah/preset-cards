@@ -164,7 +164,7 @@ export async function captureIfRegistered(): Promise<boolean> {
 
     // 捕获回 profile 并持久化（副本事务；成功后 onMetaPersisted → syncPresetRegistrations 刷新注册记录）。
     // toastMessage：失败时明确告知是「配置捕获同步」失败(而非用户在操作的功能报错)
-    return await persistMetaTransaction(meta, (m) => {
+    return await persistMetaTransaction((m) => {
         const profiles = Array.isArray(m.profiles) ? m.profiles : [];
         const target = profiles.find((p) => String(p.id) === String(marker.profileId));
         if (!target || (!isPromptBaseProfile(target) && !isPromptDeltaProfile(target))) return m;

@@ -220,7 +220,6 @@ export async function executeMigration(
     const keepExistingBaseline = targetMeta.defaultSnapshotLocked === true;
 
     const ok = await persistMetaTransaction(
-        targetMeta,
         (m) => ({
             ...m,
             profiles: [...(m.profiles ?? []), ...migrated],

@@ -16,7 +16,7 @@ import { entriesFromDefaultSnapshot } from './promptState.js';
 export async function lockDefaultSnapshot(preset: Preset, name: string, idx: number): Promise<void> {
     const meta = readMeta(preset);
     if (meta.defaultSnapshotLocked) return;
-    const ok = await persistMetaTransaction(meta, (m) => ({
+    const ok = await persistMetaTransaction((m) => ({
         ...m,
         defaultSnapshot: buildDefaultSnapshotLock(preset),
         defaultSnapshotLocked: true,
@@ -174,23 +174,18 @@ export async function commitBufferedEditsToProfile(
             return false;
         }
     }
-    // 把副本替换进 meta.profiles 对应槽位，持久化含新 profile 的 meta
-    const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
-    const slot = profiles.findIndex((p: any) => String(p?.id) === String(profile.id));
-    const nextProfiles = slot >= 0
-        ? profiles.map((p: any, i: number) => (i === slot ? nextProfile : p))
-        : [...profiles, nextProfile];
-    const nextMeta = { ...meta, profiles: nextProfiles };
-    recordDefaultOriginalFields(nextMeta, name, sessionEdits);
-    // 先同步内存：合并保存窗口内后续 commit 基于最新 profiles（否则窗口内第 2 次会覆盖第 1 次改动）
-    meta.profiles = nextProfiles;
-    try {
-        await saveMetaMerged(name, idx, nextMeta);
-    } catch (err) {
-        // 保存失败回滚内存，与副本模式失败语义一致
-        meta.profiles = profiles;
-        throw err;
-    }
+    // 把副本替换进 profiles 对应槽位并落盘：变换在尾链落盘前重放于活 extensions 现值，
+    // 槽位按 id 在最新数组上定位——合并窗口内并发的其他修改不被覆盖（丢失更新回归）
+    await saveMetaMerged(name, idx, (m) => {
+        const current = Array.isArray(m.profiles) ? m.profiles : [];
+        const slot = current.findIndex((p: any) => String(p?.id) === String(profile.id));
+        const nextProfiles = slot >= 0
+            ? current.map((p: any, i: number) => (i === slot ? nextProfile : p))
+            : [...current, nextProfile];
+        const nextMeta = { ...m, profiles: nextProfiles };
+        recordDefaultOriginalFields(nextMeta, name, sessionEdits);
+        return nextMeta;
+    });
     toastr.success(L('Configuration updated'));
     return true;
 }

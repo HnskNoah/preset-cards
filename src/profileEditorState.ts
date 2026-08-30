@@ -1,5 +1,4 @@
 import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
-import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
 import { getActiveProfile } from './activeProfile.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
@@ -474,7 +473,6 @@ export async function commitCreateDelta(
     if (!editor) return;
     const { meta, profile } = editor;
     const preset = openai_settings[ctx.idx] as Preset;
-    const profiles = Array.isArray(meta.profiles) ? meta.profiles : [];
     const parentEntries = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
     // previousChanges 传空：新建 delta 只存「相对父链解析状态」的净差异（本次快照 + 本次编辑），
     // 不冗余拷贝源 profile 已持久化的字段差异（否则数据膨胀/导出树冗余）。
@@ -490,9 +488,10 @@ export async function commitCreateDelta(
     const extraDiff = captureTopLevel
         ? diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(profile, allProfiles, meta.defaultExtra))
         : null;
-    // 先构建新 profiles（含 delta），持久化成功后才赋给 meta——saveMeta 失败重试不产生重复 delta。
+    // 先构建新 delta，持久化成功才生效——saveMeta 失败重试不产生重复 delta。
+    // 变换在尾链落盘前重放：追加到最新 profiles（合并窗口内并发的其他修改不被覆盖）。
     // 单向数据流：编辑期从未改过预设的 prompt_order，源预设落盘即为打开时状态，无需 clean-order 处理。
-    const newProfiles = [...profiles, buildDerivedProfile(
+    const newDelta = buildDerivedProfile(
         profile,
         deltaName,
         changes,
@@ -500,23 +499,12 @@ export async function commitCreateDelta(
         deltaState.order,
         captureTopLevel ? (captureModel(preset) ?? undefined) : undefined,
         extraDiff ?? undefined,
-    )];
-    recordDefaultOriginalFields(meta, ctx.name, ctx.sessionEdits);
-    const nextMeta = { ...meta, profiles: newProfiles };
-    const newDeltaId = String((newProfiles[newProfiles.length - 1] as PromptDeltaProfile).id);
-    try {
-        await saveMeta(ctx.name, ctx.idx, nextMeta);
-    } catch (err) {
-        // doSaveMeta 已在 fetch 前把含 delta 的 profiles 写进 preset.extensions；失败时回滚，
-        // 否则「保留缓冲可重试」会 readMeta 读到含失败 delta 的数组而重复生成
-        const ext = preset.extensions?.[EXTENSION_KEY];
-        const extProfiles = ext?.profiles;
-        if (ext && Array.isArray(extProfiles)) {
-            ext.profiles = extProfiles.filter((p: any) => String(p?.id) !== newDeltaId);
-        }
-        throw err;
-    }
-    meta.profiles = newProfiles;
+    );
+    await saveMeta(ctx.name, ctx.idx, (m) => {
+        const next = { ...m, profiles: [...(Array.isArray(m.profiles) ? m.profiles : []), newDelta] };
+        recordDefaultOriginalFields(next, ctx.name, ctx.sessionEdits);
+        return next;
+    });
     toastr.success(L('Derived profile created'));
 }
 

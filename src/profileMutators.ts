@@ -85,7 +85,7 @@ export async function resetProfileCore(
             delete nextProfile.extra;
             delete nextProfile.model;
         }
-        const ok = await persistMetaTransaction(meta, (m) => ({
+        const ok = await persistMetaTransaction((m) => ({
             ...m,
             profiles: (m.profiles || []).map((p) => String(p.id) === String(profile.id) ? nextProfile : p),
         }), name, idx);
@@ -126,7 +126,7 @@ export async function resetProfileCore(
         delete nextProfile.sampling;
         delete nextProfile.extra;
         delete nextProfile.model;
-        const ok = await persistMetaTransaction(meta, (m) => ({
+        const ok = await persistMetaTransaction((m) => ({
             ...m,
             profiles: (m.profiles || []).map((p) => String(p.id) === String(profile.id) ? nextProfile : p),
         }), name, idx);

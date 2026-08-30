@@ -197,12 +197,12 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             const newName = key === 'Escape' ? currentName : (input.val() as string).trim() || currentName;
 
             if (newName !== currentName && key !== 'Escape') {
-                const profileToRename = snapshot.profile;
-                const meta = resolveEditorSnapshot(ctx)?.meta ?? snapshot.meta;
-                // 事务：副本上重命名，持久化成功后写回；失败时内存未变（无需回滚）
-                const ok = await persistMetaTransaction(meta, (m) => ({
+                // 事务：按 id 替换名字（重放落盘前活 profiles 可能已被其他保存替换，对象身份不可依赖），
+                // 持久化成功后刷新；失败时内存未变（无需回滚）
+                const renameId = String(snapshot.profile.id);
+                const ok = await persistMetaTransaction((m) => ({
                     ...m,
-                    profiles: m.profiles.map((p) => p === profileToRename ? { ...p, name: newName } : p),
+                    profiles: (m.profiles ?? []).map((p) => String(p.id) === renameId ? { ...p, name: newName } : p),
                 }), ctx.name, ctx.idx);
                 if (!ok) {
                     await renderDialog(ctx);
