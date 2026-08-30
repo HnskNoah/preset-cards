@@ -1,13 +1,13 @@
-import { openai_settings } from '@sillytavern/scripts/openai';
+import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { L } from './i18n.js';
 import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
 import type { Preset, PromptFields } from './meta.js';
-import { applyBufferedEdits, bufferKey } from './presetBuffers.js';
+import { bufferKey } from './presetBuffers.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { findPromptInPreset } from './promptToggle.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, effectiveFieldsFor, insertAtInitialPosition, projectSessionOrder, resolveBaselineEntries, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
+import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, effectiveFieldsFor, insertAtInitialPosition, resolveBaselineEntries, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
 import { applyLockVisual, applySearch, refreshCounts, refreshEntryRow, renderDialog, renderRightPane, setupSortable } from './profileEditorRender.js';
 import { buildProfileSeedOrder, resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
 
@@ -275,6 +275,10 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         ctx.committing = true;
         try {
             const preset = openai_settings[ctx.idx] as Preset;
+            // 运行时归属：父预设是否为当前活动预设。注册投影流下活动预设是投影记录，
+            // 父预设顶层值/order 与编辑态无关——不写回、不采集（运行时刷新由
+            // onMetaPersisted → syncPresetRegistrations → refreshProjectionRuntimeIfActive 闭环负责）
+            const isParentRuntime = oai_settings.preset_settings_openai === ctx.name;
             // 有效值字段表（出厂 ⊕ profile 解析）：提交快照与编辑预填共用的基线（A2/A4）
             const metaForBaseline = readMeta(preset);
             const effectiveFields = new Map<string, PromptFields>();
@@ -286,15 +290,11 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             try {
                 let ok = true;
                 if (choice === 'update') {
-                    ok = await commitUpdate(ctx, snapshotData);
-                    if (ok) {
-                        // 副作用后置：update 持久化成功后，先把 sessionOrder 投影回预设（唯一写回点），
-                        // 再把缓冲写进运行时（此时=已提交态，天然一致）
-                        projectSessionOrder(ctx);
-                        applyBufferedEdits(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles);
-                    }
+                    // 写回与顶层采集由 commitUpdate 内部按 isParentRuntime 分流（字段级写回父预设；
+                    // 注册投影流不写父预设，运行时刷新走 onMetaPersisted → sync → refreshProjectionRuntimeIfActive）
+                    ok = await commitUpdate(ctx, snapshotData, { captureTopLevel: isParentRuntime });
                 } else {
-                    await commitCreateDelta(ctx, deltaName as string, snapshotData);
+                    await commitCreateDelta(ctx, deltaName as string, snapshotData, { captureTopLevel: isParentRuntime });
                     // create-delta：编辑属于新 delta，源 profile 运行时不写（无 prompts 残留）；编辑期也从未改过预设 prompt_order
                 }
                 if (!ok) return;

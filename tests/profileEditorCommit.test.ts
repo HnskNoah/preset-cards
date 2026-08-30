@@ -14,6 +14,7 @@ import {
 import { mergeBaseSnapshot } from '../src/presetSnapshot.js';
 import { snapshotToChanges, resolveParentStates, findPromptInPreset } from '../src/promptToggle.js';
 import { applyPromptDelta } from '../src/promptState.js';
+import { commitUpdate, commitCreateDelta } from '../src/profileEditorState.js';
 import { readMeta } from '../src/meta.js';
 import type { Preset, PromptFields } from '../src/meta.js';
 
@@ -242,5 +243,94 @@ describe('编辑器提交基线 = profile 解析态', () => {
         const ctx = makeCtx('b1');
         const effective = buildEffectiveMap(preset, ctx).get('p1')!;
         expect(effective.content).toBe('X');
+    });
+});
+
+describe('提交写回与顶层采集按运行时归属分流', () => {
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true } as Response)));
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    async function commitWithFakeTimers(p: Promise<unknown>): Promise<void> {
+        vi.useFakeTimers();
+        await vi.advanceTimersByTimeAsync(400);
+        await p;
+        vi.useRealTimers();
+    }
+
+    it('注册流：commitUpdate 不采集父预设模型、不写回父预设本体', async () => {
+        const preset = installPreset([B], { chat_completion_source: 'openai', openai_model: 'gpt-parent' });
+        const ctx = makeCtx('b1');
+        toggleP3Off(ctx);
+        // 活动预设 = 注册投影（非父预设）
+        oai_settings.preset_settings_openai = 'P - B';
+
+        const snapshot = commitSnapshot(preset, ctx);
+        const orderBefore = JSON.stringify(preset.prompt_order);
+        await commitWithFakeTimers(commitUpdate(ctx, snapshot, { captureTopLevel: false }));
+
+        const saved = (preset.extensions as any)[EXTENSION_KEY].profiles[0];
+        expect(saved.model).toBeUndefined(); // 编辑器没有模型 UI，父预设模型不得盖入
+        expect(JSON.stringify(preset.prompt_order)).toBe(orderBefore); // 不写回父预设 order
+    });
+
+    it('字段级流：commitUpdate 保留模型采集并写回父预设 order', async () => {
+        const preset = installPreset([B], { chat_completion_source: 'openai', openai_model: 'gpt-parent' });
+        const ctx = makeCtx('b1');
+        toggleP3Off(ctx);
+        // 活动预设 = 父预设本身（字段级应用态）
+        oai_settings.preset_settings_openai = 'P';
+
+        const snapshot = commitSnapshot(preset, ctx);
+        await commitWithFakeTimers(commitUpdate(ctx, snapshot, { captureTopLevel: true }));
+
+        const saved = (preset.extensions as any)[EXTENSION_KEY].profiles[0];
+        expect(saved.model).toEqual({ source: 'openai', name: 'gpt-parent' });
+        // 写回：sessionOrder（含 p3 关）投影回父预设目标 order
+        const order = (preset.prompt_order as any[])[0].order;
+        expect(order.find((o: any) => o.identifier === 'p3')?.enabled).toBe(false);
+    });
+
+    it('注册流：commitCreateDelta 继承父链，不采集父预设采样/模型', async () => {
+        const preset = installPreset([B2], {
+            chat_completion_source: 'openai',
+            openai_model: 'gpt-parent',
+            temperature: 0.7,
+        });
+        const ctx = makeCtx('b2');
+        toggleP3Off(ctx);
+        oai_settings.preset_settings_openai = 'P - B2';
+
+        const snapshot = commitSnapshot(preset, ctx);
+        await commitWithFakeTimers(commitCreateDelta(ctx, 'New', snapshot, { captureTopLevel: false }));
+
+        const profiles = (preset.extensions as any)[EXTENSION_KEY].profiles;
+        const delta = profiles.find((p: any) => p.name === 'New');
+        expect(delta).toBeDefined();
+        expect(delta.sampling).toBeUndefined();
+        expect(delta.model).toBeUndefined();
+        expect(delta.extra).toBeUndefined();
+    });
+
+    it('字段级流：commitCreateDelta 保留父预设采样/模型采集（既有特性）', async () => {
+        const preset = installPreset([B2], {
+            chat_completion_source: 'openai',
+            openai_model: 'gpt-parent',
+            temperature: 0.7,
+        });
+        const ctx = makeCtx('b2');
+        toggleP3Off(ctx);
+        oai_settings.preset_settings_openai = 'P';
+
+        const snapshot = commitSnapshot(preset, ctx);
+        await commitWithFakeTimers(commitCreateDelta(ctx, 'New', snapshot, { captureTopLevel: true }));
+
+        const profiles = (preset.extensions as any)[EXTENSION_KEY].profiles;
+        const delta = profiles.find((p: any) => p.name === 'New');
+        expect(delta.sampling).toMatchObject({ temperature: 0.7 });
+        expect(delta.model).toEqual({ source: 'openai', name: 'gpt-parent' });
     });
 });

@@ -3,7 +3,7 @@ import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptFields, PromptProfileEntry } from './meta.js';
-import { bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
+import { applyBufferedEdits, bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
 import type { ProfileEntryView } from './presetList.js';
 import {
     PROMPT_FIELD_WHITELIST,
@@ -356,10 +356,13 @@ export async function resetProfileToParent(ctx: EditorContext): Promise<'reset' 
     return result;
 }
 
-/** commit「更新当前配置」。返回是否成功。 */
+/** commit「更新当前配置」。返回是否成功。
+ * opts.captureTopLevel：父预设是否为当前运行时（字段级流）。注册投影流下编辑器没有
+ * 模型/采样 UI，父预设顶层值与编辑态无关，不得盖进 profile。 */
 export async function commitUpdate(
     ctx: EditorContext,
     snapshot: { entries: PromptProfileEntry[]; unusedIds: string[] },
+    opts?: { captureTopLevel?: boolean },
 ): Promise<boolean> {
     const editor = readEditableProfile(ctx);
     if (!editor) return false;
@@ -368,17 +371,30 @@ export async function commitUpdate(
     // 副本上应用清除值变更：不直接改活 profile（失败回滚语义见 commitBufferedEditsToProfile）
     const nextProfile = structuredClone(profile);
     applyPendingClearsToProfile(nextProfile, ctx.pendingClears, ctx.name);
-    const model = captureModel(preset);
-    if (model) nextProfile.model = model;
-    else delete nextProfile.model;
-    return commitBufferedEditsToProfile(nextProfile, snapshot, meta, ctx.name, ctx.idx, ctx.sessionEdits, 'full-changes');
+    if (opts?.captureTopLevel !== false) {
+        const model = captureModel(preset);
+        if (model) nextProfile.model = model;
+        else delete nextProfile.model;
+    }
+    const ok = await commitBufferedEditsToProfile(nextProfile, snapshot, meta, ctx.name, ctx.idx, ctx.sessionEdits, 'full-changes');
+    if (ok && opts?.captureTopLevel !== false) {
+        // 字段级流（父预设=当前运行时）：持久化成功后把 sessionOrder 投影回预设（唯一写回点），
+        // 再把缓冲写进运行时（此时=已提交态，天然一致）。注册投影流不写父预设——
+        // 运行时刷新由 onMetaPersisted → syncPresetRegistrations → refreshProjectionRuntimeIfActive 闭环负责。
+        projectSessionOrder(ctx);
+        applyBufferedEdits(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles);
+    }
+    return ok;
 }
 
-/** commit「新建为子配置」。 */
+/** commit「新建为子配置」。
+ * opts.captureTopLevel：父预设是否为当前运行时（字段级流）。注册投影流下新 delta
+ * 继承父链（不写 sampling/extra/model 键），不采集父预设顶层值。 */
 export async function commitCreateDelta(
     ctx: EditorContext,
     deltaName: string,
     snapshot: { entries: PromptProfileEntry[]; unusedIds: string[] },
+    opts?: { captureTopLevel?: boolean },
 ): Promise<void> {
     const editor = readEditableProfile(ctx);
     if (!editor) return;
@@ -391,13 +407,26 @@ export async function commitCreateDelta(
     // unusedIds 传入以产出 unmount（mounted:false）change；顺序差异走 order（与 update 路径对称）。
     const deltaState = snapshotToDelta(snapshot.entries, parentEntries, snapshot.unusedIds);
     const changes = snapshotToChanges(snapshot.entries, parentEntries, [], snapshot.unusedIds);
-    // sampling/extra 只存相对父链解析态的 sparse 差异（diff 为空不写）
+    // sampling/extra 只存相对父链解析态的 sparse 差异（diff 为空不写）；注册投影流下不采集父预设顶层值
+    const captureTopLevel = opts?.captureTopLevel !== false;
     const allProfiles = meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[];
-    const samplingDiff = diffSampling(captureSampling(preset), resolveEffectiveSampling(profile, allProfiles, meta.defaultSampling));
-    const extraDiff = diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(profile, allProfiles, meta.defaultExtra));
+    const samplingDiff = captureTopLevel
+        ? diffSampling(captureSampling(preset), resolveEffectiveSampling(profile, allProfiles, meta.defaultSampling))
+        : null;
+    const extraDiff = captureTopLevel
+        ? diffExtra(captureExtra(preset as Record<string, unknown>), resolveEffectiveExtra(profile, allProfiles, meta.defaultExtra))
+        : null;
     // 先构建新 profiles（含 delta），持久化成功后才赋给 meta——saveMeta 失败重试不产生重复 delta。
     // 单向数据流：编辑期从未改过预设的 prompt_order，源预设落盘即为打开时状态，无需 clean-order 处理。
-    const newProfiles = [...profiles, buildDerivedProfile(profile, deltaName, changes, samplingDiff ?? undefined, deltaState.order, captureModel(preset) ?? undefined, extraDiff ?? undefined)];
+    const newProfiles = [...profiles, buildDerivedProfile(
+        profile,
+        deltaName,
+        changes,
+        samplingDiff ?? undefined,
+        deltaState.order,
+        captureTopLevel ? (captureModel(preset) ?? undefined) : undefined,
+        extraDiff ?? undefined,
+    )];
     recordDefaultOriginalFields(meta, ctx.name, ctx.sessionEdits);
     const nextMeta = { ...meta, profiles: newProfiles };
     const newDeltaId = String((newProfiles[newProfiles.length - 1] as PromptDeltaProfile).id);
