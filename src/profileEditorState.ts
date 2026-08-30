@@ -2,7 +2,7 @@ import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { EXTENSION_KEY } from './constants.js';
 import { L } from './i18n.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
-import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptProfileEntry } from './meta.js';
+import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptFields, PromptProfileEntry } from './meta.js';
 import { bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
 import type { ProfileEntryView } from './presetList.js';
 import {
@@ -10,6 +10,7 @@ import {
     buildPromptSnapshot,
     captureExtra,
     captureModel,
+    capturePromptFields,
     captureSampling,
     diffExtra,
     diffSampling,
@@ -44,8 +45,27 @@ export interface StagedItem {
     reorder?: { from: number; to: number };
 }
 
+/** 编辑器基线条目：当前 profile 的解析态（唯一基线语义，提交/预填/漂移种子共用）。 */
+export function resolveBaselineEntries(ctx: EditorContext): PromptProfileEntry[] {
+    const preset = openai_settings[ctx.idx] as Preset;
+    const meta = readMeta(preset);
+    const profile = getProfile(meta, ctx.profileId);
+    if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return [];
+    return resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
+}
+
+/** 条目的「有效值字段」= 出厂 originalFields ⊕ profile 解析 fields（与 applyProfileToPreset 的应用序一致）。
+ * 出厂基线缺失时回退预设定义。注册投影流下父预设定义与编辑态无关，值编辑/提交快照必须用本函数的有效值。 */
+export function effectiveFieldsFor(meta: PresetMeta, entry: PromptProfileEntry, promptDef: any): PromptFields {
+    const factory = meta.defaultSnapshot?.find((d) => d.identifier === entry.identifier)?.originalFields;
+    return {
+        ...(factory ? filterFields(factory) : capturePromptFields(promptDef)),
+        ...(entry.fields ? filterFields(entry.fields) : {}),
+    };
+}
+
 /** 采集当前缓冲（开关/值编辑）叠加后的快照——纯函数，不写运行时。
- * 构造临时视图 preset（浅克隆 prompts + 叠加字段 edited；目标 order 由会话 sessionOrder 表达），
+ * 构造临时视图 preset（浅克隆 prompts + 叠加有效值字段与字段 edited；目标 order 由会话 sessionOrder 表达），
  * 使 buildPromptSnapshot 采到与「提交后」一致的状态；运行时 prompts/order 保持未动。
  * 副作用（applyBufferedEdits 写真实 prompt/镜像）由调用方在 commit 成功后执行。 */
 export function applyBufferedAndSnapshot(
@@ -55,6 +75,7 @@ export function applyBufferedAndSnapshot(
     pendingToggles: Map<string, boolean>,
     pendingClears: Map<string, true>,
     sessionOrder: { identifier: string; enabled: boolean }[],
+    effectiveFields: Map<string, PromptFields>,
 ): { entries: PromptProfileEntry[]; unusedIds: string[] } {
     const prefix = bufferPrefix(name);
     // 临时视图：prompts 浅克隆叠加字段 edited；目标 order 用 sessionOrder（含开关目标值）替换。
@@ -79,6 +100,12 @@ export function applyBufferedAndSnapshot(
             : [],
         prompt_order: clonedLists,
     };
+    // 基线叠加：白名单值字段以「出厂 ⊕ profile 解析」的有效值为准，再叠会话编辑——
+    // 注册流下父预设定义不代表编辑态，直接采集定义会把无关值钉进 profile fields
+    for (const prompt of view.prompts) {
+        const eff = effectiveFields.get(String(prompt.identifier));
+        if (eff) Object.assign(prompt, eff);
+    }
     const viewById = new Map(view.prompts.map((p: any) => [p.identifier, p]));
     for (const [key, session] of sessionEdits) {
         if (!key.startsWith(prefix)) continue;

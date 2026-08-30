@@ -2,12 +2,12 @@ import { oai_settings } from '@sillytavern/scripts/openai';
 import { renderExtensionTemplateAsync } from '@sillytavern/scripts/extensions';
 import { EXTENSION_NAME } from './constants.js';
 import { L } from './i18n.js';
-import type { Preset } from './meta.js';
+import { readMeta, type Preset } from './meta.js';
 import { bufferKey } from './presetBuffers.js';
 import { capturePromptFields, filterFields, findPromptInPreset, promptFieldsEqual } from './promptToggle.js';
 import { buildPromptEditForm } from './editModal.js';
 import { buildBreadcrumb } from './profileEditorContext.js';
-import { applyUndoState, computeReorder, undoMount, undoReorderItem, stagedItems } from './profileEditorState.js';
+import { applyUndoState, computeReorder, effectiveFieldsFor, resolveBaselineEntries, undoMount, undoReorderItem, stagedItems } from './profileEditorState.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
 import { applyNameWrap } from './nameWrap.js';
 
@@ -213,13 +213,20 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
         return wrap;
     }
 
+    // 预填基线 = 有效值字段（出厂 ⊕ profile 解析）：注册投影流下父预设定义不代表编辑态，
+    // 以定义预填会让用户「保存未改动」时把无关值写进 profile fields
+    const baselineEntry = resolveBaselineEntries(ctx).find((e) => e.identifier === identifier);
+    const effective = baselineEntry
+        ? effectiveFieldsFor(readMeta(preset), baselineEntry, prompt)
+        : capturePromptFields(prompt);
+
     const header = $('<div class="pc-editor-header"></div>');
     header.append($('<h3></h3>').text(prompt.name ?? identifier));
     applyNameWrap(header);
     const actions = $('<div class="pc-editor-actions"></div>');
 
     const prevSession = ctx.sessionEdits.get(bufferKey(ctx.name, identifier));
-    const current = prevSession ? { ...capturePromptFields(prompt), ...prevSession.edited } : undefined;
+    const current = prevSession ? { ...effective, ...prevSession.edited } : { ...effective };
     // 锁定态只锁顺序，编辑表单始终可编辑
     const form = buildPromptEditForm(preset, identifier, current, false);
 
@@ -238,7 +245,7 @@ export function buildInlineEdit(ctx: EditorContext, preset: Preset, identifier: 
             ctx.pendingClears.delete(key);
             ctx.clearedEdits.delete(key);
             const session = ctx.sessionEdits.get(key);
-            const initial = session?.initial ?? capturePromptFields(prompt);
+            const initial = session?.initial ?? { ...effective };
             const edited = { ...(session?.edited ?? {}), ...filterFields(editedFields) };
             if (promptFieldsEqual(edited, initial)) {
                 ctx.sessionEdits.delete(key);

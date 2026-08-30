@@ -1,15 +1,15 @@
 import { openai_settings } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { L } from './i18n.js';
-import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction } from './meta.js';
-import type { Preset } from './meta.js';
+import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
+import type { Preset, PromptFields } from './meta.js';
 import { applyBufferedEdits, bufferKey } from './presetBuffers.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
-import { findOrderList, findPromptInPreset, resolvePromptOrderTarget } from './promptToggle.js';
+import { findPromptInPreset } from './promptToggle.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, projectSessionOrder, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
+import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, effectiveFieldsFor, insertAtInitialPosition, projectSessionOrder, resolveBaselineEntries, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
 import { applyLockVisual, applySearch, refreshCounts, refreshEntryRow, renderDialog, renderRightPane, setupSortable } from './profileEditorRender.js';
-import { resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
+import { buildProfileSeedOrder, resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
 
 /** 提交/reset 后的会话收尾：清缓冲、退出编辑视图、重渲染 + 刷新。
  * advanceBaseline=true（默认）：把基线推进到当前运行时态（此后净零检测/插回/discard 以最近 commit 为基线）。
@@ -19,14 +19,10 @@ async function finalizeEditorSession(ctx: EditorContext, advanceBaseline = true)
     clearSessionBuffers(ctx);
     ctx.reorderedIds.clear();
     if (advanceBaseline) {
-        // 基线推进：commit 后以当前运行时 order 作为新 initialOrder（净零检测、insertAtInitialPosition 共用）
+        // 基线推进：commit 后以 profile 最新解析态为新基线（净零检测/插回/discard 共用）。
+        // 不读父预设 prompt_order——注册投影流下它与 profile 无关。
         const preset = openai_settings[ctx.idx] as Preset;
-        const list = findOrderList(preset, resolvePromptOrderTarget());
-        ctx.initialOrder = Array.isArray(list?.order)
-            ? list.order
-                .filter((o: any) => o && typeof o.identifier === 'string')
-                .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
-            : [];
+        ctx.initialOrder = buildProfileSeedOrder(preset, ctx.profileId);
         ctx.initialOrderIndex = new Map(ctx.initialOrder.map((o, i) => [o.identifier, i]));
     }
     ctx.sessionOrder = ctx.initialOrder.map((o) => ({ ...o }));
@@ -279,7 +275,13 @@ export function bindEditorHandlers(ctx: EditorContext): void {
         ctx.committing = true;
         try {
             const preset = openai_settings[ctx.idx] as Preset;
-            const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder);
+            // 有效值字段表（出厂 ⊕ profile 解析）：提交快照与编辑预填共用的基线（A2/A4）
+            const metaForBaseline = readMeta(preset);
+            const effectiveFields = new Map<string, PromptFields>();
+            for (const entry of resolveBaselineEntries(ctx)) {
+                effectiveFields.set(entry.identifier, effectiveFieldsFor(metaForBaseline, entry, findPromptInPreset(preset, entry.identifier)));
+            }
+            const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder, effectiveFields);
 
             try {
                 let ok = true;

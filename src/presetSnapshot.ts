@@ -47,7 +47,9 @@ export function mergeBaseSnapshot(
         const session = sessionEdits.get(bufferKey(name, s.identifier));
         if (session && s.fields && !promptFieldsEqual(s.fields, session.initial)) {
             entry.fields = s.fields;
-        } else if (!session) {
+        } else {
+            // 会话无编辑、或编辑后回到基线值（净零）：都保留既有 fields——净零回退不是「清除」，
+            // 清除必须走橡皮擦（pendingClears）；否则改了又改回原值会静默抹掉 profile 已存差异
             const prior = previousPrompts.find((p) => p.identifier === s.identifier)?.fields;
             if (prior) entry.fields = prior;
         }

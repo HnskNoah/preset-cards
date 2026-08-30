@@ -3,7 +3,7 @@ import { openai_settings } from '@sillytavern/scripts/openai';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile } from './meta.js';
 import { bufferKey, bufferPrefix, type PromptEditBuffer } from './presetBuffers.js';
-import { findOrderList, resolvePromptOrderTarget } from './promptToggle.js';
+import { resolveProfilePrompts } from './promptToggle.js';
 import { buildOrderCtxFromOrder, buildProfileEntries, type ProfileEntryView, type ProfileOrderCtx } from './presetList.js';
 import type { EditorStore } from './core/store/EditorStore.js';
 
@@ -69,7 +69,20 @@ export interface EditorContext {
     editorStore?: EditorStore;
 }
 
-/** 创建弹窗上下文：完成全部状态初始化（含打开时 prompt_order 快照与 sessionOrder 种子）。 */
+/** 编辑器基线顺序 = profile 解析态的挂载顺序（唯一基线语义）。
+ * 提交快照、净零判定、staged diff 均以 profile 解析态为准；父预设实时 prompt_order
+ * 在注册投影流下与 profile 无关，不得作为编辑基线（否则 commit 会把父预设旧状态写进 profile）。 */
+export function buildProfileSeedOrder(preset: Preset, profileId: string): { identifier: string; enabled: boolean }[] {
+    const meta = readMeta(preset);
+    const profile = getProfile(meta, profileId);
+    if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return [];
+    const resolved = resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
+    return resolved
+        .filter((e) => e.mounted)
+        .map((e) => ({ identifier: e.identifier, enabled: e.enabled }));
+}
+
+/** 创建弹窗上下文：完成全部状态初始化（含打开时 sessionOrder 种子 = profile 解析挂载顺序）。 */
 export function createEditorContext(
     deps: ProfileEditorDeps,
     name: string,
@@ -77,13 +90,7 @@ export function createEditorContext(
     profileId: string,
 ): EditorContext {
     const preset = openai_settings[idx] as Preset;
-    // 弹窗打开时目标 prompt_order 完整快照（还原/基线用）
-    const list = findOrderList(preset, resolvePromptOrderTarget());
-    const initialOrder: { identifier: string; enabled: boolean }[] = Array.isArray(list?.order)
-        ? list.order
-            .filter((o: any) => o && typeof o.identifier === 'string')
-            .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
-        : [];
+    const initialOrder = buildProfileSeedOrder(preset, profileId);
     return {
         ...deps,
         name,
