@@ -1,16 +1,13 @@
 import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { L } from './i18n.js';
-import { getActiveProfile } from './activeProfile.js';
 import { getProfile, isPromptBaseProfile, isPromptDeltaProfile, readMeta, saveMeta } from './meta.js';
 import type { Preset, PresetMeta, PromptBaseProfile, PromptDeltaProfile, PromptFields, PromptProfileEntry } from './meta.js';
 import { applyBufferedEdits, bufferKey, bufferPrefix, clearBufferedForName, editedIdentifiersForName, type PromptEditBuffer } from './presetBuffers.js';
-import type { ProfileEntryView } from './presetList.js';
 import {
     PROMPT_FIELD_WHITELIST,
     buildPromptSnapshot,
     captureExtra,
     captureModel,
-    capturePromptFields,
     captureSampling,
     diffExtra,
     diffSampling,
@@ -29,40 +26,9 @@ import { buildDerivedProfile } from './profileActions.js';
 import { resetProfileCore } from './profileMutators.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
 
-/** 右栏 staged diff 的一条记录。 */
-export interface StagedItem {
-    identifier: string;
-    key: string;
-    label: string;
-    /** 主列表条目的完整展示数据（复用主列表卡片渲染）。 */
-    entry?: ProfileEntryView;
-    toggle?: { original: boolean; target: boolean };
-    /** 挂载态变化：original 为 profile 当前挂载态，target 为目标挂载态（true=挂载 / false=卸载）。 */
-    mount?: { original: boolean; target: boolean };
-    /** R1：本条目存在「清除值变更」待提交（commit 时删除 profile 快照 fields）。 */
-    clear?: boolean;
-    /** 顺序变化（reorder）：from=打开时 index，to=当前 index。位置改变统一由 index 比较判定，进 diff。 */
-    reorder?: { from: number; to: number };
-}
+/** 右栏 staged diff 的数据推导见 profileEditorStaged（StagedItem / stagedItems）。 */
 
-/** 编辑器基线条目：当前 profile 的解析态（唯一基线语义，提交/预填/漂移种子共用）。 */
-export function resolveBaselineEntries(ctx: EditorContext): PromptProfileEntry[] {
-    const preset = openai_settings[ctx.idx] as Preset;
-    const meta = readMeta(preset);
-    const profile = getProfile(meta, ctx.profileId);
-    if (!profile || (!isPromptBaseProfile(profile) && !isPromptDeltaProfile(profile))) return [];
-    return resolveProfilePrompts(profile, meta.profiles as (PromptBaseProfile | PromptDeltaProfile)[], new Set());
-}
-
-/** 条目的「有效值字段」= 出厂 originalFields ⊕ profile 解析 fields（与 applyProfileToPreset 的应用序一致）。
- * 出厂基线缺失时回退预设定义。注册投影流下父预设定义与编辑态无关，值编辑/提交快照必须用本函数的有效值。 */
-export function effectiveFieldsFor(meta: PresetMeta, entry: PromptProfileEntry, promptDef: any): PromptFields {
-    const factory = meta.defaultSnapshot?.find((d) => d.identifier === entry.identifier)?.originalFields;
-    return {
-        ...(factory ? filterFields(factory) : capturePromptFields(promptDef)),
-        ...(entry.fields ? filterFields(entry.fields) : {}),
-    };
-}
+/** 编辑器基线解析与漂移种子见 profileEditorBaseline（resolveBaselineEntries / effectiveFieldsFor）。 */
 
 /** 采集当前缓冲（开关/值编辑）叠加后的快照——纯函数，不写运行时。
  * 构造临时视图 preset（浅克隆 prompts + 叠加有效值字段与字段 edited；目标 order 由会话 sessionOrder 表达），
@@ -169,76 +135,6 @@ export function applyPendingClearsToProfile(
             if (ids.has(c.identifier)) delete c.fields;
         }
     }
-}
-
-/** 计算当前 staged diff 条目（未提交的缓冲改动：开关切换 / 值修改 / 清除）。 */
-export function stagedItems(ctx: EditorContext, snapshot?: EditorSnapshot): StagedItem[] {
-    const resolved = snapshot ?? resolveEditorSnapshot(ctx);
-    if (!resolved) return [];
-    const nameById = new Map(resolved.entries.map((e) => [e.identifier, e.name]));
-    // 会话内改名：staged 面板 label 用缓冲 edited.name（否则显示旧名）
-    for (const [key, session] of ctx.sessionEdits) {
-        if (key.startsWith(ctx.prefix) && session.edited.name !== undefined) {
-            nameById.set(key.slice(ctx.prefix.length), session.edited.name);
-        }
-    }
-    const enabledById = new Map(resolved.entries.map((e) => [e.identifier, e.enabled]));
-
-    const keys = new Set<string>();
-    for (const k of ctx.pendingToggles.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    for (const k of ctx.sessionEdits.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    for (const k of ctx.pendingClears.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    for (const k of ctx.pendingMounts.keys()) if (k.startsWith(ctx.prefix)) keys.add(k);
-    // 顺序变化（reorder）：reorderedIds 由 computeReorder 用 initialOrderIndex 比较产生（专指用户拖拽），
-    // 是 reorder diff 的唯一来源——不重新做 index 比较，避免挂载连带的位置漂移（卸载导致后移）被误标为 reorder。
-    const reorderDiff = new Map<string, { from: number; to: number }>();
-    const curIdx = new Map(resolved.entries.map((e, i) => [e.identifier, i]));
-    for (const id of ctx.reorderedIds) {
-        const key = bufferKey(ctx.name, id);
-        // 挂载态变化的条目走 mount diff，不标 reorder（卸载/挂载连带的位置漂移非用户拖拽）
-        if (ctx.pendingMounts.has(key)) continue;
-        const from = ctx.initialOrderIndex.get(id);
-        const to = curIdx.get(id);
-        if (from !== undefined && to !== undefined && from !== to) {
-            reorderDiff.set(id, { from, to });
-            keys.add(key);
-        }
-    }
-
-    const items: StagedItem[] = [];
-    const entryById = new Map(resolved.entries.map((e) => [e.identifier, e]));
-    // 挂载差异基线用 profile 解析态（与 commit diff 语义一致）；未知条目回退 initialOrder
-    const profileMountedMap = resolveProfileMountedMap(resolved);
-    for (const key of keys) {
-        const identifier = key.slice(ctx.prefix.length);
-        const entry = entryById.get(identifier);
-        const item: StagedItem = { identifier, key, label: nameById.get(identifier) ?? identifier, entry };
-        const rd = reorderDiff.get(identifier);
-        if (rd) item.reorder = rd;
-        const mountTarget = ctx.pendingMounts.get(key);
-        if (mountTarget !== undefined) {
-            const originalMounted = profileMountedMap.get(identifier)
-                ?? ctx.initialOrder.some((o) => o.identifier === identifier);
-            item.mount = { original: originalMounted, target: mountTarget };
-        }
-        const toggleTarget = ctx.pendingToggles.get(key);
-        if (toggleTarget !== undefined) {
-            item.toggle = { original: enabledById.get(identifier) ?? true, target: toggleTarget };
-        }
-        // F2：clear 后重新编辑（session 存在）视为清除被覆盖，不渲染 clear 项
-        if (ctx.pendingClears.has(key) && !ctx.sessionEdits.has(key)) {
-            item.clear = true;
-        }
-        items.push(item);
-    }
-    // 按 entries（prompt_order 展示顺序）排序，而非 identifier 字母序；未知 identifier 排最后
-    const orderIdx = new Map(resolved.entries.map((e, i) => [e.identifier, i]));
-    items.sort((a, b) => {
-        const ia = orderIdx.get(a.identifier);
-        const ib = orderIdx.get(b.identifier);
-        return (ia ?? Number.MAX_SAFE_INTEGER) - (ib ?? Number.MAX_SAFE_INTEGER);
-    });
-    return items;
 }
 
 /** 撤销单个 reorder：把该条目移回打开时基线位置（initialOrderIndex），更新 reorderedIds。 */
@@ -356,78 +252,7 @@ export async function resetProfileToParent(ctx: EditorContext): Promise<'reset' 
     return result;
 }
 
-/** 打开编辑器时把「父预设当前持有本 profile 字段级应用态」的漂移预填进会话缓冲（可见的 staged 项）。
- * 字段级流下原生 PM 的开关/挂载/顺序/值编辑是唯一漂移来源；种子化后用户可逐项撤销或随 commit 固化，
- * 不再有「commit 时静默折叠进基线」。注册投影流下父预设状态与本 profile 无关，不种子
- * （漂移由 SETTINGS_UPDATED 捕获链路处理）。 */
-export function seedPresetDriftIntoBuffers(ctx: EditorContext): void {
-    if (oai_settings.preset_settings_openai !== ctx.name) return;
-    const active = getActiveProfile();
-    if (!active || active.presetName !== ctx.name || active.profileId !== String(ctx.profileId)) return;
-
-    const preset = openai_settings[ctx.idx] as Preset;
-    const meta = readMeta(preset);
-    const resolved = resolveBaselineEntries(ctx);
-    if (resolved.length === 0) return;
-
-    const targetId = resolvePromptOrderTarget();
-    const list = findOrderList(preset, targetId);
-    const presetOrder: { identifier: string; enabled: boolean }[] = Array.isArray(list?.order)
-        ? list.order
-            .filter((o: any) => o && typeof o.identifier === 'string')
-            .map((o: any) => ({ identifier: o.identifier, enabled: o.enabled === true }))
-        : [];
-
-    const resolvedById = new Map(resolved.map((e) => [e.identifier, e]));
-    const resolvedMounted = resolved.filter((e) => e.mounted);
-    const resolvedMountIdx = new Map(resolvedMounted.map((e, i) => [e.identifier, i]));
-
-    // 种子 sessionOrder = 预设当前 order ∩ profile 解析域（保持预设现行顺序；域外条目不属于本 profile）
-    const seeded = presetOrder.filter((o) => resolvedById.has(o.identifier));
-    ctx.sessionOrder = seeded.map((o) => ({ ...o }));
-    const seededIdx = new Map(seeded.map((o, i) => [o.identifier, i]));
-
-    for (const entry of resolvedMounted) {
-        const key = bufferKey(ctx.name, entry.identifier);
-        const presetIdx = seededIdx.get(entry.identifier);
-        if (presetIdx === undefined) {
-            // 漂移卸载：profile 挂载、预设 order 已摘除 → 预填卸载（记录解析态原位供 undo 插回）
-            ctx.pendingMounts.set(key, false);
-            ctx.unmountPositions.set(key, resolvedMountIdx.get(entry.identifier) ?? 0);
-            continue;
-        }
-        // 开关漂移：预设真值 ≠ profile 解析值 → 预填 toggle
-        if (seeded[presetIdx].enabled !== entry.enabled) {
-            ctx.pendingToggles.set(key, seeded[presetIdx].enabled);
-        }
-        // 顺序漂移
-        if (presetIdx !== resolvedMountIdx.get(entry.identifier)) {
-            ctx.reorderedIds.add(entry.identifier);
-        }
-    }
-    // 漂移重挂载：profile 未挂载、预设 order 有 → 预填挂载
-    for (const o of seeded) {
-        const entry = resolvedById.get(o.identifier)!;
-        if (!entry.mounted) {
-            ctx.pendingMounts.set(bufferKey(ctx.name, o.identifier), true);
-        }
-    }
-    // 值漂移：预设定义 ≠ 有效值字段（出厂 ⊕ 解析）→ 预填会话值编辑
-    for (const entry of resolved) {
-        const def = findPromptInPreset(preset, entry.identifier);
-        if (!def) continue;
-        const eff = effectiveFieldsFor(meta, entry, def);
-        const drift: PromptFields = {};
-        for (const f of PROMPT_FIELD_WHITELIST) {
-            const defValue = (def as any)[f];
-            if (defValue !== undefined && defValue !== (eff as any)[f]) {
-                (drift as any)[f] = defValue;
-            }
-        }
-        if (Object.keys(drift).length === 0) continue;
-        ctx.sessionEdits.set(bufferKey(ctx.name, entry.identifier), { initial: { ...eff }, edited: { ...eff, ...drift } });
-    }
-}
+/** 打开编辑器时的漂移种子化见 profileEditorBaseline.seedPresetDriftIntoBuffers。 */
 
 /** commit「更新当前配置」。返回是否成功。
  * opts.captureTopLevel：父预设是否为当前运行时（字段级流）。注册投影流下编辑器没有

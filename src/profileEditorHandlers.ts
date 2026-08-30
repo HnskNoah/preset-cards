@@ -1,13 +1,15 @@
 import { oai_settings, openai_settings } from '@sillytavern/scripts/openai';
 import { POPUP_TYPE, callGenericPopup, Popup } from '@sillytavern/scripts/popup';
 import { L } from './i18n.js';
-import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction, readMeta } from './meta.js';
-import type { Preset, PromptFields } from './meta.js';
+import { isPromptBaseProfile, isPromptDeltaProfile, persistMetaTransaction } from './meta.js';
+import type { Preset } from './meta.js';
 import { bufferKey } from './presetBuffers.js';
 import type { PromptEditBuffer } from './presetBuffers.js';
 import { findPromptInPreset } from './promptToggle.js';
 import { chooseProfileSaveTarget } from './importExport.js';
-import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, effectiveFieldsFor, insertAtInitialPosition, resolveBaselineEntries, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent, stagedItems } from './profileEditorState.js';
+import { buildEffectiveFieldsMap } from './profileEditorBaseline.js';
+import { applyBufferedAndSnapshot, applyUndoState, clearSessionBuffers, commitCreateDelta, commitUpdate, insertAtInitialPosition, resolveProfileMountedMap, resolveToggleNet, resetProfileToParent } from './profileEditorState.js';
+import { stagedItems } from './profileEditorStaged.js';
 import { applyLockVisual, applySearch, refreshCounts, refreshEntryRow, renderDialog, renderRightPane, setupSortable } from './profileEditorRender.js';
 import { buildProfileSeedOrder, resolveEditorSnapshot, type EditorContext } from './profileEditorContext.js';
 
@@ -279,12 +281,8 @@ export function bindEditorHandlers(ctx: EditorContext): void {
             // 父预设顶层值/order 与编辑态无关——不写回、不采集（运行时刷新由
             // onMetaPersisted → syncPresetRegistrations → refreshProjectionRuntimeIfActive 闭环负责）
             const isParentRuntime = oai_settings.preset_settings_openai === ctx.name;
-            // 有效值字段表（出厂 ⊕ profile 解析）：提交快照与编辑预填共用的基线（A2/A4）
-            const metaForBaseline = readMeta(preset);
-            const effectiveFields = new Map<string, PromptFields>();
-            for (const entry of resolveBaselineEntries(ctx)) {
-                effectiveFields.set(entry.identifier, effectiveFieldsFor(metaForBaseline, entry, findPromptInPreset(preset, entry.identifier)));
-            }
+            // 有效值字段表（出厂 ⊕ profile 解析）：提交快照与编辑预填共用的基线
+            const effectiveFields = buildEffectiveFieldsMap(preset, ctx);
             const snapshotData = applyBufferedAndSnapshot(preset, ctx.name, ctx.sessionEdits, ctx.pendingToggles, ctx.pendingClears, ctx.sessionOrder, effectiveFields);
 
             try {

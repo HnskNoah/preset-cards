@@ -7,7 +7,9 @@ import { bufferKey } from './presetBuffers.js';
 import { capturePromptFields, filterFields, findPromptInPreset, promptFieldsEqual } from './promptToggle.js';
 import { buildPromptEditForm } from './editModal.js';
 import { buildBreadcrumb } from './profileEditorContext.js';
-import { applyUndoState, computeReorder, effectiveFieldsFor, resolveBaselineEntries, undoMount, undoReorderItem, stagedItems } from './profileEditorState.js';
+import { effectiveFieldsFor, resolveBaselineEntries } from './profileEditorBaseline.js';
+import { applyUndoState, computeReorder, undoMount, undoReorderItem } from './profileEditorState.js';
+import { stagedItems } from './profileEditorStaged.js';
 import { resolveEditorSnapshot, type EditorContext, type EditorSnapshot } from './profileEditorContext.js';
 import { applyNameWrap } from './nameWrap.js';
 

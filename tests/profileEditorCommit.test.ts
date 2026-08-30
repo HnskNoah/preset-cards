@@ -8,13 +8,13 @@ import { bufferKey } from '../src/presetBuffers.js';
 import { createEditorContext, type EditorContext } from '../src/profileEditorContext.js';
 import {
     applyBufferedAndSnapshot,
-    effectiveFieldsFor,
-    resolveBaselineEntries,
 } from '../src/profileEditorState.js';
+import { effectiveFieldsFor, resolveBaselineEntries, seedPresetDriftIntoBuffers } from '../src/profileEditorBaseline.js';
 import { mergeBaseSnapshot } from '../src/presetSnapshot.js';
 import { snapshotToChanges, resolveParentStates, findPromptInPreset } from '../src/promptToggle.js';
 import { applyPromptDelta } from '../src/promptState.js';
-import { commitUpdate, commitCreateDelta, seedPresetDriftIntoBuffers, stagedItems } from '../src/profileEditorState.js';
+import { commitUpdate, commitCreateDelta } from '../src/profileEditorState.js';
+import { stagedItems } from '../src/profileEditorStaged.js';
 import { setActiveProfile } from '../src/activeProfile.js';
 import { readMeta } from '../src/meta.js';
 import type { Preset, PromptFields } from '../src/meta.js';
